@@ -32,7 +32,8 @@ export async function signIn(_prev: SignInState, formData: FormData): Promise<Si
     const [pair = "", ...attrs] = raw.split(";");
     const eq = pair.indexOf("=");
     const name = pair.slice(0, eq).trim();
-    const value = pair.slice(eq + 1);
+    // The raw header value is URL-encoded; cookies().set encodes again, so decode first.
+    const value = decodeURIComponent(pair.slice(eq + 1));
     const opts = new Map(
       attrs.map((a) => {
         const [k = "", ...v] = a.trim().split("=");

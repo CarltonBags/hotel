@@ -1,42 +1,51 @@
-import { redirect } from "next/navigation";
-import { withTenant } from "@hoteloftware/db";
-import { pool } from "@/lib/db";
-import { currentSession } from "@/lib/tenant";
+import Link from "next/link";
+import { ROLE_LABELS, can, formatInPropertyTime } from "@hoteloftware/domain";
+import { accessibleProperties, requirePrincipal } from "@/lib/authorize";
 import { signOut } from "./sign-in/actions";
 
 export default async function HomePage() {
-  const current = await currentSession();
-  if (!current) redirect("/sign-in");
-  const { tenant, session } = current;
-
-  // Proves the request runs inside the tenant's schema.
-  const settingsCount = await withTenant(pool(), tenant.schemaName, async (tx) => {
-    const { rows } = await tx.query<{ n: number }>("select count(*)::int as n from tenant_settings");
-    return rows[0]?.n ?? 0;
-  });
+  const { tenant, session, actor } = await requirePrincipal();
+  const properties = await accessibleProperties();
+  const now = new Date();
 
   return (
-    <main className="grid min-h-full place-items-center p-6">
-      <div className="w-full max-w-md rounded-3xl bg-surface p-8 shadow-card">
+    <main className="mx-auto max-w-3xl p-6">
+      <div className="rounded-3xl bg-surface p-8 shadow-card">
         <p className="text-ink-60">Signed in to</p>
         <h1 className="text-xl font-medium">{tenant.name}</h1>
-        <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-          <dt className="text-ink-60">User</dt>
-          <dd>
-            {session.user.name} ({session.user.email})
-          </dd>
-          <dt className="text-ink-60">Tenant</dt>
-          <dd className="font-mono">{tenant.slug}</dd>
-          <dt className="text-ink-60">Schema</dt>
-          <dd className="font-mono">{tenant.schemaName}</dd>
-          <dt className="text-ink-60">Settings rows</dt>
-          <dd>{settingsCount}</dd>
-        </dl>
-        <form action={signOut} className="mt-6">
-          <button type="submit" className="h-10 rounded-full border border-ink-10 px-4 text-sm">
-            Sign out
-          </button>
-        </form>
+        <p className="mt-1 text-sm text-ink-60">
+          {session.user.name} ({session.user.email}){actor.tenantRole ? ` · ${ROLE_LABELS[actor.tenantRole].en}` : ""}
+        </p>
+
+        <h2 className="mt-6 font-medium">Your properties</h2>
+        {properties.length === 0 ? (
+          <p className="text-ink-60">
+            No property yet.{" "}
+            {can(actor, "manage_properties") ? <Link href="/settings/properties">Create one in settings.</Link> : "Ask your manager for a role."}
+          </p>
+        ) : (
+          <ul className="mt-2 grid gap-2">
+            {properties.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-baseline justify-between gap-2 rounded-xl bg-surface-2 px-4 py-3">
+                <span className="font-medium">{p.name}</span>
+                <span className="text-sm text-ink-60">
+                  {formatInPropertyTime(now, p.timeZone)} ({p.timeZone}) · {p.currency}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="mt-6 flex gap-3">
+          <Link href="/settings" className="h-10 rounded-full border border-ink-10 px-4 text-sm leading-10">
+            Settings
+          </Link>
+          <form action={signOut}>
+            <button type="submit" className="h-10 rounded-full border border-ink-10 px-4 text-sm">
+              Sign out
+            </button>
+          </form>
+        </div>
       </div>
     </main>
   );

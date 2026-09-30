@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveTenantSlug, tenantSchemaFromSlug } from "../src/tenant-slug";
+import { resolveTenantSlug, resolveTenantSlugFromHeaders, tenantSchemaFromSlug } from "../src/tenant-slug";
 
 /** Seam: the host header selects the tenant before login. */
 describe("resolveTenantSlug", () => {
@@ -35,5 +35,11 @@ describe("resolveTenantSlug", () => {
 
   it("maps a slug to its schema name", () => {
     expect(tenantSchemaFromSlug("alpha-hotels")).toBe("t_alpha_hotels");
+  });
+
+  it("prefers the forwarded host over the server's own host", () => {
+    const h = new Headers({ host: "localhost:3000", "x-forwarded-host": "alpha.localhost:3000" });
+    expect(resolveTenantSlugFromHeaders(h, appDomain)).toBe("alpha");
+    expect(resolveTenantSlugFromHeaders(new Headers({ host: "beta.localhost:3000" }), appDomain)).toBe("beta");
   });
 });

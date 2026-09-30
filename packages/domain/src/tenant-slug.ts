@@ -34,3 +34,16 @@ export function resolveTenantSlug(host: string | null | undefined, appDomain: st
   if (!slug || slug.includes(".")) return null;
   return isTenantSlug(slug) ? slug : null;
 }
+
+/**
+ * The host the client addressed. Next.js re-renders the target of a server
+ * action redirect through an internal request whose Host is the server's own;
+ * the original host then travels in x-forwarded-host, as it does behind Vercel.
+ */
+export function requestHost(headers: { get(name: string): string | null }): string | null {
+  return headers.get("x-forwarded-host") ?? headers.get("host");
+}
+
+export function resolveTenantSlugFromHeaders(headers: { get(name: string): string | null }, appDomain: string): string | null {
+  return resolveTenantSlug(requestHost(headers), appDomain);
+}

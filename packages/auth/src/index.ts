@@ -2,7 +2,8 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import type { Pool } from "pg";
-import { controlDb, controlSchema, findTenantBySlug, resolveTenantSlug } from "@hoteloftware/db";
+import { controlDb, controlSchema, findTenantBySlug } from "@hoteloftware/db";
+import { resolveTenantSlugFromHeaders } from "@hoteloftware/domain";
 
 export interface AuthConfig {
   pool: Pool;
@@ -51,7 +52,7 @@ export function createAuth(config: AuthConfig) {
       // own tenant's subdomain, and the answer never reveals where they belong.
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== "/sign-in/email") return;
-        const slug = resolveTenantSlug(ctx.headers?.get("host"), config.appDomain);
+        const slug = ctx.headers ? resolveTenantSlugFromHeaders(ctx.headers, config.appDomain) : null;
         const tenant = slug ? await findTenantBySlug(config.pool, slug) : null;
         const email = normaliseEmail((ctx.body as { email?: unknown } | undefined)?.email);
         if (!(await isTenantMember(ctx.context.password.hash, config.pool, tenant?.id ?? null, email))) {

@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./invitations": "./src/invitations.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -15,7 +16,8 @@
     "@hoteloftware/db": "workspace:*",
     "better-auth": "^1.7.6",
     "drizzle-orm": "^0.45.3",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "@hoteloftware/domain": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20",

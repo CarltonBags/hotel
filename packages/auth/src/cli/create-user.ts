@@ -1,14 +1,14 @@
 import { config } from "dotenv";
 import { resolve } from "node:path";
 import { Pool } from "pg";
-import { findTenantBySlug } from "@hoteloftware/db";
+import { findTenantBySlug, setTenantRole } from "@hoteloftware/db";
 import { createAuth, createStaffUser } from "../index";
 
-/** Usage: pnpm --filter @hoteloftware/auth create-user <tenant-slug> <email> "<name>" <password> */
+/** Usage: pnpm --filter @hoteloftware/auth create-user <tenant-slug> <email> "<name>" <password> [owner|tenant_admin] */
 config({ path: resolve(import.meta.dirname, "../../../../.env"), quiet: true });
-const [slug, email, name, password] = process.argv.slice(2);
+const [slug, email, name, password, tenantRole] = process.argv.slice(2);
 if (!slug || !email || !name || !password) {
-  console.error('usage: create-user <tenant-slug> <email> "<name>" <password>');
+  console.error('usage: create-user <tenant-slug> <email> "<name>" <password> [owner|tenant_admin]');
   process.exit(2);
 }
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
@@ -22,7 +22,10 @@ try {
     baseURL: process.env.BETTER_AUTH_URL!,
   });
   const user = await createStaffUser(auth, { tenantId: tenant.id, email, name, password });
-  console.log(`created user ${email} (${user.id}) in tenant ${slug}`);
+  if (tenantRole === "owner" || tenantRole === "tenant_admin") {
+    await setTenantRole(pool, { tenantId: tenant.id, userId: user.id, role: tenantRole });
+  }
+  console.log(`created user ${email} (${user.id}) in tenant ${slug}${tenantRole ? ` as ${tenantRole}` : ""}`);
 } finally {
   await pool.end();
 }
