@@ -1,0 +1,30 @@
+{
+  "name": "hoteloftware",
+  "private": true,
+  "packageManager": "pnpm@10.17.0",
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "db:migrate": "pnpm --filter @hoteloftware/db migrate",
+    "db:provision": "pnpm --filter @hoteloftware/db provision",
+    "db:check-tenant-sql": "pnpm --filter @hoteloftware/db check-tenant-sql"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.5",
+    "typescript": "5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@tailwindcss/oxide",
+      "sharp",
+      "unrs-resolver"
+    ]
+  }
+}
