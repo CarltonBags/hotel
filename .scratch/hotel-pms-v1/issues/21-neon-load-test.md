@@ -40,3 +40,14 @@ Added 2026-09-30: also verify standby with automatic switch-over in the EU regio
 **Not measured**: stage 2 at 300 tenants, standby switch-over time, cold start and branch creation time (these need the Neon console or its management interface). `pg_dump` not run: the local client is version 16 and cannot dump a version 18 server.
 
 Stage 2 waits for the owner, because 1.6 GB exceeds a free Neon plan's storage.
+
+2026-09-30, stage 2: the owner confirmed the plan allowed about 1.6 GB, but the project stopped at **tenant 97** with "project size limit (512 MB) has been exceeded". The project is on a plan with a 512 MB limit.
+| Measurement | Result |
+|---|---|
+| 50 tenants | 31,733 relations, 255 MB |
+| Limit reached | tenant 97, about 41,000 relations, 512 MB |
+| Storage per tenant | about 5.3 MB empty, consistent with stage 1 and the research |
+| One tenant transaction through the pooler with 97 tenants present | 0.22 s |
+The migration run and the memory reading after the limit are invalid (the full disk made the first statement fail) and are not reported. All 97 test schemas were dropped; the database is back to 463 relations and its original schemas.
+
+**Verdict so far**: up to 97 tenants and about 41,000 relations nothing degraded: provisioning, migration, pooled isolation and notifications all behaved. The 300-tenant question (about 128,000 relations) and standby switch-over remain **unanswered**. Finishing needs a Neon plan with at least 2 GB storage, and the switch-over test needs the Neon console. The ticket stays open.
