@@ -63,6 +63,8 @@ Proposed by the agent from hotel trade usage, 2026-09-30. Status: confirmed by t
 | Charge | Buchungsposten |  |
 | Service Date | Leistungsdatum |  |
 | Tax Code | Steuerschlüssel |  |
+| Posting Rhythm | Buchungsrhythmus |  |
+| Revenue Account | Erlöskonto |  |
 | City Tax | Beherbergungsabgabe | umbrella; per place Kurtaxe, Übernachtungsteuer, Ortstaxe (AT) |
 | City Tax Rule | Abgabenregel |  |
 | City Tax Exemption | Abgabenbefreiung |  |

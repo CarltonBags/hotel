@@ -248,8 +248,16 @@ The night or day a charge is for, regardless of when it was posted.
 _Avoid_: Posting date, charge date
 
 **Tax Code**:
-The VAT treatment of a charge, which determines rate and accounting key.
+The VAT treatment of a charge, which determines rate and accounting key. Belongs to a Legal Entity; its rate is dated, so a charge keeps the rate in force on its service date.
 _Avoid_: VAT rate, tax class
+
+**Posting Rhythm**:
+How often a service is charged when attached to a reservation: once, per night, or per person and night.
+_Avoid_: Frequency, billing cycle, recurrence
+
+**Revenue Account**:
+The accounting key a service's revenue is reported under; the export mapping uses it.
+_Avoid_: GL account, ledger, Konto (as the general term)
 
 **City Tax**:
 The municipal tourist levy, computed per guest-night by the property's city tax rule and either charged to the guest or absorbed by the hotel.

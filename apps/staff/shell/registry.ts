@@ -79,6 +79,7 @@ export const MODULES: ModuleDef[] = [
   { id: "settings_legal_entities", group: "settings", label: "module.settings_legal_entities", icon: "Landmark", hue: "#4f5bd5", href: "/settings/legal-entities", requires: "manage_legal_entities" },
   { id: "settings_properties", group: "settings", label: "module.settings_properties", icon: "Building2", hue: "#1fa971", href: "/settings/properties", requires: "manage_properties" },
   { id: "settings_users", group: "settings", label: "module.settings_users", icon: "Users", hue: "#7c5cff", href: "/settings/users", requiresProperty: "manage_property_users" },
+  { id: "settings_services", group: "settings", label: "module.settings_services", icon: "Tag", hue: "#e0457b", href: "/settings/services", requiresProperty: "view_property" },
   soon("settings_devices", "settings", "module.settings_devices", "TabletSmartphone", "#6b7280", 14),
   { id: "settings_rooms", group: "settings", label: "module.settings_rooms", icon: "BedDouble", hue: "#0aa5a5", href: "/settings/rooms", requiresProperty: "manage_property_settings" },
   { id: "settings_account", group: "settings", label: "module.settings_account", icon: "UserCog", hue: "#6b7280", href: "/settings/account" },

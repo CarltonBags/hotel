@@ -79,3 +79,6 @@ export {
   type RoomTypeInput,
   type Section,
 } from "./tenant/rooms";
+export { addTaxRate, applyTaxPreset, createTaxCode, listTaxCodes, removeTaxRate, renameTaxCode, taxRateFor, type TaxCode } from "./tenant/tax-codes";
+export { createService, findService, listServices, updateService, type Service, type ServiceInput, type ServicePatch } from "./tenant/services";
+export { PRESET_RATE_START } from "./tenant/catalogue-common";

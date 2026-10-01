@@ -12,6 +12,8 @@ export function Field({
   defaultValue,
   required,
   autoComplete,
+  step,
+  readOnly,
 }: {
   label: string;
   name: string;
@@ -19,6 +21,8 @@ export function Field({
   defaultValue?: string | undefined;
   required?: boolean | undefined;
   autoComplete?: string | undefined;
+  step?: string | undefined;
+  readOnly?: boolean | undefined;
 }) {
   return (
     <label className="grid gap-1 text-sm">
@@ -29,7 +33,10 @@ export function Field({
         defaultValue={defaultValue}
         required={required}
         autoComplete={autoComplete}
-        className={inputClass}
+        step={step}
+        readOnly={readOnly}
+        aria-readonly={readOnly}
+        className={`${inputClass}${readOnly ? " opacity-60" : ""}`}
       />
     </label>
   );
@@ -40,16 +47,20 @@ export function Select({
   name,
   options,
   defaultValue,
+  readOnly,
 }: {
   label: string;
   name: string;
   options: { value: string; label: string }[];
   defaultValue?: string | undefined;
+  readOnly?: boolean | undefined;
 }) {
+  // A disabled select is not submitted, so a read-only one sends its value through a hidden field.
   return (
     <label className="grid gap-1 text-sm">
       <span className="text-ink-80">{label}</span>
-      <select name={name} defaultValue={defaultValue} className={inputClass}>
+      {readOnly ? <input type="hidden" name={name} value={defaultValue ?? options[0]?.value ?? ""} /> : null}
+      <select name={readOnly ? undefined : name} defaultValue={defaultValue} disabled={readOnly} aria-readonly={readOnly} className={`${inputClass}${readOnly ? " opacity-60" : ""}`}>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}

@@ -35,3 +35,4 @@ export { ACCENTS, DEFAULT_ACCENT, defaultQuickAccess, isAccentId, isTheme, type 
 export { ageBandFor, validateAgeBands, type AgeBandInput, type AgeBandIssue, type AgeBandProblem } from "./age-bands";
 export { GUEST_LANGUAGES, localizedName, mergeNames, type LocalizedName, type Names } from "./names";
 export { expandRoomNumbers } from "./room-numbers";
+export { POSTING_RHYTHMS, TAX_PRESETS, isPostingRhythm, isTaxPresetCountry, splitGross, taxRateOn, todayIn, type DatedRate, type GrossSplit, type PostingRhythm, type TaxPreset } from "./tax";

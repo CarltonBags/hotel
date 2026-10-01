@@ -80,6 +80,7 @@ const catalog = {
   "module.settings_devices": { en: "Devices", de: "Geräte" },
   "module.settings_rooms": { en: "Room Types and Rooms", de: "Zimmerkategorien und Zimmer" },
   "module.settings_account": { en: "My account", de: "Mein Konto" },
+  "module.settings_services": { en: "Services and Tax Codes", de: "Leistungen und Steuerschlüssel" },
 
   // roles (German words proposed here; the glossary names only the terms Tenant Role and Property Role)
   "role.owner": { en: "Owner", de: "Inhaber" },
@@ -164,6 +165,35 @@ const catalog = {
   "action.edit": { en: "Edit", de: "Bearbeiten" },
   "rooms.needRoomType": { en: "Create a Room Type first; every room belongs to one.", de: "Zuerst eine Zimmerkategorie anlegen; jedes Zimmer gehört zu einer." },
   "action.add": { en: "Add", de: "Hinzufügen" },
+
+  // services and tax codes
+  "services.title": { en: "Services and Tax Codes", de: "Leistungen und Steuerschlüssel" },
+  "services.services": { en: "Services", de: "Leistungen" },
+  "services.taxCodes": { en: "Tax Codes", de: "Steuerschlüssel" },
+  "services.taxCodesOf": { en: "Tax Codes of {legalEntity}", de: "Steuerschlüssel von {legalEntity}" },
+  "services.newService": { en: "New Service", de: "Neue Leistung" },
+  "services.newTaxCode": { en: "New Tax Code", de: "Neuer Steuerschlüssel" },
+  "services.applyPreset": { en: "Apply the {country} preset", de: "Vorlage {country} übernehmen" },
+  "services.presetHelp": { en: "Starting rates from our research, labelled to verify with your tax advisor.", de: "Startwerte aus unserer Recherche, zu prüfen mit Ihrem Steuerberater." },
+  "services.noTaxCodes": { en: "No Tax Codes yet. Apply the preset or create one, then add Services.", de: "Noch keine Steuerschlüssel. Vorlage übernehmen oder einen anlegen, dann Leistungen hinzufügen." },
+  "services.price": { en: "Default gross price", de: "Standardpreis (brutto)" },
+  "services.taxCode": { en: "Tax Code", de: "Steuerschlüssel" },
+  "services.revenueAccount": { en: "Revenue account", de: "Erlöskonto" },
+  "services.postingRhythm": { en: "Posting rhythm", de: "Buchungsrhythmus" },
+  "services.rhythm.once": { en: "once", de: "einmalig" },
+  "services.rhythm.per_night": { en: "per night", de: "pro Nacht" },
+  "services.rhythm.per_person_night": { en: "per person and night", de: "pro Person und Nacht" },
+  "services.bookableOnline": { en: "Bookable in the Guest Portal", de: "Im Gästeportal buchbar" },
+  "services.active": { en: "Active", de: "Aktiv" },
+  "services.inactive": { en: "inactive", de: "inaktiv" },
+  "services.rate": { en: "Rate %", de: "Satz %" },
+  "services.validFrom": { en: "Valid from", de: "Gültig ab" },
+  "services.addRate": { en: "Add a rate from a date", de: "Satz ab Datum hinzufügen" },
+  "services.rateHistory": { en: "Rates over time", de: "Sätze im Zeitverlauf" },
+  "services.current": { en: "now", de: "jetzt" },
+  "services.netVat": { en: "net {net}, VAT {vat}", de: "netto {net}, MwSt. {vat}" },
+  "services.noRightPrices": { en: "Prices: Property Manager or Revenue.", de: "Preise: Hotelleitung oder Revenue." },
+  "services.noRightTax": { en: "Tax Codes and accounts: Property Manager or Accounting.", de: "Steuerschlüssel und Konten: Hotelleitung oder Buchhaltung." },
 
   // fields
   "field.name": { en: "Name", de: "Name" },
