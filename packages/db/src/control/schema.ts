@@ -9,6 +9,7 @@ export const tenants = control.table("tenants", {
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
   schemaName: text("schema_name").notNull().unique(),
+  accent: text("accent").notNull().default("ocean"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -3,6 +3,8 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { signInToTenant } from "@hoteloftware/auth";
+import { getPreferences } from "@hoteloftware/db";
+import { ACCENT_COOKIE, LANGUAGE_COOKIE, THEME_COOKIE } from "@/lib/shell";
 import { auth } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { currentTenant } from "@/lib/tenant";
@@ -49,6 +51,15 @@ export async function signIn(_prev: SignInState, formData: FormData): Promise<Si
       ...(opts.has("max-age") ? { maxAge: Number(opts.get("max-age")) } : {}),
       ...(opts.has("expires") ? { expires: new Date(opts.get("expires")!) } : {}),
     });
+  }
+  // Mirror the user's display settings so the next page already paints correctly.
+  const session = await auth().api.getSession({ headers: new Headers({ cookie: jar.toString() }) });
+  if (session) {
+    const prefs = await getPreferences(pool(), session.user.id);
+    const year = 60 * 60 * 24 * 365;
+    jar.set(LANGUAGE_COOKIE, prefs.language, { path: "/", maxAge: year, sameSite: "lax" });
+    jar.set(THEME_COOKIE, prefs.theme, { path: "/", maxAge: year, sameSite: "lax" });
+    jar.set(ACCENT_COOKIE, tenant.accent, { path: "/", maxAge: year, sameSite: "lax" });
   }
   redirect("/");
 }

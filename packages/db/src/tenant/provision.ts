@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { assertContiguous, type Migration } from "../migrations/versions";
 import { runAndRecord } from "./migrate-tenants";
-import { assertTenantSlug, tenantSchemaFromSlug } from "@hoteloftware/domain";
+import { assertTenantSlug, isAccentId, tenantSchemaFromSlug, type AccentId } from "@hoteloftware/domain";
 
 export interface NewTenant {
   slug: string;
@@ -13,6 +13,7 @@ export interface Tenant {
   slug: string;
   name: string;
   schemaName: string;
+  accent: AccentId;
 }
 
 /**
@@ -41,7 +42,7 @@ export async function provisionTenant(pool: Pool, input: NewTenant, migrations: 
     await client.query("select set_config('lock_timeout', '5s', true)");
     for (const m of migrations) await runAndRecord(client, id, m);
     await client.query("commit");
-    return { id, slug: input.slug, name: input.name, schemaName };
+    return { id, slug: input.slug, name: input.name, schemaName, accent: "ocean" };
   } catch (err) {
     await client.query("rollback").catch(() => undefined);
     throw err;
@@ -51,10 +52,16 @@ export async function provisionTenant(pool: Pool, input: NewTenant, migrations: 
 }
 
 export async function findTenantBySlug(pool: Pool, slug: string): Promise<Tenant | null> {
-  const { rows } = await pool.query<{ id: string; slug: string; name: string; schema_name: string }>(
-    "select id, slug, name, schema_name from control.tenants where slug = $1",
+  const { rows } = await pool.query<{ id: string; slug: string; name: string; schema_name: string; accent: string }>(
+    "select id, slug, name, schema_name, accent from control.tenants where slug = $1",
     [slug],
   );
   const r = rows[0];
-  return r ? { id: r.id, slug: r.slug, name: r.name, schemaName: r.schema_name } : null;
+  if (!r) return null;
+  return { id: r.id, slug: r.slug, name: r.name, schemaName: r.schema_name, accent: isAccentId(r.accent) ? r.accent : "ocean" };
+}
+
+export async function setTenantAccent(pool: Pool, tenantId: string, accent: string): Promise<void> {
+  if (!isAccentId(accent)) throw new Error(`Unknown accent: ${accent}`);
+  await pool.query("update control.tenants set accent = $2 where id = $1", [tenantId, accent]);
 }

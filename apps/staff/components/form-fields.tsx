@@ -63,11 +63,13 @@ export function Select({
 export function ActionForm({
   action,
   submitLabel,
+  pendingLabel,
   children,
   className,
 }: {
   action: (prev: FormState, formData: FormData) => Promise<FormState>;
   submitLabel: string;
+  pendingLabel?: string | undefined;
   children: React.ReactNode;
   className?: string | undefined;
 }) {
@@ -90,7 +92,7 @@ export function ActionForm({
         disabled={pending}
         className="h-10 justify-self-start rounded-full bg-accent px-5 text-sm font-medium text-white shadow-pill disabled:opacity-60"
       >
-        {pending ? "Saving…" : submitLabel}
+        {pending ? (pendingLabel ?? "…") : submitLabel}
       </button>
     </form>
   );

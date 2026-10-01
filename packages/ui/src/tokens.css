@@ -1,14 +1,17 @@
 /*
  * Design tokens, lifted from the shell prototype (apps/staff-shell-prototype/app/globals.css),
  * derived from docs/research/warmwind-design-language.md. Light and dark.
- * The tenant accent colour (ticket 12) overrides --accent at runtime.
+ * The tenant accent colour (ticket 12) is set as --accent-light and --accent-dark
+ * on <html>; --accent follows the active theme.
  */
 :root {
+  --accent-light: #0071e3;
+  --accent-dark: #4c9dff;
   --ink: #171a1d;
   --canvas: #f2f2f2;
   --surface: #ffffff;
   --surface-2: #f6f6f7;
-  --accent: #0071e3;
+  --accent: var(--accent-light);
   --success: #1fa971;
   --danger: #e5244f;
   --warning: #b98900;
@@ -21,7 +24,7 @@
     --canvas: #131416;
     --surface: #1d1f22;
     --surface-2: #25282c;
-    --accent: #4c9dff;
+    --accent: var(--accent-dark);
     --success: #4ad9a1;
     --danger: #ff5c80;
     --warning: #ffcd3c;
@@ -34,7 +37,7 @@
   --canvas: #131416;
   --surface: #1d1f22;
   --surface-2: #25282c;
-  --accent: #4c9dff;
+  --accent: var(--accent-dark);
   --success: #4ad9a1;
   --danger: #ff5c80;
   --warning: #ffcd3c;
