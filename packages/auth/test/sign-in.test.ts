@@ -39,18 +39,20 @@ describe("tenant-scoped sign-in", () => {
     alpha = await provisionTenant(pool, { slug: "alpha", name: "Alpha Hotels" }, tenantMigrations());
     beta = await provisionTenant(pool, { slug: "beta", name: "Beta Resorts" }, tenantMigrations());
     auth = createAuth({ pool, appDomain: APP_DOMAIN, secret: "test-secret-with-at-least-32-characters", baseURL: `http://${APP_DOMAIN}` });
-    await createStaffUser(auth, { tenantId: alpha.id, email: "bob@example.com", name: "Bob", password: "correct horse battery" });
-    await createStaffUser(auth, { tenantId: beta.id, email: "carol@example.com", name: "Carol", password: "another good password" });
+    await createStaffUser(auth, pool, { tenantId: alpha.id, email: "bob@example.com", username: "bob", name: "Bob", password: "correct horse battery" });
+    await createStaffUser(auth, pool, { tenantId: beta.id, email: "carol@example.com", username: "carol", name: "Carol", password: "another good password" });
+    // the same Username may exist at another tenant
+    await createStaffUser(auth, pool, { tenantId: beta.id, email: "bob.beta@example.com", username: "Bob", name: "Other Bob", password: "other bob password" });
   });
 
   afterAll(async () => {
     await pool.end();
   });
 
-  it("signs a user in at their own tenant and the session carries the tenant", async () => {
+  it("signs a user in by Username at their own tenant and the session carries the tenant", async () => {
     const result = await signInToTenant(auth, pool, {
       tenantId: alpha.id,
-      email: "Bob@Example.com",
+      login: " BOB ",
       password: "correct horse battery",
       headers: headersFor("alpha"),
     });
@@ -60,14 +62,33 @@ describe("tenant-scoped sign-in", () => {
     expect(cookie).toMatch(/session_token/);
 
     const session = await getTenantSession(auth, headersFor("alpha", cookie), alpha.id);
-    expect(session?.user).toMatchObject({ email: "bob@example.com", name: "Bob", tenantId: alpha.id });
+    expect(session?.user).toMatchObject({ email: "bob@example.com", username: "bob", name: "Bob", tenantId: alpha.id });
+  });
+
+  it("the same Username at another tenant signs in that tenant's user", async () => {
+    const result = await signInToTenant(auth, pool, { tenantId: beta.id, login: "bob", password: "other bob password", headers: headersFor("beta") });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const session = await getTenantSession(auth, headersFor("beta", cookieHeader(result.response)), beta.id);
+    expect(session?.user.email).toBe("bob.beta@example.com");
+  });
+
+  it("the email still works as login", async () => {
+    const result = await signInToTenant(auth, pool, { tenantId: alpha.id, login: "Bob@Example.com", password: "correct horse battery", headers: headersFor("alpha") });
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuses a duplicate Username within a tenant", async () => {
+    await expect(
+      createStaffUser(auth, pool, { tenantId: alpha.id, email: "bob2@example.com", username: "BOB", name: "Bob 2", password: "bob two password" }),
+    ).rejects.toThrow(/already taken/i);
   });
 
   it("refuses the same credentials at another tenant without creating a session", async () => {
     const before = await pool.query<{ n: number }>("select count(*)::int as n from control.session");
     const result = await signInToTenant(auth, pool, {
       tenantId: beta.id,
-      email: "bob@example.com",
+      login: "bob@example.com",
       password: "correct horse battery",
       headers: headersFor("beta"),
     });
@@ -79,7 +100,7 @@ describe("tenant-scoped sign-in", () => {
   it("refuses a wrong password with the same error", async () => {
     const result = await signInToTenant(auth, pool, {
       tenantId: alpha.id,
-      email: "bob@example.com",
+      login: "bob",
       password: "wrong password here",
       headers: headersFor("alpha"),
     });
@@ -89,7 +110,7 @@ describe("tenant-scoped sign-in", () => {
   it("does not accept an alpha session as a beta session", async () => {
     const result = await signInToTenant(auth, pool, {
       tenantId: alpha.id,
-      email: "bob@example.com",
+      login: "bob",
       password: "correct horse battery",
       headers: headersFor("alpha"),
     });

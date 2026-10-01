@@ -28,8 +28,12 @@ A company owned by a tenant that issues invoices; every property belongs to exac
 _Avoid_: Company, billing entity, GmbH
 
 **User**:
-A staff member's login, belonging to exactly one tenant, holding at most one tenant role and any number of property roles.
+A staff member's login, belonging to exactly one tenant, holding at most one tenant role and any number of property roles. Identified by an email that is unique across the platform.
 _Avoid_: Employee, staff account, member
+
+**Username**:
+The short name a user types with their password to sign in at their tenant's address; unique within the tenant and set when the user is invited.
+_Avoid_: Login, handle, account name
 
 **Tenant Role**:
 Owner or Tenant Admin; grants Property Manager rights on every property of the tenant. Owner also controls the subscription.

@@ -2,7 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { PROPERTY_ROLES, TENANT_ROLES, can, type PropertyRole, type PropertyRoleAssignment, type TenantRole } from "@hoteloftware/domain";
-import { countOwners, findTenantUser, inControlTransaction, listProperties, setPropertyRoles, setTenantRole, type Property } from "@hoteloftware/db";
+import {
+  countOwners,
+  findTenantUser,
+  inControlTransaction,
+  listProperties,
+  setPropertyRoles,
+  setTenantRole,
+  setUsername,
+  type Property,
+} from "@hoteloftware/db";
 import { inviteUser, pendingUserByEmail } from "@hoteloftware/auth/invitations";
 import { authorize, ForbiddenError, requirePrincipal, type Principal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -74,6 +83,7 @@ export async function invite(_prev: FormState, formData: FormData): Promise<Form
       tenantId: tenant.id,
       invitedBy: session.user.id,
       email,
+      username: field(formData, "username") || undefined,
       name: field(formData, "name"),
       tenantRole: form.tenantRole ?? undefined,
       propertyRoles,
@@ -105,6 +115,8 @@ export async function updateRoles(_prev: FormState, formData: FormData): Promise
     if (managed.length === 0 && !form.tenantRoleSent) throw new ForbiddenError("manage_property_users");
 
     await inControlTransaction(pool(), async (tx) => {
+      const username = field(formData, "username");
+      if (username && username !== user.username) await setUsername(tx, tenant.id, userId, username);
       if (form.tenantRoleSent) {
         if (user.id === session.user.id && !form.tenantRole) throw new Error("You cannot remove your own tenant role.");
         if (user.tenantRole === "owner" && form.tenantRole !== "owner" && (await countOwners(tx, tenant.id)) <= 1) {
@@ -123,6 +135,6 @@ export async function updateRoles(_prev: FormState, formData: FormData): Promise
       }
     });
     revalidatePath("/settings/users");
-    return { ok: true, message: "Roles saved." };
+    return { ok: true, message: "Saved." };
   });
 }

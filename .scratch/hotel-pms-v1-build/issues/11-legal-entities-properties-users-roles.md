@@ -23,3 +23,5 @@ Left for later tickets, on purpose:
 - Property-scoped pages (`requireAllowed("view_property", id)`) start with the property switcher in ticket 12.
 - Email uniqueness stays platform-wide (see ticket 10 comments); decision still open with the owner.
 - Defaults chosen here: invitations valid 7 days; reserved country and currency lists in packages/domain (EU + CH + LI); Europe time zones offered first.
+
+2026-10-01: owner decided the email question: email stays unique platform-wide; daily sign-in is Username + password at the tenant's address, Username unique within the tenant and set at invitation. Recorded as an amendment to ADR 0001 and in CONTEXT.md (Username, Benutzername). Implemented: control migration 0003, sign-in by Username (email still accepted), Username on invite and user edit forms.

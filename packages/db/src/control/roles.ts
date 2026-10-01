@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { PROPERTY_ROLES, TENANT_ROLES, type Actor, type PropertyRole, type PropertyRoleAssignment, type TenantRole } from "@hoteloftware/domain";
+import { PROPERTY_ROLES, TENANT_ROLES, isUsername, normaliseUsername, type Actor, type PropertyRole, type PropertyRoleAssignment, type TenantRole } from "@hoteloftware/domain";
 
 type Queryable = Pool | PoolClient;
 
@@ -17,6 +17,24 @@ export async function inControlTransaction<T>(pool: Pool, fn: (tx: PoolClient) =
   } finally {
     client.release();
   }
+}
+
+/** Set or change a user's Username; unique within the tenant, case-insensitive. */
+export async function setUsername(db: Queryable, tenantId: string, userId: string, username: string): Promise<void> {
+  const value = normaliseUsername(username);
+  if (!isUsername(value)) throw new Error("Username: 3 to 30 letters, digits, dots, underscores or hyphens");
+  const taken = await db.query('select 1 from control."user" where tenant_id = $1 and lower(username) = $2 and id <> $3', [tenantId, value, userId]);
+  if (taken.rowCount) throw new Error("This Username is already taken at this tenant");
+  await db.query('update control."user" set username = $3, updated_at = now() where tenant_id = $1 and id = $2', [tenantId, userId, value]);
+}
+
+/** The email behind a Username at this tenant, for sign-in. */
+export async function emailForUsername(db: Queryable, tenantId: string, username: string): Promise<string | null> {
+  const { rows } = await db.query<{ email: string }>('select email from control."user" where tenant_id = $1 and lower(username) = $2', [
+    tenantId,
+    normaliseUsername(username),
+  ]);
+  return rows[0]?.email ?? null;
 }
 
 /** How many users hold the Owner role in this tenant. */
@@ -82,6 +100,7 @@ export async function setPropertyRoles(
 export interface TenantUser {
   id: string;
   email: string;
+  username: string | null;
   name: string;
   tenantRole: TenantRole | undefined;
   propertyRoles: PropertyRoleAssignment[];
@@ -90,8 +109,16 @@ export interface TenantUser {
 }
 
 export async function listTenantUsers(db: Queryable, tenantId: string): Promise<TenantUser[]> {
-  const users = await db.query<{ id: string; email: string; name: string; created_at: Date; tenant_role: TenantRole | null; pending: boolean }>(
-    `select u.id, u.email, u.name, u.created_at, tr.role as tenant_role, (i.user_id is not null) as pending
+  const users = await db.query<{
+    id: string;
+    email: string;
+    username: string | null;
+    name: string;
+    created_at: Date;
+    tenant_role: TenantRole | null;
+    pending: boolean;
+  }>(
+    `select u.id, u.email, u.username, u.name, u.created_at, tr.role as tenant_role, (i.user_id is not null) as pending
        from control."user" u
        left join control.tenant_roles tr on tr.user_id = u.id and tr.tenant_id = u.tenant_id
        left join control.invitations i on i.user_id = u.id and i.expires_at > now()
@@ -112,6 +139,7 @@ export async function listTenantUsers(db: Queryable, tenantId: string): Promise<
   return users.rows.map((u) => ({
     id: u.id,
     email: u.email,
+    username: u.username,
     name: u.name,
     tenantRole: u.tenant_role ?? undefined,
     propertyRoles: byUser.get(u.id) ?? [],

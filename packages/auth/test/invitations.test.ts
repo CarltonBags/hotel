@@ -31,7 +31,7 @@ describe("invitations", () => {
     alpha = await provisionTenant(pool, { slug: "alpha", name: "Alpha Hotels" }, tenantMigrations());
     beta = await provisionTenant(pool, { slug: "beta", name: "Beta Resorts" }, tenantMigrations());
     auth = createAuth({ pool, appDomain: APP_DOMAIN, secret: "test-secret-with-at-least-32-characters", baseURL: `http://${APP_DOMAIN}` });
-    adminId = (await createStaffUser(auth, { tenantId: alpha.id, email: "admin@example.com", name: "Admin", password: "admin password 123" })).id;
+    adminId = (await createStaffUser(auth, pool, { tenantId: alpha.id, email: "admin@example.com", username: "admin", name: "Admin", password: "admin password 123" })).id;
   });
 
   afterAll(async () => {
@@ -43,6 +43,7 @@ describe("invitations", () => {
       tenantId: alpha.id,
       invitedBy: adminId,
       email: "Dana@Example.com",
+      username: "dana.desk",
       name: "Dana",
       propertyRoles: [{ propertyId: PROPERTY_A, role: "front_desk" }],
     });
@@ -59,7 +60,7 @@ describe("invitations", () => {
 
     const before = await signInToTenant(auth, pool, {
       tenantId: alpha.id,
-      email: "dana@example.com",
+      login: "dana.desk",
       password: "anything at all",
       headers: new Headers({ host: `alpha.${APP_DOMAIN}` }),
     });
@@ -67,13 +68,13 @@ describe("invitations", () => {
   });
 
   it("accepting sets the password, consumes the token and allows sign-in", async () => {
-    const invite = await inviteUser(pool, { tenantId: alpha.id, invitedBy: adminId, email: "finn@example.com", name: "Finn", propertyRoles: [] });
+    const invite = await inviteUser(pool, { tenantId: alpha.id, invitedBy: adminId, email: "finn@example.com", username: "finn", name: "Finn", propertyRoles: [] });
     const accepted = await acceptInvitation(auth, pool, { token: invite.token, password: "finn strong password" });
     expect(accepted).toMatchObject({ userId: invite.userId, tenantId: alpha.id });
 
     const after = await signInToTenant(auth, pool, {
       tenantId: alpha.id,
-      email: "finn@example.com",
+      login: "finn",
       password: "finn strong password",
       headers: new Headers({ host: `alpha.${APP_DOMAIN}` }),
     });
@@ -84,7 +85,7 @@ describe("invitations", () => {
   });
 
   it("refuses to accept at another tenant's address and keeps the invitation usable", async () => {
-    const invite = await inviteUser(pool, { tenantId: alpha.id, invitedBy: adminId, email: "ivy@example.com", name: "Ivy", propertyRoles: [] });
+    const invite = await inviteUser(pool, { tenantId: alpha.id, invitedBy: adminId, email: "ivy@example.com", username: "ivy", name: "Ivy", propertyRoles: [] });
     await expect(
       acceptInvitation(auth, pool, { token: invite.token, password: "ivy strong password", expectedTenantId: beta.id }),
     ).rejects.toThrow(/another hotel company/i);
@@ -93,7 +94,7 @@ describe("invitations", () => {
   });
 
   it("refuses an expired invitation and a wrong token", async () => {
-    const invite = await inviteUser(pool, { tenantId: alpha.id, invitedBy: adminId, email: "gina@example.com", name: "Gina", propertyRoles: [] });
+    const invite = await inviteUser(pool, { tenantId: alpha.id, invitedBy: adminId, email: "gina@example.com", username: "gina", name: "Gina", propertyRoles: [] });
     await pool.query("update control.invitations set expires_at = now() - interval '1 minute' where user_id = $1", [invite.userId]);
     expect(await invitationByToken(pool, invite.token)).toBeNull();
     await expect(acceptInvitation(auth, pool, { token: "not-a-real-token-at-all-000000000", password: "x".repeat(12) })).rejects.toThrow(
@@ -103,7 +104,7 @@ describe("invitations", () => {
 
   it("refuses an email that already belongs to a user, without saying where (platform-wide unique in v1)", async () => {
     await expect(
-      inviteUser(pool, { tenantId: beta.id, invitedBy: adminId, email: "admin@example.com", name: "Dup", propertyRoles: [] }),
+      inviteUser(pool, { tenantId: beta.id, invitedBy: adminId, email: "admin@example.com", username: "admin", name: "Dup", propertyRoles: [] }),
     ).rejects.toThrow(/cannot be invited/i);
     expect(await pendingUserByEmail(pool, beta.id, "admin@example.com")).toBe("taken");
     expect(await pendingUserByEmail(pool, alpha.id, "admin@example.com")).toBe("taken");
@@ -115,6 +116,7 @@ describe("invitations", () => {
       tenantId: alpha.id,
       invitedBy: adminId,
       email: "hal@example.com",
+      username: "hal",
       name: "Hal",
       tenantRole: "tenant_admin",
       propertyRoles: [{ propertyId: PROPERTY_A, role: "revenue" }],
@@ -122,7 +124,7 @@ describe("invitations", () => {
     const pending = await pendingUserByEmail(pool, alpha.id, "hal@example.com");
     expect(pending).toMatchObject({ userId: first.userId, tenantRole: "tenant_admin", propertyRoles: [{ propertyId: PROPERTY_A, role: "revenue" }] });
 
-    const second = await inviteUser(pool, { tenantId: alpha.id, invitedBy: adminId, email: "hal@example.com", name: "Hal", propertyRoles: [] });
+    const second = await inviteUser(pool, { tenantId: alpha.id, invitedBy: adminId, email: "hal@example.com", username: "hal", name: "Hal", propertyRoles: [] });
     expect(second.userId).toBe(first.userId);
     expect(await invitationByToken(pool, first.token)).toBeNull();
     expect(await invitationByToken(pool, second.token)).not.toBeNull();

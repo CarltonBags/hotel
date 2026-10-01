@@ -23,7 +23,7 @@ ln -s ../../.env apps/staff/.env && ln -s ../../.env apps/guest/.env   # Next.js
 pnpm install
 pnpm db:migrate                 # control schema + every tenant schema
 pnpm db:provision alpha "Alpha Hotels GmbH"
-pnpm --filter @hoteloftware/auth create-user alpha you@example.com "Your Name" "a long password"
+pnpm --filter @hoteloftware/auth create-user alpha you@example.com yourname "Your Name" "a long password" owner
 pnpm --filter @hoteloftware/staff dev
 ```
 

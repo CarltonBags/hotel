@@ -12,10 +12,12 @@ export function SignInForm({ tenantName }: { tenantName: string }) {
         <p className="text-ink-60">Sign in to the staff app</p>
       </div>
       <label className="grid gap-1 text-sm">
-        <span className="text-ink-80">Email</span>
+        <span className="text-ink-80">Username</span>
         <input
-          name="email"
-          type="email"
+          name="login"
+          type="text"
+          autoCapitalize="none"
+          spellCheck={false}
           autoComplete="username"
           required
           autoFocus

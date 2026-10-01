@@ -24,7 +24,9 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
               <ActionForm action={accept} submitLabel="Set password and continue">
                 <input type="hidden" name="token" value={token} />
                 <Field label="Your name" name="name" defaultValue={invitation.name} required />
-                <p className="text-sm text-ink-60">Email: {invitation.email}</p>
+                <p className="text-sm text-ink-60">
+                  Your Username for signing in: <span className="font-mono text-ink">{invitation.username}</span>
+                </p>
                 <Field label="Password (at least 10 characters)" name="password" type="password" autoComplete="new-password" required />
                 <Field label="Repeat password" name="passwordRepeat" type="password" autoComplete="new-password" required />
               </ActionForm>

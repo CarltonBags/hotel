@@ -69,7 +69,8 @@ export default async function UsersPage() {
       {users.map((u) => (
         <details key={u.id} className="rounded-2xl bg-surface p-5 shadow-card">
           <summary className="cursor-pointer">
-            <span className="font-medium">{u.name}</span> <span className="text-ink-60">{u.email}</span>{" "}
+            <span className="font-medium">{u.name}</span>{" "}
+            <span className="font-mono text-ink-80">{u.username ?? "no Username yet"}</span> <span className="text-ink-60">{u.email}</span>{" "}
             {u.pendingInvitation ? <span className="rounded-full bg-warning/15 px-2 text-xs text-warning">invited</span> : null}{" "}
             <span className="text-ink-60">
               {[
@@ -83,8 +84,11 @@ export default async function UsersPage() {
             </span>
           </summary>
           <div className="mt-4">
-            <ActionForm action={updateRoles} submitLabel="Save roles">
+            <ActionForm action={updateRoles} submitLabel="Save">
               <input type="hidden" name="userId" value={u.id} />
+              <div className="max-w-xs">
+                <Field label="Username (for signing in)" name="username" defaultValue={u.username ?? ""} required />
+              </div>
               <RolePicker properties={managed} user={u} canTenantRoles={canTenantRoles} />
             </ActionForm>
           </div>
@@ -93,9 +97,10 @@ export default async function UsersPage() {
       <section className="rounded-2xl bg-surface p-5 shadow-card">
         <h2 className="mb-3 font-medium">Invite a user</h2>
         <ActionForm action={invite} submitLabel="Create invitation">
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-3">
             <Field label="Name" name="name" required />
-            <Field label="Email" name="email" type="email" required />
+            <Field label="Email (for the invitation)" name="email" type="email" required />
+            <Field label="Username (for signing in)" name="username" required />
           </div>
           <RolePicker properties={managed} canTenantRoles={canTenantRoles} />
         </ActionForm>

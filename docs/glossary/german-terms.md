@@ -10,6 +10,7 @@ Proposed by the agent from hotel trade usage, 2026-09-30. Status: confirmed by t
 | Floor View | Etagenansicht |  |
 | Legal Entity | Gesellschaft |  |
 | User | Benutzer |  |
+| Username | Benutzername |  |
 | Tenant Role | Mandantenrolle |  |
 | Property Role | Betriebsrolle |  |
 | Guest | Gast |  |

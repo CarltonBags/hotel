@@ -14,17 +14,17 @@ export interface SignInState {
 export async function signIn(_prev: SignInState, formData: FormData): Promise<SignInState> {
   const tenant = await currentTenant();
   if (!tenant) return { error: "Unknown hotel company." };
-  const email = String(formData.get("email") ?? "");
+  const login = String(formData.get("login") ?? "");
   const password = String(formData.get("password") ?? "");
-  if (!email || !password) return { error: "Enter email and password." };
+  if (!login || !password) return { error: "Enter your Username and password." };
 
   const result = await signInToTenant(auth(), pool(), {
     tenantId: tenant.id,
-    email,
+    login,
     password,
     headers: await headers(),
   });
-  if (!result.ok) return { error: "Email or password is wrong." };
+  if (!result.ok) return { error: "Username or password is wrong." };
 
   // Forward the cookies Better Auth set on its response to this response.
   const jar = await cookies();

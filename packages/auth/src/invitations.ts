@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Pool } from "pg";
-import { loadActor, setPropertyRoles, setTenantRole } from "@hoteloftware/db";
+import { loadActor, setPropertyRoles, setTenantRole, setUsername } from "@hoteloftware/db";
 import type { PropertyRoleAssignment, TenantRole } from "@hoteloftware/domain";
 import type { Auth } from "./index";
 
@@ -10,6 +10,8 @@ export interface InviteInput {
   tenantId: string;
   invitedBy: string;
   email: string;
+  /** Required for a new user; ignored when re-inviting. */
+  username?: string | undefined;
   name: string;
   tenantRole?: TenantRole | undefined;
   propertyRoles: PropertyRoleAssignment[];
@@ -85,6 +87,7 @@ export async function inviteUser(pool: Pool, input: InviteInput): Promise<Invita
       userId = found.id;
       await client.query("delete from control.invitations where user_id = $1", [userId]);
     } else {
+      if (!input.username) throw new Error("A Username is required");
       userId = newUserId();
       await client.query('insert into control."user" (id, tenant_id, name, email, email_verified) values ($1, $2, $3, $4, false)', [
         userId,
@@ -92,6 +95,7 @@ export async function inviteUser(pool: Pool, input: InviteInput): Promise<Invita
         input.name.trim(),
         email,
       ]);
+      await setUsername(client, input.tenantId, userId, input.username);
       if (input.tenantRole) {
         await setTenantRole(client, { tenantId: input.tenantId, userId, role: input.tenantRole, grantedBy: input.invitedBy });
       }
@@ -121,20 +125,21 @@ export interface PendingInvitation {
   userId: string;
   tenantId: string;
   email: string;
+  username: string | null;
   name: string;
   expiresAt: Date;
 }
 
 /** The invitation behind a token, or null when unknown, used or expired. */
 export async function invitationByToken(pool: Pool, token: string): Promise<PendingInvitation | null> {
-  const { rows } = await pool.query<{ user_id: string; tenant_id: string; email: string; name: string; expires_at: Date }>(
-    `select i.user_id, i.tenant_id, u.email, u.name, i.expires_at
+  const { rows } = await pool.query<{ user_id: string; tenant_id: string; email: string; username: string | null; name: string; expires_at: Date }>(
+    `select i.user_id, i.tenant_id, u.email, u.username, u.name, i.expires_at
        from control.invitations i join control."user" u on u.id = i.user_id
       where i.token_hash = $1 and i.expires_at > now()`,
     [hashToken(token)],
   );
   const r = rows[0];
-  return r ? { userId: r.user_id, tenantId: r.tenant_id, email: r.email, name: r.name, expiresAt: r.expires_at } : null;
+  return r ? { userId: r.user_id, tenantId: r.tenant_id, email: r.email, username: r.username, name: r.name, expiresAt: r.expires_at } : null;
 }
 
 /** Accept: set the password (and optionally the name), mark the email verified, consume the token. */

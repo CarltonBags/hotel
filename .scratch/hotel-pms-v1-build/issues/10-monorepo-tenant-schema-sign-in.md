@@ -22,3 +22,5 @@ Points for the owner, found in review:
 - **Defaults chosen without a ticket:** sessions expire after 12 hours, refreshed every 15 minutes; minimum password length 10; reserved subdomains `www, api, app, admin, status, help, mail, guest, worker`. Confirm or change in ticket 11 / 14.
 - Migrations are hand-written SQL under `packages/db/migrations`; drizzle-kit generation is not used, so the CI check guards the hand-written files. Drizzle schema files mirror them for typed queries.
 - `attachDatabasePool` (Vercel fluid compute) is not wired; belongs with the deploy work in ticket 13.
+
+2026-10-01: owner decided the email question: email stays unique platform-wide; daily sign-in is Username + password at the tenant's address, Username unique within the tenant and set at invitation. Recorded as an amendment to ADR 0001 and in CONTEXT.md (Username, Benutzername). Implemented: control migration 0003, sign-in by Username (email still accepted), Username on invite and user edit forms.

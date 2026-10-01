@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import type { Pool } from "pg";
-import { controlDb, controlSchema, findTenantBySlug } from "@hoteloftware/db";
+import { controlDb, controlSchema, emailForUsername, findTenantBySlug, setUsername } from "@hoteloftware/db";
 import { resolveTenantSlugFromHeaders } from "@hoteloftware/domain";
 
 export interface AuthConfig {
@@ -35,6 +35,7 @@ export function createAuth(config: AuthConfig) {
     user: {
       additionalFields: {
         tenantId: { type: "string", required: true, input: false },
+        username: { type: "string", required: false, input: false },
       },
     },
     session: {
@@ -68,12 +69,13 @@ export type Auth = ReturnType<typeof createAuth>;
 export interface StaffUserInput {
   tenantId: string;
   email: string;
+  username: string;
   name: string;
   password: string;
 }
 
 /** Create a staff user for a tenant with a password credential. Server-side only. */
-export async function createStaffUser(auth: Auth, input: StaffUserInput): Promise<{ id: string }> {
+export async function createStaffUser(auth: Auth, pool: Pool, input: StaffUserInput): Promise<{ id: string }> {
   const ctx = await auth.$context;
   const email = normaliseEmail(input.email);
   const user = await ctx.internalAdapter.createUser(
@@ -86,6 +88,7 @@ export async function createStaffUser(auth: Auth, input: StaffUserInput): Promis
     accountId: user.id,
     password: await ctx.password.hash(input.password),
   });
+  await setUsername(pool, input.tenantId, user.id, input.username);
   return { id: user.id };
 }
 
@@ -117,17 +120,22 @@ function normaliseEmail(email: unknown): string {
 export type SignInResult = { ok: true; response: Response } | { ok: false; error: "invalid_credentials" };
 
 /**
- * Sign in scoped to the tenant the request arrived at. A user of another
- * tenant gets the same "invalid credentials" as a wrong password, and no
- * session is ever created for the wrong tenant.
+ * Sign in scoped to the tenant the request arrived at, by Username (daily use)
+ * or by email. A user of another tenant gets the same "invalid credentials" as
+ * a wrong password, and no session is ever created for the wrong tenant.
  */
 export async function signInToTenant(
   auth: Auth,
   pool: Pool,
-  input: { tenantId: string; email: string; password: string; headers: Headers },
+  input: { tenantId: string; login: string; password: string; headers: Headers },
 ): Promise<SignInResult> {
-  const email = normaliseEmail(input.email);
   const { password } = await auth.$context;
+  const login = input.login.trim();
+  const email = login.includes("@") ? normaliseEmail(login) : await emailForUsername(pool, input.tenantId, login);
+  if (!email) {
+    await password.hash("burn the same time a real check takes").catch(() => undefined);
+    return { ok: false, error: "invalid_credentials" };
+  }
   if (!(await isTenantMember(password.hash, pool, input.tenantId, email))) {
     return { ok: false, error: "invalid_credentials" };
   }
@@ -145,7 +153,7 @@ export async function signInToTenant(
 }
 
 export interface TenantSession {
-  user: { id: string; email: string; name: string; tenantId: string };
+  user: { id: string; email: string; username: string | null; name: string; tenantId: string };
   session: { id: string; expiresAt: Date };
 }
 
@@ -156,10 +164,10 @@ export interface TenantSession {
 export async function getTenantSession(auth: Auth, headers: Headers, tenantId: string): Promise<TenantSession | null> {
   const result = await auth.api.getSession({ headers });
   if (!result) return null;
-  const user = result.user as typeof result.user & { tenantId?: string };
+  const user = result.user as typeof result.user & { tenantId?: string; username?: string | null };
   if (user.tenantId !== tenantId) return null;
   return {
-    user: { id: user.id, email: user.email, name: user.name, tenantId: user.tenantId },
+    user: { id: user.id, email: user.email, username: user.username ?? null, name: user.name, tenantId: user.tenantId },
     session: { id: result.session.id, expiresAt: result.session.expiresAt },
   };
 }

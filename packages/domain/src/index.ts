@@ -29,3 +29,4 @@ export {
   type CountryCode,
   type CurrencyCode,
 } from "./reference";
+export { isUsername, normaliseUsername, suggestUsername } from "./username";

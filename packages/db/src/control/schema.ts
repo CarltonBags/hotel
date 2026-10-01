@@ -1,4 +1,5 @@
-import { boolean, index, integer, pgSchema, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, index, integer, pgSchema, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 /** Control schema (ADR 0006). Mirrors migrations/control/*.sql; the SQL is the source of truth. */
 export const control = pgSchema("control");
@@ -34,12 +35,13 @@ export const user = control.table(
       .references(() => tenants.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     email: text("email").notNull().unique(),
+    username: text("username"),
     emailVerified: boolean("email_verified").notNull().default(false),
     image: text("image"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("user_tenant_idx").on(t.tenantId)],
+  (t) => [index("user_tenant_idx").on(t.tenantId), uniqueIndex("user_tenant_username_idx").on(t.tenantId, sql`lower(${t.username})`)],
 );
 
 export const session = control.table(

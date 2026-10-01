@@ -14,7 +14,7 @@ export default async function HomePage() {
         <p className="text-ink-60">Signed in to</p>
         <h1 className="text-xl font-medium">{tenant.name}</h1>
         <p className="mt-1 text-sm text-ink-60">
-          {session.user.name} ({session.user.email}){actor.tenantRole ? ` · ${ROLE_LABELS[actor.tenantRole].en}` : ""}
+          {session.user.name} · {session.user.username ?? session.user.email}{actor.tenantRole ? ` · ${ROLE_LABELS[actor.tenantRole].en}` : ""}
         </p>
 
         <h2 className="mt-6 font-medium">Your properties</h2>

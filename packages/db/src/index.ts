@@ -12,7 +12,18 @@ export { findTenantBySlug, provisionTenant, type NewTenant, type Tenant } from "
 export { assertTenantSlug, isTenantSlug, resolveTenantSlug, tenantSchemaFromSlug } from "@hoteloftware/domain";
 export { assertTenantSchemaName, inTenantTransaction, isTenantSchemaName, withTenant } from "./tenant/with-tenant";
 export { controlSchema } from "./control/schema";
-export { countOwners, findTenantUser, inControlTransaction, listTenantUsers, loadActor, setPropertyRoles, setTenantRole, type TenantUser } from "./control/roles";
+export {
+  countOwners,
+  emailForUsername,
+  findTenantUser,
+  inControlTransaction,
+  listTenantUsers,
+  loadActor,
+  setPropertyRoles,
+  setTenantRole,
+  setUsername,
+  type TenantUser,
+} from "./control/roles";
 export { createLegalEntity, findLegalEntity, listLegalEntities, updateLegalEntity, type LegalEntity, type LegalEntityInput } from "./tenant/legal-entities";
 export { createProperty, findProperty, listProperties, updateProperty, type Property, type PropertyInput } from "./tenant/properties";
 export { tenantSchema } from "./tenant/schema";
