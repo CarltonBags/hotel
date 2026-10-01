@@ -18,8 +18,11 @@ import { ThemeToggle, UserMenu } from "./UserMenu";
  */
 export function Shell({ children }: { children: React.ReactNode }) {
   const shell = useShell();
-  const { t, moduleLabel, quickAccess, activeId, openModule, canManageTenant } = shell;
-  const visible = useMemo(() => MODULES.filter((m) => !m.requires || canManageTenant), [canManageTenant]);
+  const { t, moduleLabel, quickAccess, activeId, openModule, canManageTenant, propertyActions } = shell;
+  const visible = useMemo(
+    () => MODULES.filter((m) => (!m.requires || canManageTenant) && (!m.requiresProperty || propertyActions.includes(m.requiresProperty))),
+    [canManageTenant, propertyActions],
+  );
   const quick = quickAccess.map((id) => visible.find((m) => m.id === id)).filter((m): m is ModuleDef => m !== undefined);
 
   return (

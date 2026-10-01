@@ -49,3 +49,33 @@ export function controlDb(pool: Pool): ControlDb {
 export function withTenantDb<T>(pool: Pool, schema: string, fn: (db: TenantDb, tx: PoolClient) => Promise<T>): Promise<T> {
   return withTenant(pool, schema, (tx) => fn(drizzle(tx, { schema: tenantSchema }), tx));
 }
+export {
+  createRoomFeature,
+  createRoomType,
+  createRooms,
+  createSection,
+  deleteRoom,
+  deleteRoomFeature,
+  deleteRoomType,
+  deleteSection,
+  listAgeBands,
+  listRoomFeatures,
+  listRoomTypes,
+  listRooms,
+  listSections,
+  renameSection,
+  roomCapacityHistory,
+  saveAgeBands,
+  updateRoom,
+  updateRoomFeature,
+  updateRoomType,
+  AgeBandError,
+  type AgeBand,
+  type Names,
+  type Room,
+  type RoomFeature,
+  type RoomPatch,
+  type RoomType,
+  type RoomTypeInput,
+  type Section,
+} from "./tenant/rooms";

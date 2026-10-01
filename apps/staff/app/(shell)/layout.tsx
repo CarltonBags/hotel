@@ -1,4 +1,4 @@
-import { can } from "@hoteloftware/domain";
+import { PROPERTY_ACTIONS, can, type PropertyAction } from "@hoteloftware/domain";
 import { loadShell } from "@/lib/shell";
 import { Shell } from "@/shell/Shell";
 import { ShellProvider } from "@/shell/ShellProvider";
@@ -7,6 +7,7 @@ import { ShellProvider } from "@/shell/ShellProvider";
 export default async function ShellLayout({ children }: { children: React.ReactNode }) {
   const shell = await loadShell();
   const { tenant, session, actor } = shell.principal;
+  const propertyActions = (Object.keys(PROPERTY_ACTIONS) as PropertyAction[]).filter((a) => shell.properties.some((p) => can(actor, a, p.id)));
   return (
     <ShellProvider
       tenant={{ id: tenant.id, name: tenant.name, slug: tenant.slug }}
@@ -20,6 +21,7 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       theme={shell.theme}
       accent={shell.accent}
       canManageTenant={can(actor, "manage_tenant_settings")}
+      propertyActions={propertyActions}
     >
       <Shell>{children}</Shell>
     </ShellProvider>

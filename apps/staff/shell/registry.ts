@@ -4,7 +4,7 @@
  * placeholder and name the ticket that builds them. Tickets add their modules
  * here; nothing else in the shell knows them.
  */
-import type { Action } from "@hoteloftware/domain";
+import type { Action, PropertyAction } from "@hoteloftware/domain";
 import type { MessageKey } from "@/i18n/messages";
 
 export type GroupId = "front_desk" | "lists" | "cash_billing" | "rates" | "guests" | "housekeeping" | "reports" | "settings";
@@ -19,8 +19,10 @@ export interface ModuleDef {
   href: string;
   /** Build ticket number when the module is not built yet. */
   soon?: number;
-  /** Tenant-level action required to see the item; property modules check per property later. */
+  /** Tenant-level action required to see the item. */
   requires?: Action;
+  /** Property-level action the user must hold at at least one property to see the item. */
+  requiresProperty?: PropertyAction;
 }
 
 export const GROUPS: { id: GroupId; label: MessageKey; icon: string }[] = [
@@ -76,9 +78,9 @@ export const MODULES: ModuleDef[] = [
   { id: "settings_tenant", group: "settings", label: "module.settings_tenant", icon: "Palette", hue: "#0071e3", href: "/settings/tenant", requires: "manage_tenant_settings" },
   { id: "settings_legal_entities", group: "settings", label: "module.settings_legal_entities", icon: "Landmark", hue: "#4f5bd5", href: "/settings/legal-entities", requires: "manage_legal_entities" },
   { id: "settings_properties", group: "settings", label: "module.settings_properties", icon: "Building2", hue: "#1fa971", href: "/settings/properties", requires: "manage_properties" },
-  { id: "settings_users", group: "settings", label: "module.settings_users", icon: "Users", hue: "#7c5cff", href: "/settings/users" },
+  { id: "settings_users", group: "settings", label: "module.settings_users", icon: "Users", hue: "#7c5cff", href: "/settings/users", requiresProperty: "manage_property_users" },
   soon("settings_devices", "settings", "module.settings_devices", "TabletSmartphone", "#6b7280", 14),
-  soon("settings_rooms", "settings", "module.settings_rooms", "BedDouble", "#0aa5a5", 15),
+  { id: "settings_rooms", group: "settings", label: "module.settings_rooms", icon: "BedDouble", hue: "#0aa5a5", href: "/settings/rooms", requiresProperty: "manage_property_settings" },
   { id: "settings_account", group: "settings", label: "module.settings_account", icon: "UserCog", hue: "#6b7280", href: "/settings/account" },
 ];
 

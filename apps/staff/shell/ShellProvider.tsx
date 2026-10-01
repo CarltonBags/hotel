@@ -21,6 +21,8 @@ export interface ShellProps {
   theme: Theme;
   accent: { id: string; light: string; dark: string };
   canManageTenant: boolean;
+  /** Property-level actions the user holds at at least one property. */
+  propertyActions: string[];
 }
 
 type Action =
