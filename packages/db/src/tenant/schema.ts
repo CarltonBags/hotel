@@ -401,7 +401,7 @@ export const rateChanges = pgTable(
     changeId: uuid("change_id").notNull(),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
     userId: text("user_id").notNull(),
-    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     ratePlanId: uuid("rate_plan_id").notNull().references(() => ratePlans.id, { onDelete: "cascade" }),
     roomTypeId: uuid("room_type_id").notNull().references(() => roomTypes.id),
     date: date("date").notNull(),
@@ -409,6 +409,7 @@ export const rateChanges = pgTable(
     oldValue: text("old_value"),
     newValue: text("new_value"),
     reason: text("reason").notNull().default("edit"),
+    undoneBy: uuid("undone_by"),
   },
   (t) => [index("rate_changes_change_idx").on(t.changeId), index("rate_changes_property_idx").on(t.propertyId, t.at.desc())],
 );

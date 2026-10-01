@@ -62,7 +62,7 @@ export const MODULES: ModuleDef[] = [
   soon("invoices", "cash_billing", "module.invoices", "FileText", "#4f5bd5", 28),
   soon("payments", "cash_billing", "module.payments", "CreditCard", "#e0457b", 27),
   soon("night_audit", "cash_billing", "module.night_audit", "MoonStar", "#7c5cff", 32),
-  soon("rates", "rates", "module.rates", "Tag", "#e0457b", 18),
+  { id: "rates", group: "rates", label: "module.rates", icon: "Tag", hue: "#e0457b", href: "/rates", requiresProperty: "manage_rates" },
   soon("availability", "rates", "module.availability", "Grid3x3", "#0aa5a5", 24),
   soon("channel_sync", "rates", "module.channel_sync", "RefreshCw", "#6b7280", 37),
   soon("guests", "guests", "module.guests", "User", "#7c5cff", 20),

@@ -5,7 +5,11 @@ import {
   RESTRICTION_FIELDS,
   derivedPrice,
   effectiveRestriction,
+  planBulkEdit,
   roundMoney,
+  type BulkEdit,
+  type BulkPreview,
+  type GridRow,
   type Derivation,
   type Restriction,
   type RestrictionInheritance,
@@ -197,20 +201,90 @@ async function lockProperty(tx: PoolClient, propertyId: string): Promise<void> {
  * sync ticket's outbox; until then the change log is the source for it.
  */
 export async function setRates(pool: Pool, schema: string, propertyId: string, userId: string, cells: RateCell[]): Promise<RateWriteResult> {
-  const changeId = randomUUID();
-  const clean = dedupe(cells.map((c) => ({ ...c, date: checkDate(c.date), price: checkPrice(c.price) })));
   return withTenant(pool, schema, async (tx) => {
     await lockProperty(tx, propertyId);
+    return setRatesIn(tx, propertyId, userId, randomUUID(), cells);
+  });
+}
+
+async function setRatesIn(tx: PoolClient, propertyId: string, userId: string, changeId: string, cells: RateCell[]): Promise<RateWriteResult> {
+  const clean = dedupe(cells.map((c) => ({ ...c, date: checkDate(c.date), price: checkPrice(c.price) })));
+  const index = await loadPlanIndex(tx, propertyId);
+  for (const c of clean) {
+    const plan = index.get(c.ratePlanId);
+    if (!plan) throw new Error("Rate Plan not found at this property");
+    if (plan.kind === "derived") throw new Error(`${plan.code} is a derived plan; its prices follow its base`);
+    if (!plan.roomTypeIds.has(c.roomTypeId)) throw new Error(`${plan.code} does not span this room type`);
+  }
+  const written = await upsertRates(tx, propertyId, userId, changeId, "edit", clean);
+  const derived = await upsertRates(tx, propertyId, userId, changeId, "derived", deriveCells(index, written));
+  return { changeId, written: written.length, derived: derived.length };
+}
+
+/** A grid edit (typed price or bulk Apply): prices, their followers and restrictions as one change, so Undo reverts it whole. */
+export async function applyGridEdit(
+  pool: Pool,
+  schema: string,
+  propertyId: string,
+  userId: string,
+  edit: { prices: RateCell[]; restrictions: RestrictionCellPatch[] },
+): Promise<RateWriteResult & { restrictions: number }> {
+  return withTenant(pool, schema, async (tx) => {
+    await lockProperty(tx, propertyId);
+    const changeId = randomUUID();
+    const rates = await setRatesIn(tx, propertyId, userId, changeId, edit.prices);
+    const restr = await setRestrictionsIn(tx, propertyId, userId, edit.restrictions, changeId);
+    return { ...rates, restrictions: restr.written };
+  });
+}
+
+/**
+ * Bulk Apply from the Rates grid. The plan is computed inside the locked
+ * transaction from the stored state with the same planner the browser's
+ * preview used, so no edit can land between planning and writing. Refused
+ * when the change no longer matches what the user previewed.
+ */
+export async function applyBulkEdit(
+  pool: Pool,
+  schema: string,
+  propertyId: string,
+  userId: string,
+  edit: BulkEdit,
+  expectedCells: number,
+): Promise<{ changeId: string | null; preview: BulkPreview; stale: boolean }> {
+  return withTenant(pool, schema, async (tx) => {
+    await lockProperty(tx, propertyId);
+    const from = checkDate(edit.from <= edit.to ? edit.from : edit.to);
+    const to = checkDate(edit.from <= edit.to ? edit.to : edit.from);
     const index = await loadPlanIndex(tx, propertyId);
-    for (const c of clean) {
-      const plan = index.get(c.ratePlanId);
-      if (!plan) throw new Error("Rate Plan not found at this property");
-      if (plan.kind === "derived") throw new Error(`${plan.code} is a derived plan; its prices follow its base`);
-      if (!plan.roomTypeIds.has(c.roomTypeId)) throw new Error(`${plan.code} does not span this room type`);
-    }
-    const written = await upsertRates(tx, propertyId, userId, changeId, "edit", clean);
-    const derived = await upsertRates(tx, propertyId, userId, changeId, "derived", deriveCells(index, written));
-    return { changeId, written: written.length, derived: derived.length };
+    const floors = await tx.query<{ id: string; price_floor: string | null }>("select id, price_floor from room_types where property_id = $1", [propertyId]);
+    const floor = new Map(floors.rows.map((r) => [r.id, r.price_floor === null ? null : Number(r.price_floor)]));
+    const rows: GridRow[] = [...index.values()].flatMap((p) =>
+      [...p.roomTypeIds].map((rt) => ({ ratePlanId: p.id, roomTypeId: rt, basePlanId: p.basePlanId, derivation: p.derivation, inherits: p.kind === "derived" ? p.inherits : null, priceFloor: floor.get(rt) ?? null })),
+    );
+    const prices = await tx.query<{ rate_plan_id: string; room_type_id: string; date: string; price: string }>(
+      `select r.rate_plan_id, r.room_type_id, to_char(r.date, 'YYYY-MM-DD') as date, r.price from rates r join rate_plans p on p.id = r.rate_plan_id
+       where p.property_id = $1 and r.date between $2 and $3`,
+      [propertyId, from, to],
+    );
+    const stored = await tx.query<RestrictionRow>(
+      `select r.rate_plan_id, r.room_type_id, to_char(r.date, 'YYYY-MM-DD') as date, r.stop_sell, r.closed_to_arrival, r.closed_to_departure, r.min_stay_arrival, r.min_stay_through, r.max_stay
+       from restrictions r join rate_plans p on p.id = r.rate_plan_id where p.property_id = $1 and r.date between $2 and $3`,
+      [propertyId, from, to],
+    );
+    const priceMap = new Map(prices.rows.map((r) => [`${r.rate_plan_id}|${r.room_type_id}|${r.date}`, Number(r.price)]));
+    const restrMap = new Map(stored.rows.map((r) => [`${r.rate_plan_id}|${r.room_type_id}|${r.date}`, toRestriction(r)]));
+    const plan = planBulkEdit(edit, rows, {
+      price: (p, r, d) => priceMap.get(`${p}|${r}|${d}`) ?? null,
+      restriction: (p, r, d) => restrMap.get(`${p}|${r}|${d}`) ?? OPEN_RESTRICTION,
+    });
+    if (plan.preview.negative > 0) throw new Error(`${plan.preview.negative} prices would fall below zero`);
+    if (plan.preview.cells === 0) throw new Error("Nothing would change");
+    if (plan.preview.cells !== expectedCells) return { changeId: null, preview: plan.preview, stale: true };
+    const changeId = randomUUID();
+    await setRatesIn(tx, propertyId, userId, changeId, plan.prices);
+    await setRestrictionsIn(tx, propertyId, userId, plan.restrictions, changeId);
+    return { changeId, preview: plan.preview, stale: false };
   });
 }
 
@@ -260,8 +334,7 @@ export async function setRestrictions(pool: Pool, schema: string, propertyId: st
   return withTenant(pool, schema, (tx) => setRestrictionsIn(tx, propertyId, userId, cells));
 }
 
-async function setRestrictionsIn(tx: PoolClient, propertyId: string, userId: string, cells: RestrictionCellPatch[]): Promise<{ changeId: string; written: number }> {
-  const changeId = randomUUID();
+async function setRestrictionsIn(tx: PoolClient, propertyId: string, userId: string, cells: RestrictionCellPatch[], changeId: string = randomUUID()): Promise<{ changeId: string; written: number }> {
   const clean = dedupe(
     cells.map((c) => {
       const patch: Record<string, boolean | number | null> = {};
@@ -427,7 +500,7 @@ export async function listRateChanges(pool: Pool, schema: string, propertyId: st
     }>(
       `select id, change_id, user_id, at, rate_plan_id, room_type_id, to_char(date, 'YYYY-MM-DD') as date, field, old_value, new_value, reason
        from rate_changes where property_id = $1 and ($2::uuid is null or change_id = $2)
-       order by at desc, rate_plan_id, room_type_id, date limit $3`,
+       order by max(at) over (partition by change_id) desc, change_id, reason = 'derived', field <> 'price', date, rate_plan_id, room_type_id limit $3`,
       [propertyId, q.changeId ?? null, q.limit ?? 500],
     );
     return rows.map((r) => ({
@@ -443,5 +516,133 @@ export async function listRateChanges(pool: Pool, schema: string, propertyId: st
       newValue: r.new_value,
       reason: r.reason,
     }));
+  });
+}
+
+const UNDO_WINDOW_MS = 10 * 60_000;
+
+const RESTRICTION_COLUMNS: Record<string, { column: string; type: "boolean" | "int" }> = {
+  stopSell: { column: "stop_sell", type: "boolean" },
+  closedToArrival: { column: "closed_to_arrival", type: "boolean" },
+  closedToDeparture: { column: "closed_to_departure", type: "boolean" },
+  minStayArrival: { column: "min_stay_arrival", type: "int" },
+  minStayThrough: { column: "min_stay_through", type: "int" },
+  maxStay: { column: "max_stay", type: "int" },
+};
+
+/**
+ * Revert the user's last change at the property if it is at most 10 minutes
+ * old and not undone yet. Every cell of it returns to its old value: typed or
+ * bulk prices, the derived prices that followed, and restrictions. Refused
+ * when anyone changed one of those cells since.
+ */
+export async function undoLastChange(pool: Pool, schema: string, propertyId: string, userId: string, options: { now?: Date } = {}): Promise<{ changeId: string; cells: number }> {
+  const now = options.now ?? new Date();
+  return withTenant(pool, schema, async (tx) => {
+    await lockProperty(tx, propertyId);
+    const last = await tx.query<{ change_id: string; at: Date }>(
+      `select change_id, max(at) as at from rate_changes
+       where property_id = $1 and user_id = $2 and reason in ('edit', 'derived')
+       group by change_id order by max(at) desc limit 1`,
+      [propertyId, userId],
+    );
+    const target = last.rows[0];
+    if (!target || now.getTime() - target.at.getTime() > UNDO_WINDOW_MS) throw new Error("Nothing to undo: changes can be undone for 10 minutes");
+    const done = await tx.query("select 1 from rate_changes where change_id = $1 and undone_by is not null limit 1", [target.change_id]);
+    if (done.rowCount) throw new Error("Nothing to undo: your last change is already undone");
+    const later = await tx.query(
+      `select 1 from rate_changes c join rate_changes l
+         on l.rate_plan_id = c.rate_plan_id and l.room_type_id = c.room_type_id and l.date = c.date and l.field = c.field
+       where c.change_id = $1 and l.change_id <> $1 and l.at > c.at and l.undone_by is null limit 1`,
+      [target.change_id],
+    );
+    if (later.rowCount) throw new Error("These cells were changed again since; undo is no longer possible");
+
+    const { rows } = await tx.query<{ rate_plan_id: string; room_type_id: string; date: string; field: string; old_value: string | null; new_value: string | null }>(
+      "select rate_plan_id, room_type_id, to_char(date, 'YYYY-MM-DD') as date, field, old_value, new_value from rate_changes where change_id = $1",
+      [target.change_id],
+    );
+    const undoId = randomUUID();
+    for (const r of rows) {
+      if (r.field === "price") {
+        if (r.old_value === null) await tx.query("delete from rates where rate_plan_id = $1 and room_type_id = $2 and date = $3", [r.rate_plan_id, r.room_type_id, r.date]);
+        else
+          await tx.query(
+            `insert into rates (rate_plan_id, room_type_id, date, price) values ($1, $2, $3, $4)
+             on conflict (rate_plan_id, room_type_id, date) do update set price = excluded.price`,
+            [r.rate_plan_id, r.room_type_id, r.date, r.old_value],
+          );
+      } else {
+        const col = RESTRICTION_COLUMNS[r.field];
+        if (!col) throw new Error(`Unknown field ${r.field}`);
+        const fallback = col.type === "boolean" ? "false" : null;
+        // the column name comes from the fixed map above, never from input
+        await tx.query(`update restrictions set ${col.column} = $4::${col.type === "boolean" ? "boolean" : "integer"} where rate_plan_id = $1 and room_type_id = $2 and date = $3`, [
+          r.rate_plan_id,
+          r.room_type_id,
+          r.date,
+          r.old_value ?? fallback,
+        ]);
+      }
+      await tx.query(
+        `insert into rate_changes (change_id, property_id, user_id, rate_plan_id, room_type_id, date, field, old_value, new_value, reason)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'undo')`,
+        [undoId, propertyId, userId, r.rate_plan_id, r.room_type_id, r.date, r.field, r.new_value, r.old_value],
+      );
+    }
+    await tx.query("update rate_changes set undone_by = $2 where change_id = $1", [target.change_id, undoId]);
+    return { changeId: undoId, cells: rows.length };
+  });
+}
+
+export interface BelowFloor {
+  ratePlanId: string;
+  ratePlanCode: string;
+  roomTypeId: string;
+  roomTypeCode: string;
+  date: string;
+  price: number;
+  priceFloor: number;
+}
+
+/** Stored prices (base and derived) below their room type's Price Floor from a date on, for the Property Manager. */
+export async function listBelowFloor(pool: Pool, schema: string, propertyId: string, from: string, limit = 200): Promise<BelowFloor[]> {
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<{ rate_plan_id: string; plan_code: string; room_type_id: string; type_code: string; date: string; price: string; price_floor: string }>(
+      `select r.rate_plan_id, p.code as plan_code, r.room_type_id, t.code as type_code, to_char(r.date, 'YYYY-MM-DD') as date, r.price, t.price_floor
+       from rates r join rate_plans p on p.id = r.rate_plan_id join room_types t on t.id = r.room_type_id
+       where p.property_id = $1 and t.price_floor is not null and r.price < t.price_floor and r.date >= $2
+       order by r.date, p.sort_order, p.code, t.sort_order limit $3`,
+      [propertyId, checkDate(from), limit],
+    );
+    return rows.map((r) => ({ ratePlanId: r.rate_plan_id, ratePlanCode: r.plan_code, roomTypeId: r.room_type_id, roomTypeCode: r.type_code, date: r.date, price: Number(r.price), priceFloor: Number(r.price_floor) }));
+  });
+}
+
+export interface PriceEnd {
+  ratePlanId: string;
+  ratePlanCode: string;
+  ratePlanName: string;
+  roomTypeId: string;
+  roomTypeCode: string;
+  /** Last date with a price, or null when the row has none. */
+  lastDate: string | null;
+}
+
+/** Active base rows whose prices end before the horizon date (prices are kept 500 days ahead). */
+export async function listPriceEnds(pool: Pool, schema: string, propertyId: string, horizon: string): Promise<PriceEnd[]> {
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<{ rate_plan_id: string; code: string; name: string; room_type_id: string; type_code: string; last_date: string | null }>(
+      `select p.id as rate_plan_id, p.code, p.name, rt.room_type_id, t.code as type_code,
+         (select to_char(max(r.date), 'YYYY-MM-DD') from rates r where r.rate_plan_id = p.id and r.room_type_id = rt.room_type_id) as last_date
+       from rate_plans p join rate_plan_room_types rt on rt.rate_plan_id = p.id join room_types t on t.id = rt.room_type_id
+       where p.property_id = $1 and p.kind = 'base' and p.active
+       order by p.sort_order, p.code, t.sort_order, t.code`,
+      [propertyId],
+    );
+    const end = checkDate(horizon);
+    return rows
+      .filter((r) => r.last_date === null || r.last_date < end)
+      .map((r) => ({ ratePlanId: r.rate_plan_id, ratePlanCode: r.code, ratePlanName: r.name, roomTypeId: r.room_type_id, roomTypeCode: r.type_code, lastDate: r.last_date }));
   });
 }

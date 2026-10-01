@@ -96,6 +96,13 @@ export {
 } from "./tenant/policies";
 export { createRatePlan, findRatePlan, listRatePlans, updateRatePlan, type IncludedService, type RatePlan, type RatePlanInput, type RatePlanPatch } from "./tenant/rate-plans";
 export {
+  applyBulkEdit,
+  applyGridEdit,
+  listBelowFloor,
+  listPriceEnds,
+  undoLastChange,
+  type BelowFloor,
+  type PriceEnd,
   closeProperty,
   closeRoomType,
   datesBetween,

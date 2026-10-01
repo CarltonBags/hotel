@@ -8,7 +8,6 @@ import {
   createCancellationPolicy,
   createPaymentPolicy,
   createRatePlan,
-  findProperty,
   listAgeBands,
   listRoomTypes,
   listServices,
@@ -18,20 +17,14 @@ import {
   updateRoomType,
   type RatePlanInput,
 } from "@hoteloftware/db";
-import { authorize } from "@/lib/authorize";
+import { propertyFor } from "@/lib/property-scope";
 import { pool } from "@/lib/db";
 import { decimalOrNull as decimal, field, flag, formAction, integerOrNull as integer, type FormState } from "@/lib/form";
 
 const PATH = "/settings/rate-plans";
 
 /** Every action names its property; Rate Plans, policies, floors and close-outs are one right. */
-async function scoped(formData: FormData) {
-  const propertyId = field(formData, "propertyId");
-  const { tenant, session } = await authorize("manage_rates", propertyId);
-  const property = await findProperty(pool(), tenant.schemaName, propertyId);
-  if (!property) throw new Error("Property not found");
-  return { schema: tenant.schemaName, property, userId: session.user.id };
-}
+const scoped = (formData: FormData) => propertyFor("manage_rates", field(formData, "propertyId"));
 
 function texts(formData: FormData, prefix: string): Record<string, string> {
   const out: Record<string, string> = {};
