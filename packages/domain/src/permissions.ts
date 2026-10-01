@@ -79,6 +79,12 @@ export const PROPERTY_ACTIONS = {
   merge_guests: ["property_manager", "front_desk"],
   /** Companies: not in the matrix; viewing follows guests, editing billing data and payment terms adds Accounting (assumption, ticket 20). */
   view_companies: ["property_manager", "front_desk", "accounting"],
+  /** Matrix "View reservation": Revenue without contact details and folio; floor view for housekeeping comes with its tickets. */
+  view_reservations: ["property_manager", "front_desk", "accounting", "revenue"],
+  /** Matrix "Create, edit, cancel reservation". */
+  manage_reservations: ["property_manager", "front_desk"],
+  /** Matrix "View folio". */
+  view_folio: ["property_manager", "front_desk", "accounting"],
   edit_companies: ["property_manager", "front_desk", "accounting"],
 } as const satisfies Record<string, readonly PropertyRole[]>;
 export type PropertyAction = keyof typeof PROPERTY_ACTIONS;

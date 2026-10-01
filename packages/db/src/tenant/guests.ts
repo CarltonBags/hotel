@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { DOCUMENT_TYPES, EMPTY_GUEST, isOneOf, mergeGuestData, normaliseEmail, normalisePhone, phoneSearchDigits, type GuestData } from "@hoteloftware/domain";
-import { checkDate } from "./catalogue-common";
+import { checkDate, isUuid } from "./catalogue-common";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -115,7 +115,6 @@ function clean(data: GuestData): GuestData {
 }
 
 const EMPTY = EMPTY_GUEST;
-const isUuid = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
 function values(d: GuestData): unknown[] {
   return [...FIELDS.map((f) => d[f]), normaliseEmail(d.email), normalisePhone(d.phone)];

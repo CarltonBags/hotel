@@ -137,3 +137,17 @@ export {
   type GuestSummary,
 } from "./tenant/guests";
 export { companyHistory, createCompany, findCompany, listCompanyNames, searchCompanies, updateCompany, type Company, type CompanyChange, type CompanyData } from "./tenant/companies";
+export {
+  createBooking,
+  findReservation,
+  listGuestReservations,
+  quoteStays,
+  type GuestReservation,
+  type NewBooking,
+  type NewReservation,
+  type QuotedPlan,
+  type QuotedRoomType,
+  type ReservationDetail,
+  type StayQuotes,
+  type StayRequest,
+} from "./tenant/reservations";

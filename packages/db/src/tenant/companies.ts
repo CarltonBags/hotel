@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { ROUTING_CATEGORIES, isOneOf, type RoutingCategory } from "@hoteloftware/domain";
+import { isUuid } from "./catalogue-common";
 import { withTenant } from "./with-tenant";
 
 /** Companies: booker or bill-to with billing data, payment terms and default Routing Rules (folio domain model). */
@@ -117,7 +118,6 @@ export async function createCompany(pool: Pool, schema: string, input: Partial<C
   });
 }
 
-const isUuid = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 const show = (v: unknown) => (v === null || v === undefined || v === "" ? null : Array.isArray(v) ? v.join(",") || null : String(v));
 
 export async function updateCompany(pool: Pool, schema: string, id: string, patch: Partial<CompanyData>, ctx: { userId: string }): Promise<Company> {

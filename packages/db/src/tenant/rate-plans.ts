@@ -20,6 +20,7 @@ import {
 } from "@hoteloftware/domain";
 import { normaliseCode, uniqueViolation } from "./catalogue-common";
 import { rewriteDerivedPlan } from "./rates";
+import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -346,7 +347,7 @@ export async function createRatePlan(pool: Pool, schema: string, input: RatePlan
   const includedServices = input.includedServices ?? [];
   const inherits = input.kind === "derived" ? toInherits(input.inherits ?? INHERIT_ALL) : toInherits({});
   return withTenant(pool, schema, async (tx) => {
-    await tx.query("select 1 from properties where id = $1 for update", [input.propertyId]);
+    await lockProperty(tx, input.propertyId);
     if (input.kind === "derived") await checkBasePlan(tx, input.propertyId, input.basePlanId!, null);
     await checkReferences(tx, input.propertyId, {
       roomTypeIds,
@@ -408,7 +409,7 @@ export async function createRatePlan(pool: Pool, schema: string, input: RatePlan
 
 export async function updateRatePlan(pool: Pool, schema: string, propertyId: string, id: string, patch: RatePlanPatch, options: { userId?: string | undefined } = {}): Promise<RatePlan> {
   return withTenant(pool, schema, async (tx) => {
-    await tx.query("select 1 from properties where id = $1 for update", [propertyId]);
+    await lockProperty(tx, propertyId);
     const current = await tx.query<Row>(`${SELECT} where p.id = $1 and p.property_id = $2`, [id, propertyId]);
     const c = current.rows[0];
     if (!c) throw new Error("Rate Plan not found");

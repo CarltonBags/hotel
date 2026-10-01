@@ -15,6 +15,7 @@ import {
   type RestrictionInheritance,
 } from "@hoteloftware/domain";
 import { checkDate } from "./catalogue-common";
+import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -190,10 +191,6 @@ function deriveCells(index: Map<string, PlanIndexEntry>, baseCells: RateCell[]):
   return out;
 }
 
-/** Serialises rate writes with plan edits (updateRatePlan takes the same lock), so a derivation change cannot race a price write. */
-async function lockProperty(tx: PoolClient, propertyId: string): Promise<void> {
-  await tx.query("select 1 from properties where id = $1 for update", [propertyId]);
-}
 
 /**
  * Write prices into base plans; derived plans spanning the same room types
@@ -398,7 +395,7 @@ async function setRestrictionsIn(tx: PoolClient, propertyId: string, userId: str
   return { changeId, written: clean.length };
 }
 
-interface RestrictionRow {
+export interface RestrictionRow {
   rate_plan_id: string;
   room_type_id: string;
   date: string;
@@ -409,7 +406,7 @@ interface RestrictionRow {
   min_stay_through: number | null;
   max_stay: number | null;
 }
-const toRestriction = (r: RestrictionRow): Restriction => ({
+export const toRestriction = (r: RestrictionRow): Restriction => ({
   stopSell: r.stop_sell,
   closedToArrival: r.closed_to_arrival,
   closedToDeparture: r.closed_to_departure,

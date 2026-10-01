@@ -1,4 +1,4 @@
-/** Helpers shared by the catalogue repositories (Tax Codes, Services). */
+/** Helpers shared by the tenant repositories. */
 
 export function uniqueViolation(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
@@ -21,3 +21,8 @@ export function checkDate(date: string): string {
 
 /** Preset rates start here: far enough back for any open business, no history before. */
 export const PRESET_RATE_START = "2000-01-01";
+
+/** Ids from the browser are checked before they reach a uuid column, so a bad id reads as "not found". */
+export function isUuid(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}

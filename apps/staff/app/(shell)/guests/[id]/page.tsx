@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
+import { can } from "@hoteloftware/domain";
 import Link from "next/link";
-import { findGuest, findGuestDuplicates, guestHistory, listGuestMerges, listProperties, listTenantUsers, searchGuests } from "@hoteloftware/db";
+import { findGuest, findGuestDuplicates, guestHistory, listGuestMerges, listGuestReservations, listProperties, listTenantUsers, searchGuests } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
 import { requireAllowedAnywhere } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -19,15 +20,18 @@ export default async function GuestPage({ params, searchParams }: { params: Prom
   if (!stored) notFound();
   const guest = stored;
   const mergeQ = ((await searchParams).mergeQ ?? "").slice(0, 100);
-  const [history, merges, users, properties, duplicates, candidates] = await Promise.all([
+  const [history, merges, users, properties, duplicates, candidates, allStays] = await Promise.all([
     guestHistory(pool(), tenant.schemaName, id),
     listGuestMerges(pool(), tenant.schemaName, id),
     listTenantUsers(pool(), tenant.id),
     listProperties(pool(), tenant.schemaName),
     rights.merge ? findGuestDuplicates(pool(), tenant.schemaName, stored, id) : Promise.resolve([]),
     rights.merge && mergeQ ? searchGuests(pool(), tenant.schemaName, mergeQ) : Promise.resolve([]),
+    listGuestReservations(pool(), tenant.schemaName, id),
   ]);
   const names = new Map(users.map((u) => [u.id, u.name]));
+  // reservations only at properties where the user may see reservations
+  const stays = allStays.filter((s) => can(actor, "view_reservations", s.propertyId));
   const createdAt = properties.find((p) => p.id === stored.createdPropertyId)?.name ?? null;
   const fmt = new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "medium", timeStyle: "short" });
   const title = `${guest.firstName} ${guest.lastName}`.trim();
@@ -55,7 +59,17 @@ export default async function GuestPage({ params, searchParams }: { params: Prom
 
       <section aria-label={m["guests.stays"]} className="rounded-2xl bg-surface-2 p-5">
         <h2 className="font-medium">{m["guests.stays"]}</h2>
-        <p className="mt-1 text-sm text-ink-60">{m["guests.noStays"]}</p>
+        {stays.length === 0 ? <p className="mt-1 text-sm text-ink-60">{m["guests.noStays"]}</p> : null}
+        <ul className="mt-2 grid gap-1 text-sm">
+          {stays.map((s) => (
+            <li key={s.reservationId}>
+              <Link href={`/reservations/${s.reservationId}`} className="underline">
+                {s.confirmationNumber}
+              </Link>{" "}
+              · {s.propertyName} · {s.roomTypeCode} · {s.arrival} – {s.departure} · {m[`res.status.${s.status}`]}
+            </li>
+          ))}
+        </ul>
       </section>
 
       {merges.length ? (

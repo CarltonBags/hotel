@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigserial, boolean, char, check, date, index, integer, jsonb, numeric, pgTable, primaryKey, text, time, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { bigserial, boolean, char, check, date, foreignKey, index, pgSequence, integer, jsonb, numeric, pgTable, primaryKey, text, time, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 /**
  * Tenant tables are declared UNQUALIFIED (pgTable, no schema): the same
@@ -527,6 +527,92 @@ export const guestMerges = pgTable(
   (t) => [index("guest_merges_kept_idx").on(t.keptId)],
 );
 
+export const bookingNumberSeq = pgSequence("booking_number_seq", { startWith: 100001 });
+
+export const bookings = pgTable(
+  "bookings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    confirmationNumber: text("confirmation_number").notNull().default(sql`nextval('booking_number_seq')::text`),
+    bookerGuestId: uuid("booker_guest_id").references(() => guests.id),
+    bookerCompanyId: uuid("booker_company_id").references(() => companies.id),
+    source: text("source").notNull().default("direct"),
+    channelName: text("channel_name"),
+    walkIn: boolean("walk_in").notNull().default(false),
+    rateCode: text("rate_code"),
+    rateCodeCompanyId: uuid("rate_code_company_id").references(() => companies.id),
+    notes: text("notes").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    unique("bookings_confirmation_number_key").on(t.confirmationNumber),
+    index("bookings_property_idx").on(t.propertyId, t.createdAt.desc()),
+    check("bookings_booker_check", sql`(${t.bookerGuestId} is null) <> (${t.bookerCompanyId} is null)`),
+    check("bookings_source_check", sql`${t.source} in ('direct', 'channel')`),
+    check("bookings_walk_in_check", sql`not ${t.walkIn} or ${t.source} = 'direct'`),
+  ],
+);
+
+export const reservations = pgTable(
+  "reservations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookingId: uuid("booking_id").notNull().references(() => bookings.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    roomTypeId: uuid("room_type_id").notNull().references(() => roomTypes.id),
+    ratePlanId: uuid("rate_plan_id").notNull().references(() => ratePlans.id),
+    arrival: date("arrival").notNull(),
+    departure: date("departure").notNull(),
+    adults: integer("adults").notNull(),
+    childAges: integer("child_ages").array().notNull().default(sql`'{}'`),
+    status: text("status").notNull().default("confirmed"),
+    primaryGuestId: uuid("primary_guest_id").notNull().references(() => guests.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    index("reservations_booking_idx").on(t.bookingId),
+    index("reservations_availability_idx").on(t.propertyId, t.roomTypeId, t.arrival, t.departure).where(sql`${t.status} in ('confirmed', 'checked_in')`),
+    index("reservations_guest_idx").on(t.primaryGuestId),
+    check("reservations_dates_check", sql`${t.departure} > ${t.arrival}`),
+    check("reservations_adults_check", sql`${t.adults} >= 1`),
+    check("reservations_status_check", sql`${t.status} in ('confirmed', 'checked_in', 'checked_out', 'cancelled', 'no_show')`),
+  ],
+);
+
+export const reservationNights = pgTable(
+  "reservation_nights",
+  {
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.reservationId, t.date] }), check("reservation_nights_total_check", sql`${t.total} >= 0`)],
+);
+
+export const reservationNightComponents = pgTable(
+  "reservation_night_components",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull(),
+    date: date("date").notNull(),
+    kind: text("kind").notNull(),
+    serviceId: uuid("service_id").references(() => services.id),
+    persons: integer("persons"),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  },
+  (t) => [
+    foreignKey({ name: "reservation_night_components_reservation_id_date_fkey", columns: [t.reservationId, t.date], foreignColumns: [reservationNights.reservationId, reservationNights.date] }).onDelete("cascade"),
+    index("reservation_night_components_night_idx").on(t.reservationId, t.date),
+    check("reservation_night_components_kind_check", sql`${t.kind} in ('room', 'service')`),
+    check("reservation_night_components_service_check", sql`(${t.kind} = 'service') = (${t.serviceId} is not null)`),
+    check("reservation_night_components_amount_check", sql`${t.amount} >= 0`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -555,4 +641,8 @@ export const tenantSchema = {
   guests,
   guestChanges,
   guestMerges,
+  bookings,
+  reservations,
+  reservationNights,
+  reservationNightComponents,
 };

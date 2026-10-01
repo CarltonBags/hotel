@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { mergeNames, validateAgeBands, type AgeBandInput, type AgeBandIssue, type Names, checkPlanLimits, roundMoney } from "@hoteloftware/domain";
+import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
 
 export type { Names };
@@ -131,7 +132,7 @@ export async function createRoomType(pool: Pool, schema: string, input: RoomType
   const priceFloor = checkPriceFloor(input.priceFloor ?? null);
   return withTenant(pool, schema, async (tx) => {
     // channel manager limit ("Channel manager selection"): count under a property lock so two inserts cannot both pass
-    await tx.query("select 1 from properties where id = $1 for update", [input.propertyId]);
+    await lockProperty(tx, input.propertyId);
     try {
       const { rows } = await tx.query<{ id: string }>(
         `insert into room_types (property_id, code, name, names, max_occupancy, max_adults, bed_places, extra_beds, sort_order, price_floor)
