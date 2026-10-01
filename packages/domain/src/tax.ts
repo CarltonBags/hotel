@@ -3,6 +3,8 @@
  * gross is the stored truth, net and VAT are derived per Tax Code; a Tax
  * Code's rate is dated so an invoice re-renders identically later.
  */
+import { roundMoney } from "./money";
+
 export interface DatedRate {
   /** YYYY-MM-DD, first day the rate applies */
   validFrom: string;
@@ -25,7 +27,7 @@ export interface GrossSplit {
   vat: number;
 }
 
-const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const round2 = roundMoney;
 
 /** Net and VAT from a gross amount at a percent rate; VAT is the rounded difference so the parts always sum to gross. */
 export function splitGross(gross: number, ratePercent: number): GrossSplit {

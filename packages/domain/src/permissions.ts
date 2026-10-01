@@ -69,6 +69,8 @@ export const PROPERTY_ACTIONS = {
   manage_service_prices: ["property_manager", "revenue"],
   /** Service catalogue: Tax Codes and revenue accounts; Tax Codes of the Legal Entity. */
   manage_tax_codes: ["property_manager", "accounting"],
+  /** Rate Plans, policies, Rates, Restrictions and Price Floors (permission matrix rows "Rates"). */
+  manage_rates: ["property_manager", "revenue"],
 } as const satisfies Record<string, readonly PropertyRole[]>;
 export type PropertyAction = keyof typeof PROPERTY_ACTIONS;
 

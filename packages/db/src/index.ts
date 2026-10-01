@@ -82,3 +82,32 @@ export {
 export { addTaxRate, applyTaxPreset, createTaxCode, listTaxCodes, removeTaxRate, renameTaxCode, taxRateFor, type TaxCode } from "./tenant/tax-codes";
 export { createService, findService, listServices, updateService, type Service, type ServiceInput, type ServicePatch } from "./tenant/services";
 export { PRESET_RATE_START } from "./tenant/catalogue-common";
+export {
+  createCancellationPolicy,
+  createPaymentPolicy,
+  listCancellationPolicies,
+  listPaymentPolicies,
+  updateCancellationPolicy,
+  updatePaymentPolicy,
+  type CancellationPolicy,
+  type CancellationPolicyInput,
+  type PaymentPolicy,
+  type PaymentPolicyInput,
+} from "./tenant/policies";
+export { createRatePlan, findRatePlan, listRatePlans, updateRatePlan, type IncludedService, type RatePlan, type RatePlanInput, type RatePlanPatch } from "./tenant/rate-plans";
+export {
+  closeProperty,
+  closeRoomType,
+  datesBetween,
+  listRateChanges,
+  listRates,
+  listRestrictions,
+  setRates,
+  setRestrictions,
+  type DateRange,
+  type RateCell,
+  type RateChange,
+  type RateWriteResult,
+  type RestrictionCell,
+  type RestrictionCellPatch,
+} from "./tenant/rates";

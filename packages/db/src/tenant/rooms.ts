@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { mergeNames, validateAgeBands, type AgeBandInput, type AgeBandIssue, type Names } from "@hoteloftware/domain";
+import { mergeNames, validateAgeBands, type AgeBandInput, type AgeBandIssue, type Names, checkPlanLimits, roundMoney } from "@hoteloftware/domain";
 import { withTenant } from "./with-tenant";
 
 export type { Names };
@@ -14,12 +14,15 @@ export interface RoomTypeInput {
   bedPlaces: number;
   extraBeds: number;
   sortOrder?: number;
+  /** Lowest nightly price staff may set without the Property Manager; null = none. */
+  priceFloor?: number | null;
 }
 
-export interface RoomType extends Omit<RoomTypeInput, "names" | "sortOrder"> {
+export interface RoomType extends Omit<RoomTypeInput, "names" | "sortOrder" | "priceFloor"> {
   id: string;
   names: Names;
   sortOrder: number;
+  priceFloor: number | null;
   roomCount: number;
 }
 
@@ -76,7 +79,7 @@ function requireInt(value: number, what: string, min: number): number {
   return value;
 }
 
-const ROOM_TYPE_SELECT = `select rt.id, rt.property_id, rt.code, rt.name, rt.names, rt.max_occupancy, rt.max_adults, rt.bed_places, rt.extra_beds, rt.sort_order,
+const ROOM_TYPE_SELECT = `select rt.id, rt.property_id, rt.code, rt.name, rt.names, rt.max_occupancy, rt.max_adults, rt.bed_places, rt.extra_beds, rt.sort_order, rt.price_floor,
     (select count(*)::int from rooms r where r.room_type_id = rt.id) as room_count
   from room_types rt`;
 
@@ -91,6 +94,7 @@ interface RoomTypeRow {
   bed_places: number;
   extra_beds: number;
   sort_order: number;
+  price_floor: string | null;
   room_count: number;
 }
 
@@ -106,8 +110,15 @@ function toRoomType(r: RoomTypeRow): RoomType {
     bedPlaces: r.bed_places,
     extraBeds: r.extra_beds,
     sortOrder: r.sort_order,
+    priceFloor: r.price_floor === null ? null : Number(r.price_floor),
     roomCount: r.room_count,
   };
+}
+
+function checkPriceFloor(value: number | null): number | null {
+  if (value === null) return null;
+  if (!Number.isFinite(value) || value < 0) throw new Error("Price Floor must be zero or more");
+  return roundMoney(value);
 }
 
 export async function createRoomType(pool: Pool, schema: string, input: RoomTypeInput): Promise<RoomType> {
@@ -117,14 +128,20 @@ export async function createRoomType(pool: Pool, schema: string, input: RoomType
   const maxOccupancy = requireInt(input.maxOccupancy, "Max occupancy", maxAdults);
   requireInt(input.bedPlaces, "Bed places", 0);
   requireInt(input.extraBeds, "Extra beds", 0);
+  const priceFloor = checkPriceFloor(input.priceFloor ?? null);
   return withTenant(pool, schema, async (tx) => {
+    // channel manager limit ("Channel manager selection"): count under a property lock so two inserts cannot both pass
+    await tx.query("select 1 from properties where id = $1 for update", [input.propertyId]);
     try {
       const { rows } = await tx.query<{ id: string }>(
-        `insert into room_types (property_id, code, name, names, max_occupancy, max_adults, bed_places, extra_beds, sort_order)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, (select coalesce(max(sort_order), 0) + 1 from room_types where property_id = $1)))
+        `insert into room_types (property_id, code, name, names, max_occupancy, max_adults, bed_places, extra_beds, sort_order, price_floor)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, (select coalesce(max(sort_order), 0) + 1 from room_types where property_id = $1)), $10)
          returning id`,
-        [input.propertyId, code, name, JSON.stringify(input.names ?? {}), maxOccupancy, maxAdults, input.bedPlaces, input.extraBeds, input.sortOrder ?? null],
+        [input.propertyId, code, name, JSON.stringify(input.names ?? {}), maxOccupancy, maxAdults, input.bedPlaces, input.extraBeds, input.sortOrder ?? null, priceFloor],
       );
+      const count = await tx.query<{ n: number }>("select count(*)::int as n from room_types where property_id = $1", [input.propertyId]);
+      const limit = checkPlanLimits({ roomTypes: count.rows[0]?.n ?? 0, projectedRatePlans: 0 });
+      if (limit) throw new Error(limit);
       const found = await tx.query<RoomTypeRow>(`${ROOM_TYPE_SELECT} where rt.id = $1`, [rows[0]!.id]);
       return toRoomType(found.rows[0]!);
     } catch (err) {
@@ -146,7 +163,7 @@ export async function updateRoomType(pool: Pool, schema: string, propertyId: str
     if (maxOccupancy < maxAdults) throw new Error("Max occupancy must be at least max adults");
     try {
       await tx.query(
-        `update room_types set code = $2, name = $3, names = $4, max_occupancy = $5, max_adults = $6, bed_places = $7, extra_beds = $8, sort_order = $9, updated_at = now() where id = $1`,
+        `update room_types set code = $2, name = $3, names = $4, max_occupancy = $5, max_adults = $6, bed_places = $7, extra_beds = $8, sort_order = $9, price_floor = $10, updated_at = now() where id = $1`,
         [
           id,
           code,
@@ -157,6 +174,7 @@ export async function updateRoomType(pool: Pool, schema: string, propertyId: str
           patch.bedPlaces !== undefined ? requireInt(patch.bedPlaces, "Bed places", 0) : c.bed_places,
           patch.extraBeds !== undefined ? requireInt(patch.extraBeds, "Extra beds", 0) : c.extra_beds,
           patch.sortOrder ?? c.sort_order,
+          patch.priceFloor !== undefined ? checkPriceFloor(patch.priceFloor) : c.price_floor,
         ],
       );
     } catch (err) {

@@ -5,7 +5,7 @@ import { GUEST_LANGUAGES, can, isPostingRhythm, todayIn } from "@hoteloftware/do
 import { PRESET_RATE_START, addTaxRate, applyTaxPreset, createService, createTaxCode, findProperty, findService, removeTaxRate, renameTaxCode, updateService, type ServicePatch } from "@hoteloftware/db";
 import { ForbiddenError, authorize, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
-import { field, formAction, type FormState } from "@/lib/form";
+import { decimal, field, formAction, type FormState } from "@/lib/form";
 
 const PATH = "/settings/services";
 
@@ -19,13 +19,6 @@ async function property(formData: FormData) {
   return { tenant, actor, property: p };
 }
 
-/** A decimal typed into a number input; a comma decimal separator is accepted. */
-function decimal(formData: FormData, name: string): number {
-  const raw = field(formData, name).replace(",", ".");
-  const n = Number(raw);
-  if (raw === "" || !Number.isFinite(n)) throw new Error(`${name}: number expected`);
-  return n;
-}
 const money = decimal;
 const percent = decimal;
 

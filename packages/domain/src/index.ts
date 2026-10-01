@@ -36,3 +36,34 @@ export { ageBandFor, validateAgeBands, type AgeBandInput, type AgeBandIssue, typ
 export { GUEST_LANGUAGES, localizedName, mergeNames, type LocalizedName, type Names } from "./names";
 export { expandRoomNumbers } from "./room-numbers";
 export { POSTING_RHYTHMS, TAX_PRESETS, isPostingRhythm, isTaxPresetCountry, splitGross, taxRateOn, todayIn, type DatedRate, type GrossSplit, type PostingRhythm, type TaxPreset } from "./tax";
+export {
+  CHANNEL_LIMITS,
+  DERIVATION_KINDS,
+  FEE_KINDS,
+  INHERIT_ALL,
+  MEAL_PLANS,
+  OPEN_RESTRICTION,
+  PAYMENT_KINDS,
+  RESTRICTION_FIELDS,
+  SUPPLEMENT_KINDS,
+  checkPlanLimits,
+  derivedPrice,
+  effectiveRestriction,
+  isOneOf,
+  occupancyPrice,
+  occupancyPrices,
+  type AgeBandRef,
+  type Derivation,
+  type DerivationKind,
+  type FeeKind,
+  type MealPlan,
+  type Occupancy,
+  type PaymentKind,
+  type PricedPlan,
+  type Restriction,
+  type RestrictionField,
+  type RestrictionInheritance,
+  type Supplement,
+  type SupplementKind,
+} from "./rates";
+export { roundMoney } from "./money";
