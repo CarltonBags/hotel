@@ -46,6 +46,7 @@ Proposed by the agent from hotel trade usage, 2026-09-30. Status: confirmed by t
 | Message | Nachricht |  |
 | Transport | Kanal |  |
 | Messaging Consent | Nachrichten-Einwilligung |  |
+| Notification | Benachrichtigung |  |
 | Internal Note | Interne Notiz |  |
 | Sending Hours | Versandzeiten |  |
 | Desk Hours | Rezeptionszeiten |  |

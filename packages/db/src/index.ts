@@ -8,7 +8,7 @@ export { migrateControl } from "./control/migrate-control";
 export { assertContiguous, type Migration } from "./migrations/versions";
 export { findSchemaQualifiedNames, type Finding } from "./tenant/check-tenant-sql";
 export { migrateTenants, type MigrateResult } from "./tenant/migrate-tenants";
-export { findTenantBySlug, provisionTenant, setTenantAccent, type NewTenant, type Tenant } from "./tenant/provision";
+export { findTenantById, findTenantBySlug, provisionTenant, setTenantAccent, type NewTenant, type Tenant } from "./tenant/provision";
 export { getPreferences, getWorkspace, setPinnedTabs, setPreferences, type PinnedTab, type Preferences, type Workspace } from "./control/preferences";
 export { assertTenantSlug, isTenantSlug, resolveTenantSlug, tenantSchemaFromSlug } from "@hoteloftware/domain";
 export { assertTenantSchemaName, inTenantTransaction, isTenantSchemaName, withTenant } from "./tenant/with-tenant";

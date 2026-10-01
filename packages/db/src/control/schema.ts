@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, pgSchema, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigserial, boolean, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 /** Control schema (ADR 0006). Mirrors migrations/control/*.sql; the SQL is the source of truth. */
 export const control = pgSchema("control");
@@ -97,4 +97,89 @@ export const verification = control.table(
   (t) => [index("verification_identifier_idx").on(t.identifier)],
 );
 
-export const controlSchema = { tenants, tenantMigrations, user, session, account, verification };
+export const userPreferences = control.table("user_preferences", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  language: text("language").notNull().default("en"),
+  theme: text("theme").notNull().default("system"),
+  quickAccess: jsonb("quick_access"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const userWorkspace = control.table(
+  "user_workspace",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    propertyScope: text("property_scope").notNull(),
+    pinnedTabs: jsonb("pinned_tabs").notNull().default([]),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.propertyScope] })],
+);
+
+export const notifications = control.table(
+  "notifications",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull().default(""),
+    href: text("href"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+  },
+  (t) => [index("notifications_tenant_user_idx").on(t.tenantId, t.userId, t.id)],
+);
+
+export const webhookEvents = control.table(
+  "webhook_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    source: text("source").notNull(),
+    externalId: text("external_id").notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "set null" }),
+    headers: jsonb("headers").notNull(),
+    body: jsonb("body"),
+    rawBody: text("raw_body").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    status: text("status").notNull().default("received"),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    error: text("error"),
+  },
+  (t) => [unique("webhook_events_source_external_id_key").on(t.source, t.externalId)],
+);
+
+export const externalIds = control.table(
+  "external_ids",
+  {
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.provider, t.externalId] })],
+);
+
+export const controlSchema = {
+  tenants,
+  tenantMigrations,
+  user,
+  session,
+  account,
+  verification,
+  userPreferences,
+  userWorkspace,
+  notifications,
+  webhookEvents,
+  externalIds,
+};

@@ -51,14 +51,26 @@ export async function provisionTenant(pool: Pool, input: NewTenant, migrations: 
   }
 }
 
-export async function findTenantBySlug(pool: Pool, slug: string): Promise<Tenant | null> {
-  const { rows } = await pool.query<{ id: string; slug: string; name: string; schema_name: string; accent: string }>(
-    "select id, slug, name, schema_name, accent from control.tenants where slug = $1",
-    [slug],
-  );
-  const r = rows[0];
-  if (!r) return null;
+interface TenantRow {
+  id: string;
+  slug: string;
+  name: string;
+  schema_name: string;
+  accent: string;
+}
+
+function toTenant(r: TenantRow): Tenant {
   return { id: r.id, slug: r.slug, name: r.name, schemaName: r.schema_name, accent: isAccentId(r.accent) ? r.accent : "ocean" };
+}
+
+export async function findTenantBySlug(pool: Pool, slug: string): Promise<Tenant | null> {
+  const { rows } = await pool.query<TenantRow>("select id, slug, name, schema_name, accent from control.tenants where slug = $1", [slug]);
+  return rows[0] ? toTenant(rows[0]) : null;
+}
+
+export async function findTenantById(pool: Pool, id: string): Promise<Tenant | null> {
+  const { rows } = await pool.query<TenantRow>("select id, slug, name, schema_name, accent from control.tenants where id = $1", [id]);
+  return rows[0] ? toTenant(rows[0]) : null;
 }
 
 export async function setTenantAccent(pool: Pool, tenantId: string, accent: string): Promise<void> {

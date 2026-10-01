@@ -29,6 +29,8 @@ const catalog = {
   "shell.account": { en: "My account", de: "Mein Konto" },
   "shell.soon": { en: "Not built yet. Arrives with ticket {ticket}.", de: "Noch nicht gebaut. Kommt mit Ticket {ticket}." },
   "shell.workspaceTabs": { en: "Workspace Tabs", de: "Arbeitsbereich-Tabs" },
+  "shell.notifications": { en: "Notifications", de: "Benachrichtigungen" },
+  "shell.liveUpdatesOff": { en: "Live updates unavailable, reconnecting…", de: "Live-Updates nicht verfügbar, verbinde erneut…" },
   "shell.addToQuickAccess": { en: "Add to Quick Access", de: "Zum Schnellzugriff hinzufügen" },
   "shell.removeFromQuickAccess": { en: "Remove from Quick Access", de: "Aus Schnellzugriff entfernen" },
 

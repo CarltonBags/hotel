@@ -179,6 +179,10 @@ _Avoid_: Channel (reserved for booking channels), medium
 A guest's recorded agreement to receive messages on a given transport, with time, source and wording.
 _Avoid_: Opt-in flag, permission, subscription
 
+**Notification**:
+A short alert the system shows a staff user inside the app (as a toast and, later, in a list), for example an Approval request or a worker check; never sent to guests. Distinct from a Message, which belongs to a Conversation with a guest.
+_Avoid_: Push, alert, system message
+
 **Internal Note**:
 A staff-only entry in a conversation that the guest never sees.
 _Avoid_: Comment, remark, private message

@@ -8,6 +8,7 @@ import { PropertyMenu } from "./PropertyMenu";
 import { MODULES, type ModuleDef } from "./registry";
 import { useShell } from "./ShellProvider";
 import { onArrowKeys } from "./useDismiss";
+import { Notifications } from "./Notifications";
 import { TabStrip } from "./TabStrip";
 import { ThemeToggle, UserMenu } from "./UserMenu";
 
@@ -58,6 +59,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <TabStrip />
       </div>
       <main className="min-h-0 flex-1 overflow-auto rounded-stage bg-surface shadow-card">{children}</main>
+      <Notifications />
     </div>
   );
 }
