@@ -7,7 +7,7 @@ export {
   TENANT_ACTIONS,
   TENANT_ROLES,
   can,
-  canViewAnyProperty,
+  canAtAnyProperty, canViewAnyProperty,
   isTenantAction,
   rolesAt,
   type Action,
@@ -81,3 +81,15 @@ export {
   type GridState,
   type PriceAction,
 } from "./rates-grid";
+export { ROUTING_CATEGORIES, type RoutingCategory } from "./companies";
+export {
+  DOCUMENT_TYPES,
+  EMPTY_GUEST,
+  mergeGuestData,
+  needsPostalCode,
+  normaliseEmail,
+  normalisePhone,
+  phoneSearchDigits,
+  type DocumentType,
+  type GuestData,
+} from "./guests";

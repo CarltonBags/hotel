@@ -58,6 +58,10 @@ export interface ShellContext extends ShellProps {
   pinned: string[];
   openModule: (id: string) => void;
   openRecord: (module: string, recordId: string, title: string, href: string) => void;
+  /** A record page announces itself, so a direct visit or reload shows its record tab. */
+  registerRecord: (module: string, recordId: string, title: string, href: string) => void;
+  /** True once the workspace is restored from storage; record tabs register after that. */
+  ready: boolean;
   activate: (id: string) => void;
   close: (id: string) => void;
   pin: (id: string) => void;
@@ -80,6 +84,10 @@ export function useShell(): ShellContext {
 
 function storageKey(p: ShellProps): string {
   return `hs:ws:${p.tenant.id}:${p.user.id}:${p.scope}`;
+}
+
+function recordTab(module: string, recordId: string, title: string, href: string): Tab {
+  return { id: `${module}:${recordId}`, kind: "record", module, title, href };
 }
 
 function moduleTab(m: ModuleDef, label: string): Tab {
@@ -132,11 +140,12 @@ export function ShellProvider({ children, ...props }: ShellProps & { children: R
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.tenant.id, props.user.id, props.scope]);
 
-  // Keep the tab strip in step with the route: a direct navigation opens its module tab.
+  // Keep the tab strip in step with the route: a direct navigation to a module opens its tab.
+  // Deeper paths are record pages, which register their own record tab.
   useEffect(() => {
     if (!hydrated) return;
     const m = moduleForPath(pathname);
-    if (m) dispatch({ type: "open", tab: moduleTab(m, moduleLabel(m)) });
+    if (m && m.href === pathname) dispatch({ type: "open", tab: moduleTab(m, moduleLabel(m)) });
   }, [pathname, hydrated, moduleLabel]);
 
   // Persist workspace tabs locally and pinned tabs on the server, saves serialised so they commit in order.
@@ -193,13 +202,14 @@ export function ShellProvider({ children, ...props }: ShellProps & { children: R
         const m = tab.kind === "module" ? MODULE_BY_ID.get(tab.module) : undefined;
         return m ? { ...tab, title: moduleLabel(m) } : tab;
       }),
-      activeId: moduleForPath(pathname)?.id ?? state.activeId,
+      activeId: state.tabs.find((x) => x.href === pathname)?.id ?? moduleForPath(pathname)?.id ?? state.activeId,
       pinned: state.pinned,
       openModule: (id) => {
         const m = MODULE_BY_ID.get(id);
         if (m) navigate(moduleTab(m, moduleLabel(m)));
       },
-      openRecord: (module, recordId, title, href) => navigate({ id: `${module}:${recordId}`, kind: "record", module, title, href }),
+      openRecord: (module, recordId, title, href) => navigate(recordTab(module, recordId, title, href)),
+      registerRecord: (module, recordId, title, href) => dispatch({ type: "open", tab: recordTab(module, recordId, title, href) }),
       activate: (id) => {
         const tab = state.tabs.find((x) => x.id === id);
         if (tab) navigate(tab);
@@ -228,8 +238,9 @@ export function ShellProvider({ children, ...props }: ShellProps & { children: R
       effectiveTheme,
       menuOpen,
       setMenuOpen,
+      ready: hydrated,
     }),
-    [props, t, moduleLabel, state, pathname, navigate, router, effectiveTheme, menuOpen],
+    [props, t, moduleLabel, state, pathname, navigate, router, effectiveTheme, menuOpen, hydrated],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

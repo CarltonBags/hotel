@@ -71,6 +71,15 @@ export const PROPERTY_ACTIONS = {
   manage_tax_codes: ["property_manager", "accounting"],
   /** Rate Plans, policies, Rates, Restrictions and Price Floors (permission matrix rows "Rates"). */
   manage_rates: ["property_manager", "revenue"],
+  /** Guest profiles are tenant-wide (ADR 0004): a right at any property counts, see canAtAnyProperty. Matrix row "View and edit Guest profile": Accounting views. */
+  view_guests: ["property_manager", "front_desk", "accounting"],
+  /** Contact data, address, birth date and identity document wherever a guest appears; Revenue sees reservations with "no contact details". */
+  view_guest_contacts: ["property_manager", "front_desk", "accounting"],
+  edit_guests: ["property_manager", "front_desk"],
+  merge_guests: ["property_manager", "front_desk"],
+  /** Companies: not in the matrix; viewing follows guests, editing billing data and payment terms adds Accounting (assumption, ticket 20). */
+  view_companies: ["property_manager", "front_desk", "accounting"],
+  edit_companies: ["property_manager", "front_desk", "accounting"],
 } as const satisfies Record<string, readonly PropertyRole[]>;
 export type PropertyAction = keyof typeof PROPERTY_ACTIONS;
 
@@ -104,6 +113,16 @@ export function can(actor: Actor, action: Action, propertyId?: string): boolean 
   if (!propertyId) return false;
   const allowed: readonly PropertyRole[] = PROPERTY_ACTIONS[action];
   return rolesAt(actor, propertyId).some((role) => allowed.includes(role));
+}
+
+/**
+ * For tenant-wide records (Guest profiles, Companies): allowed when the
+ * action is allowed at any property the actor holds a role at. Owner and
+ * Tenant Admin act as Property Manager everywhere.
+ */
+export function canAtAnyProperty(actor: Actor, action: PropertyAction): boolean {
+  if (actor.tenantRole !== undefined) return can(actor, action, "*");
+  return actor.propertyRoles.some((r) => can(actor, action, r.propertyId));
 }
 
 /** True when the actor may see the property at all (any role there, or a tenant role). */

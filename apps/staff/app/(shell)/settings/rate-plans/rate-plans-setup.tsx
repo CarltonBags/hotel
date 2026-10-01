@@ -22,6 +22,7 @@ interface Props {
   services: Service[];
   paymentPolicies: PaymentPolicy[];
   cancellationPolicies: CancellationPolicy[];
+  companies: { id: string; name: string }[];
   language: Language;
   m: Messages;
 }
@@ -89,7 +90,7 @@ function Hidden({ property, id }: { property: PropertyInfo; id?: string | undefi
   );
 }
 
-function PlanForm({ property, plan, ratePlans, roomTypes, ageBands, services, paymentPolicies, cancellationPolicies, m }: Props & { plan?: RatePlan }) {
+function PlanForm({ property, plan, ratePlans, roomTypes, ageBands, services, paymentPolicies, cancellationPolicies, companies, m }: Props & { plan?: RatePlan }) {
   const [kind, setKind] = useState<"base" | "derived">(plan?.kind ?? "base");
   const [isPublic, setIsPublic] = useState(plan?.public ?? true);
   const [edk, setEdk] = useState<string>(plan?.earlyDepartureFeeKind ?? "none");
@@ -203,6 +204,9 @@ function PlanForm({ property, plan, ratePlans, roomTypes, ageBands, services, pa
         </label>
         {edk === "percent" ? <Field label={m["rates.feePercent"]} name="earlyDepartureFeePercent" type="number" step="0.01" defaultValue={plan?.earlyDepartureFeePercent?.toString()} required /> : <div className="hidden md:block" />}
         {!isPublic ? <Field label={m["rates.rateCode"]} name="rateCode" defaultValue={plan?.rateCode ?? undefined} required /> : <div className="hidden md:block" />}
+        {!isPublic ? (
+          <Select label={m["rates.company"]} name="companyId" options={[{ value: "", label: "–" }, ...companies.map((c) => ({ value: c.id, label: c.name }))]} defaultValue={plan?.companyId ?? ""} />
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-4">
         <Check name="dateChangeAllowed" label={m["rates.dateChangeAllowed"]} defaultChecked={plan?.dateChangeAllowed ?? true} />
@@ -243,7 +247,7 @@ function PlansTab(props: Props) {
               · {p.kind === "derived" ? fill(m["rates.follows"], { base: p.basePlanCode ?? "?", rule: p.derivation ? (p.derivation.kind === "percent" ? `${p.derivation.value} %` : formatCurrency(p.derivation.value, property.currency, language, property.country)) : "" }) : m["rates.kind.base"]}
               {" · "}
               {p.roomTypeIds.map(typeCode).join(", ")} · {m[`rates.mealPlan.${p.mealPlan}`]}
-              {p.public ? "" : ` · ${m["rates.rateCode"]} ${p.rateCode}`}
+              {p.public ? "" : ` · ${m["rates.rateCode"]} ${p.rateCode}${p.companyName ? ` (${p.companyName})` : ""}`}
               {p.soldOnChannels ? "" : ` · ${m["rates.notOnChannels"]}`}
               {p.active ? "" : ` · ${m["services.inactive"]}`}
             </span>

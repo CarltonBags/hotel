@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
-import { can, canViewAnyProperty, type Action, type Actor } from "@hoteloftware/domain";
+import { can, canAtAnyProperty, canViewAnyProperty, type Action, type Actor, type PropertyAction } from "@hoteloftware/domain";
 import { listProperties, loadActor, type Property, type Tenant } from "@hoteloftware/db";
 import type { TenantSession } from "@hoteloftware/auth";
 import { pool } from "./db";
@@ -54,3 +54,17 @@ export const accessibleProperties = cache(async (): Promise<Property[]> => {
   const all = await listProperties(pool(), tenant.schemaName);
   return all.filter((p) => can(actor, "view_property", p.id));
 });
+
+/** For tenant-wide records (Guest profiles, Companies): the action must be allowed at some property. Throws for server actions. */
+export async function authorizeAnywhere(action: PropertyAction): Promise<Principal> {
+  const principal = await requirePrincipal();
+  if (!canAtAnyProperty(principal.actor, action)) throw new ForbiddenError(action);
+  return principal;
+}
+
+/** Page variant of authorizeAnywhere: redirects to /not-allowed. */
+export async function requireAllowedAnywhere(action: PropertyAction): Promise<Principal> {
+  const principal = await requirePrincipal();
+  if (!canAtAnyProperty(principal.actor, action)) redirect("/not-allowed");
+  return principal;
+}

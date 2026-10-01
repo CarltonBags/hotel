@@ -306,6 +306,7 @@ export const ratePlans = pgTable(
     public: boolean("public").notNull().default(true),
     rateCode: text("rate_code"),
     soldOnChannels: boolean("sold_on_channels").notNull().default(true),
+    companyId: uuid("company_id").references((): AnyPgColumn => companies.id),
     active: boolean("active").notNull().default(true),
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -414,6 +415,118 @@ export const rateChanges = pgTable(
   (t) => [index("rate_changes_change_idx").on(t.changeId), index("rate_changes_property_idx").on(t.propertyId, t.at.desc())],
 );
 
+export const companies = pgTable(
+  "companies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    vatId: text("vat_id"),
+    addressLine1: text("address_line1").notNull().default(""),
+    addressLine2: text("address_line2").notNull().default(""),
+    postalCode: text("postal_code").notNull().default(""),
+    city: text("city").notNull().default(""),
+    country: char("country", { length: 2 }),
+    billingEmail: text("billing_email"),
+    phone: text("phone"),
+    contactPerson: text("contact_person").notNull().default(""),
+    paymentTermsDays: integer("payment_terms_days").notNull().default(14),
+    onAccount: boolean("on_account").notNull().default(false),
+    routing: text("routing").array().notNull().default(sql`'{}'`),
+    notes: text("notes").notNull().default(""),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("companies_name_idx").on(sql`lower(${t.name})`),
+    check("companies_payment_terms_check", sql`${t.paymentTermsDays} between 0 and 365`),
+    check("companies_routing_check", sql`${t.routing} <@ array['accommodation', 'package', 'extras', 'city_tax']::text[]`),
+  ],
+);
+
+export const companyChanges = pgTable(
+  "company_changes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    field: text("field").notNull(),
+    oldValue: text("old_value"),
+    newValue: text("new_value"),
+  },
+  (t) => [index("company_changes_company_idx").on(t.companyId, t.at.desc())],
+);
+
+export const guests = pgTable(
+  "guests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    firstName: text("first_name").notNull().default(""),
+    lastName: text("last_name").notNull(),
+    dateOfBirth: date("date_of_birth"),
+    nationality: char("nationality", { length: 2 }),
+    countryOfResidence: char("country_of_residence", { length: 2 }),
+    postalCode: text("postal_code"),
+    addressLine1: text("address_line1").notNull().default(""),
+    city: text("city").notNull().default(""),
+    email: text("email"),
+    phone: text("phone"),
+    emailNormalised: text("email_normalised"),
+    phoneNormalised: text("phone_normalised"),
+    language: text("language"),
+    preferences: text("preferences").notNull().default(""),
+    vip: boolean("vip").notNull().default(false),
+    marketingConsent: boolean("marketing_consent").notNull().default(false),
+    marketingConsentAt: timestamp("marketing_consent_at", { withTimezone: true }),
+    marketingConsentSource: text("marketing_consent_source"),
+    documentType: text("document_type"),
+    documentNumber: text("document_number"),
+    documentCountry: char("document_country", { length: 2 }),
+    documentExpiry: date("document_expiry"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+    createdPropertyId: uuid("created_property_id").references(() => properties.id),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("guests_email_idx").on(t.emailNormalised).where(sql`${t.emailNormalised} is not null`),
+    index("guests_phone_idx").on(t.phoneNormalised).where(sql`${t.phoneNormalised} is not null`),
+    index("guests_name_idx").on(sql`lower(${t.lastName})`, sql`lower(${t.firstName})`),
+    check("guests_consent_proof_check", sql`not ${t.marketingConsent} or (${t.marketingConsentAt} is not null and ${t.marketingConsentSource} is not null)`),
+    check("guests_document_type_check", sql`${t.documentType} in ('passport', 'id_card', 'driving_licence', 'other')`),
+  ],
+);
+
+export const guestChanges = pgTable(
+  "guest_changes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    guestId: uuid("guest_id").notNull().references(() => guests.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    field: text("field").notNull(),
+    oldValue: text("old_value"),
+    newValue: text("new_value"),
+  },
+  (t) => [index("guest_changes_guest_idx").on(t.guestId, t.at.desc())],
+);
+
+export const guestMerges = pgTable(
+  "guest_merges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    keptId: uuid("kept_id").notNull(),
+    mergedId: uuid("merged_id").notNull(),
+    userId: text("user_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    filledFields: text("filled_fields").array().notNull().default(sql`'{}'`),
+    movedRecords: integer("moved_records").notNull().default(0),
+  },
+  (t) => [index("guest_merges_kept_idx").on(t.keptId)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -437,4 +550,9 @@ export const tenantSchema = {
   rates,
   restrictions,
   rateChanges,
+  companies,
+  companyChanges,
+  guests,
+  guestChanges,
+  guestMerges,
 };

@@ -118,3 +118,22 @@ export {
   type RestrictionCell,
   type RestrictionCellPatch,
 } from "./tenant/rates";
+export {
+  createGuest,
+  findGuest,
+  findGuestDuplicates,
+  guestHistory,
+  listGuestMerges,
+  mergeGuests,
+  searchGuests,
+  updateGuest,
+  type DuplicateReason,
+  type Guest,
+  type GuestChange,
+  type GuestDuplicate,
+  type GuestInput,
+  type GuestMerge,
+  type GuestPatch,
+  type GuestSummary,
+} from "./tenant/guests";
+export { companyHistory, createCompany, findCompany, listCompanyNames, searchCompanies, updateCompany, type Company, type CompanyChange, type CompanyData } from "./tenant/companies";

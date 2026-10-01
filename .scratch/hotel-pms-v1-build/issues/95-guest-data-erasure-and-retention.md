@@ -9,3 +9,7 @@
 - [ ] Erased guest's invoices still render with name and address; profile, messages and images are gone
 - [ ] Log entry contains no personal data
 - [ ] Retention job report lists what was deleted per category
+
+## Comments
+
+**From ticket 20 (2026-10-02):** erasure must also scrub these places, which hold personal values in plain text: `guest_changes.old_value` / `new_value` (email, phone, birth date, document number, address of the profile, including history moved over by merges), `company_changes` (contact person, billing email, phone), and `guests` normalised copies `email_normalised` / `phone_normalised`. `guest_merges` holds ids and field names only.

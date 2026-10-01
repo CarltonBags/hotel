@@ -1,5 +1,5 @@
 import { can } from "@hoteloftware/domain";
-import { listAgeBands, listCancellationPolicies, listPaymentPolicies, listRatePlans, listRoomTypes, listServices } from "@hoteloftware/db";
+import { listAgeBands, listCancellationPolicies, listCompanyNames, listPaymentPolicies, listRatePlans, listRoomTypes, listServices } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
@@ -22,13 +22,14 @@ export default async function RatePlansPage() {
   }
   const { tenant } = await requireAllowed("manage_rates", property.id);
   const schema = tenant.schemaName;
-  const [ratePlans, roomTypes, ageBands, services, paymentPolicies, cancellationPolicies] = await Promise.all([
+  const [ratePlans, roomTypes, ageBands, services, paymentPolicies, cancellationPolicies, companies] = await Promise.all([
     listRatePlans(pool(), schema, property.id, { includeInactive: true }),
     listRoomTypes(pool(), schema, property.id),
     listAgeBands(pool(), schema, property.id),
     listServices(pool(), schema, property.id),
     listPaymentPolicies(pool(), schema, property.id),
     listCancellationPolicies(pool(), schema, property.id),
+    listCompanyNames(pool(), schema),
   ]);
   return (
     <RatePlansSetup
@@ -39,6 +40,7 @@ export default async function RatePlansPage() {
       services={services}
       paymentPolicies={paymentPolicies}
       cancellationPolicies={cancellationPolicies}
+      companies={companies.map((c) => ({ id: c.id, name: c.active ? c.name : `${c.name} (${m["services.inactive"]})` }))}
       language={shell.language}
       m={m}
     />

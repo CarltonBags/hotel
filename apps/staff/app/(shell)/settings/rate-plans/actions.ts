@@ -81,6 +81,7 @@ export async function saveRatePlan(_prev: FormState, formData: FormData): Promis
       earlyDepartureFeePercent: decimal(formData, "earlyDepartureFeePercent"),
       public: flag(formData, "public"),
       rateCode: field(formData, "rateCode") || null,
+      companyId: flag(formData, "public") ? null : field(formData, "companyId") || null,
       soldOnChannels: flag(formData, "soldOnChannels"),
       supplements,
       includedServices,
