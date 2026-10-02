@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { DATA_KINDS, can, formatCurrency, formatDate, formatDateTime, todayIn } from "@hoteloftware/domain";
 import { WORKSPACE_LISTS, listOverbooked, todaySummary, workspaceCounts, workspaceList, type WorkspaceList as ListKind } from "@hoteloftware/db";
-import { reservationView } from "@/lib/reservation-view";
+import { paymentProps, reservationView } from "@/lib/reservation-view";
 import { WorkspaceList } from "./_today/workspace-list";
 import { WorkspaceReservation } from "./_today/workspace-reservation";
 import { LiveRefresh } from "@/shell/LiveRefresh";
@@ -154,7 +154,7 @@ async function Workspace({ property, list, selected }: { property: Awaited<Retur
               roomType: view.r.roomType.code,
               ratePlan: view.r.ratePlan.name,
               booker: view.r.booking.bookerName,
-              balance: money(row?.balance ?? view.folioProps.view.folios.filter((f) => f.billTo === "guest").reduce((sum, f) => sum + f.totals.gross, 0)),
+              balance: money(row?.balance ?? view.payments.guestBalance),
               canCheckIn: view.r.status === "confirmed" && view.rights.checkIn && view.r.arrival <= today && today < view.r.departure,
               // notes may carry contact details (permission matrix)
               notes: view.rights.contacts ? view.r.booking.notes : "",
@@ -171,6 +171,8 @@ async function Workspace({ property, list, selected }: { property: Awaited<Retur
             }}
             actionsProps={view.actionsProps}
             folioProps={view.folioProps}
+            paymentsProps={{ ...paymentProps(view), folios: view.payments.folios, rights: { take: view.rights.takePayments, refund: view.rights.refunds } }}
+            holdsProps={{ ...paymentProps(view), holds: view.payments.holds, balance: view.payments.guestBalance, canTake: view.rights.takePayments }}
             fixedProps={{
               reservationId: view.r.id,
               arrival: view.r.arrival,

@@ -2,6 +2,9 @@ import PgBoss from "pg-boss";
 import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
+import type { PaymentProvider } from "@hoteloftware/payments";
+import { findTenantById } from "@hoteloftware/db";
+import { checkHolds } from "./payments";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 
 export const QUEUES = {
@@ -12,6 +15,9 @@ export const QUEUES = {
   tenantCheckAll: "tenant.check.all",
   /** Daily housekeeping of the control schema. */
   maintenance: "control.maintenance",
+  /** Hourly: renew Card Holds close to expiry, one job per tenant (ticket 27). */
+  holdCheckAll: "payments.holds.all",
+  holdCheck: "payments.holds",
 } as const;
 
 /**
@@ -22,6 +28,8 @@ export interface QueueOptions {
   tenantCheckCron?: string | null;
   /** Webhook processors by source name; later tickets register theirs. */
   processors?: Record<string, TenantJobHandler<WebhookJobData>>;
+  /** The payment provider, for the Card Hold check. */
+  paymentProvider?: PaymentProvider;
 }
 
 export async function startQueue(pool: Pool, connectionString: string, options: QueueOptions = {}): Promise<PgBoss> {
@@ -74,6 +82,23 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     if (pruned) console.log(`[maintenance] pruned ${pruned} old notifications`);
   });
   await boss.schedule(QUEUES.maintenance, "15 3 * * *", {}, { tz: "Europe/Berlin" });
+
+  const provider = options.paymentProvider;
+  if (provider) {
+    await boss.work<TenantJobData>(QUEUES.holdCheck, async (jobs) => {
+      for (const job of jobs) {
+        const tenant = await findTenantById(pool, job.data.tenantId);
+        if (!tenant) continue;
+        const r = await checkHolds(pool, tenant, provider);
+        if (r.renewed || r.failed) console.log(`[holds] ${tenant.slug}: renewed ${r.renewed}, could not renew ${r.failed}`);
+      }
+    });
+    await boss.work(QUEUES.holdCheckAll, async () => {
+      const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+      for (const t of rows) await boss.send(QUEUES.holdCheck, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `payments.holds:${t.id}`, singletonSeconds: 300 });
+    });
+    await boss.schedule(QUEUES.holdCheckAll, "5 * * * *", {}, { tz: "Europe/Berlin" });
+  }
 
   if (options.tenantCheckCron) {
     await boss.schedule(QUEUES.tenantCheckAll, options.tenantCheckCron, {}, { tz: "Europe/Berlin" });

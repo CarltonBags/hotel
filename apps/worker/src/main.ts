@@ -1,6 +1,8 @@
 import { config } from "dotenv";
 import { resolve } from "node:path";
 import { createPool } from "@hoteloftware/db";
+import { paymentProvider } from "@hoteloftware/payments";
+import { paymentProcessor, paymentWebhookSource } from "./payments";
 import { queueHealthy, startQueue } from "./queue";
 import { startWorkerServer } from "./server";
 
@@ -22,7 +24,13 @@ if (!process.env.DATABASE_DIRECT_URL) console.warn("DATABASE_DIRECT_URL not set;
 const pool = createPool(directUrl, 6);
 const port = Number(process.env.WORKER_PORT ?? 8080);
 
-const boss = await startQueue(pool, directUrl, { tenantCheckCron: process.env.TENANT_CHECK_CRON ?? null });
+// Stripe with STRIPE_SECRET_KEY, else the in-memory fake (development only)
+const provider = paymentProvider();
+const boss = await startQueue(pool, directUrl, {
+  tenantCheckCron: process.env.TENANT_CHECK_CRON ?? null,
+  processors: { [provider.name]: paymentProcessor(provider) },
+  paymentProvider: provider,
+});
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });
 const allowOrigin = process.env.WORKER_ALLOW_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "*");
 if (!allowOrigin) console.warn("WORKER_ALLOW_ORIGIN not set; browsers cannot open the event stream");
@@ -34,6 +42,7 @@ const server = await startWorkerServer({
   queue,
   allowOrigin,
   testWebhookSecret: process.env.WEBHOOK_TEST_SECRET,
+  sources: [paymentWebhookSource(provider)],
 });
 console.log(`worker up on :${server.port} (health /health, events /events, webhooks /webhooks/<source>)`);
 

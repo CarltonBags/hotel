@@ -4,11 +4,12 @@ import { formatDate } from "@hoteloftware/domain";
 import { listRooms, reservationHistory } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
 import { pool } from "@/lib/db";
-import { reservationView } from "@/lib/reservation-view";
+import { paymentProps, reservationView } from "@/lib/reservation-view";
 import { requirePrincipal } from "@/lib/authorize";
 import { fill } from "@/i18n/messages";
 import { CheckInButton } from "../check-in-button";
 import { FixedCharges } from "./fixed-charges";
+import { CardHoldsPanel, PaymentsPanel } from "./payments-panel";
 import { FolioPanel } from "./folio-panel";
 import { RegistrationStatus } from "./guest-details";
 import { GuestDrawerButton } from "./guest-drawer-button";
@@ -195,6 +196,12 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
 
       {folio ? (
         <FolioPanel {...v.folioProps} m={m} />
+      ) : null}
+      {folio ? (
+        <div className="grid items-start gap-4 lg:grid-cols-2">
+          <PaymentsPanel {...paymentProps(v)} folios={v.payments.folios} rights={{ take: rights.takePayments, refund: rights.refunds }} m={m} />
+          <CardHoldsPanel {...paymentProps(v)} holds={v.payments.holds} balance={v.payments.guestBalance} canTake={rights.takePayments} m={m} />
+        </div>
       ) : null}
       {folio ? (
         <details open={v.fixedCharges.length > 0} className="rounded-2xl bg-surface-2 p-5 text-sm">

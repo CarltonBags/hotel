@@ -4,7 +4,9 @@ import {
   findGuest,
   findProperty,
   findReservation,
+  listCardHolds,
   listFixedCharges,
+  listTerminalReaders,
   listRatePlans,
   listRoomTypes,
   listServices,
@@ -17,6 +19,7 @@ import {
   type ReservationDetail,
 } from "@hoteloftware/db";
 import type { Messages } from "@/i18n/messages";
+import { paymentProvider } from "@hoteloftware/payments";
 import { requireAllowed, requirePrincipal } from "./authorize";
 import { pool } from "./db";
 import { loadShell } from "./shell";
@@ -50,6 +53,8 @@ export async function reservationView(id: string, options: { propertyId?: string
     guests: canAtAnyProperty(actor, "view_guests"),
     contacts: at("view_guest_contacts"),
     editGuests: canAtAnyProperty(actor, "edit_guests"),
+    takePayments: at("take_payments"),
+    refunds: at("refund_payments"),
   };
   const [users, roomTypes, plans, folios, chargeLog, services, taxCodes, fixedCharges, guest] = await Promise.all([
     listTenantUsers(pool(), tenant.id),
@@ -62,6 +67,8 @@ export async function reservationView(id: string, options: { propertyId?: string
     rights.folio ? listFixedCharges(pool(), s, r.id) : Promise.resolve<FixedCharge[]>([]),
     rights.guests ? findGuest(pool(), s, r.primaryGuest.id) : Promise.resolve<Guest | null>(null),
   ]);
+  const [readers, holds] = rights.folio ? await Promise.all([listTerminalReaders(pool(), s, r.propertyId), listCardHolds(pool(), s, r.id)]) : [[], []];
+  const provider = paymentProvider();
   // TODO(Night Audit ticket): the property's Business Date
   const today = todayIn(property.timeZone);
   const names = new Map(users.map((u) => [u.id, u.name]));
@@ -91,6 +98,18 @@ export async function reservationView(id: string, options: { propertyId?: string
     actionsProps: actionsProps(r, r.status === "checked_in" && rights.checkIn && r.arrival === today, roomTypes.filter((t) => plan?.roomTypeIds.includes(t.id) ?? t.id === r.roomType.id).map((t) => ({ id: t.id, label: `${t.code} · ${t.name}` })), currency),
     folioProps: folioProps(r, m, guestName, folios, services, taxCodes, chargeLog, names, fmt, money, today, rights, currency),
     serviceOptions: services.filter((x) => x.active).map((x) => ({ id: x.id, label: `${x.code} · ${x.name}`, price: x.defaultPrice })),
+    /** Payments and Card Holds: the panels' shared props. */
+    payments: {
+      reservationId: r.id,
+      propertyId: r.propertyId,
+      readers: readers.map((x) => ({ readerId: x.readerId, label: x.label })),
+      testMode: provider.testMode,
+      currency,
+      folios: folios.folios.map((f) => ({ id: f.id, number: f.number, billToName: f.billToName, gross: f.totals.gross, balance: f.balance, payments: f.payments })),
+      holds,
+      /** Open amount on the guest's own folios, what a hold capture takes by default. */
+      guestBalance: folios.folios.filter((f) => f.billTo === "guest").reduce((sum, f) => sum + f.balance, 0),
+    },
   };
 }
 
@@ -161,3 +180,9 @@ function folioProps(
   };
 }
 
+
+/** Props both payment panels share. */
+export function paymentProps(v: ReservationView) {
+  const { reservationId, propertyId, readers, testMode, currency } = v.payments;
+  return { reservationId, propertyId, readers, testMode, currency };
+}
