@@ -31,6 +31,8 @@ interface CartRoom {
   childAges: number[];
   /** Set when the plan is hidden behind a Rate Code. */
   rateCode: string | null;
+  /** Booked past Availability after the user's explicit confirmation. */
+  force: boolean;
   guest: Picked | null;
 }
 
@@ -70,7 +72,8 @@ export function NewReservation({ property, search, childAges, quotes, error, tod
 
   // rooms already in the cart that overlap the searched stay
   const inCart = (roomTypeId: string) => cart.filter((c) => c.roomTypeId === roomTypeId && c.arrival < search.departure && c.departure > search.arrival).length;
-  const add = (roomTypeId: string, ratePlanId: string, label: string, total: number, hidden: boolean) => {
+  const [overbookAsk, setOverbookAsk] = useState<null | { roomTypeId: string; ratePlanId: string; label: string; total: number; hidden: boolean }>(null);
+  const add = (roomTypeId: string, ratePlanId: string, label: string, total: number, hidden: boolean, force = false) => {
     setCart((c) => [
       ...c,
       {
@@ -84,6 +87,7 @@ export function NewReservation({ property, search, childAges, quotes, error, tod
         adults: search.adults,
         childAges,
         rateCode: hidden ? search.rateCode : null,
+        force,
         guest: null,
       },
     ]);
@@ -119,6 +123,7 @@ export function NewReservation({ property, search, childAges, quotes, error, tod
           ratePlanId: c.ratePlanId,
           primaryGuestId: c.guest!.id,
           expectedTotal: c.total,
+          force: c.force,
         })),
       });
       if (r.error) {
@@ -202,7 +207,19 @@ export function NewReservation({ property, search, childAges, quotes, error, tod
                           {m["res.addRoom"]}
                         </button>
                       ) : (
-                        <span className="text-xs text-danger">{reasons(left <= 0 && p.quote.bookable ? ["sold_out"] : p.quote.reasons)}</span>
+                        <>
+                          <span className="text-xs text-danger">{reasons(left <= 0 && p.quote.bookable ? ["sold_out"] : p.quote.reasons)}</span>
+                          {/* only lack of rooms can be overridden, and only after an explicit confirmation */}
+                          {(left <= 0 || p.quote.reasons.includes("sold_out")) && p.quote.reasons.every((x) => x === "sold_out") ? (
+                            <button
+                              type="button"
+                              onClick={() => setOverbookAsk({ roomTypeId: t.roomTypeId, ratePlanId: p.ratePlanId, label: `${t.code} · ${p.name}`, total: p.quote.total, hidden: p.hidden })}
+                              className="rounded-full border border-danger px-3 py-1 text-xs font-medium text-danger"
+                            >
+                              {m["res.overbook"]}
+                            </button>
+                          ) : null}
+                        </>
                       )}
                     </li>
                   ))}
@@ -211,6 +228,28 @@ export function NewReservation({ property, search, childAges, quotes, error, tod
             );
           })}
         </section>
+      ) : null}
+
+      {overbookAsk ? (
+        <div role="alertdialog" aria-label={m["res.overbookTitle"]} className="grid gap-2 rounded-xl border border-danger/40 bg-danger/5 p-4 text-sm">
+          <p className="font-medium">{m["res.overbookTitle"]}</p>
+          <p>{fill(m["res.overbookNew"], { room: overbookAsk.label })}</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                add(overbookAsk.roomTypeId, overbookAsk.ratePlanId, overbookAsk.label, overbookAsk.total, overbookAsk.hidden, true);
+                setOverbookAsk(null);
+              }}
+              className="h-9 rounded-full bg-danger px-4 text-sm font-medium text-white"
+            >
+              {m["res.overbookConfirm"]}
+            </button>
+            <button type="button" onClick={() => setOverbookAsk(null)} className="h-9 rounded-full px-4 text-sm hover:bg-ink-5">
+              {m["res.keepAsIs"]}
+            </button>
+          </div>
+        </div>
       ) : null}
 
       {cart.length ? (
@@ -222,6 +261,7 @@ export function NewReservation({ property, search, childAges, quotes, error, tod
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{fill(m["res.room"], { n: String(i + 1) })}</span>
                   <span>{c.label}</span>
+                  {c.force ? <span className="rounded-full bg-danger/15 px-2 text-xs text-danger">{m["res.overbooked"]}</span> : null}
                   <span className="text-ink-60">
                     {c.arrival} – {c.departure} · {fill(m["res.occupancy"], { adults: String(c.adults) })}
                     {c.childAges.length ? ` · ${fill(m["res.children"], { ages: c.childAges.join(", ") })}` : ""} · {money(c.total)}

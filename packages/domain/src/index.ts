@@ -95,3 +95,16 @@ export {
 } from "./guests";
 export { nightsOf, quoteStay, type PriceComponent, type QuoteInput, type QuoteReason, type QuotedNight, type StayQuote } from "./stay-quote";
 export { BOOKING_SOURCES, OCCUPYING_STATUSES, RESERVATION_STATUSES, type BookingSource, type ReservationStatus } from "./reservations";
+export {
+  RESERVATION_CHANGE_ACTIONS,
+  cancellationFee,
+  nightsNeedingRoom,
+  nightsToReprice,
+  sameAges,
+  splitAssignment,
+  zonedInstant,
+  type AssignmentSegment,
+  type FeePolicy,
+  type ReservationChangeAction,
+  type StayShape,
+} from "./reservation-edit";

@@ -1,9 +1,28 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { canAtAnyProperty } from "@hoteloftware/domain";
-import { createBooking, createGuest, searchCompanies, searchGuests, type NewBooking } from "@hoteloftware/db";
-import { authorize, authorizeAnywhere } from "@/lib/authorize";
+import {
+  assignRoom,
+  cancelBooking,
+  cancelReservation,
+  createBooking,
+  createGuest,
+  findReservation,
+  listFreeRooms,
+  moveRoom,
+  previewBookingCancellation,
+  previewCancellation,
+  searchCompanies,
+  searchGuests,
+  setCancellationFeeStatus,
+  unassignRooms,
+  updateReservation,
+  OverbookingNeeded,
+  type NewBooking,
+} from "@hoteloftware/db";
+import { authorize, authorizeAnywhere, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
 import { loadShell } from "@/lib/shell";
@@ -63,6 +82,7 @@ function readBooking(input: unknown): NewBooking {
       ratePlanId: String(r?.ratePlanId),
       primaryGuestId: String(r?.primaryGuestId),
       expectedTotal: typeof r?.expectedTotal === "number" ? r.expectedTotal : undefined,
+      force: r?.force === true,
     })),
   };
 }
@@ -77,4 +97,105 @@ export async function createBookingAction(propertyId: string, input: NewBooking)
   });
   if (firstId) redirect(`/reservations/${firstId}`);
   return state;
+}
+
+// ── changes on an existing reservation (ticket 22) ──
+
+/** The reservation's own property decides the right; ids from the browser are re-read on the server. */
+async function reservationScope(reservationId: string) {
+  const { tenant } = await requirePrincipal();
+  const r = await findReservation(pool(), tenant.schemaName, String(reservationId));
+  if (!r) throw new Error("Reservation not found");
+  const { session } = await authorize("manage_reservations", r.propertyId);
+  return { schema: tenant.schemaName, reservation: r, userId: session.user.id };
+}
+
+export interface EditState extends FormState {
+  /** The change needs rooms the room type no longer has; the user may confirm to overbook. */
+  needsOverbooking?: boolean;
+}
+
+export async function editReservationAction(
+  reservationId: string,
+  patch: { arrival: string; departure: string; adults: number; childAges: number[]; roomTypeId: string },
+  force: boolean,
+): Promise<EditState> {
+  let needsOverbooking = false;
+  const state = await formAction(async () => {
+    const { schema, reservation, userId } = await reservationScope(reservationId);
+    try {
+      await updateReservation(
+        pool(),
+        schema,
+        reservation.id,
+        userId,
+        {
+          arrival: String(patch?.arrival),
+          departure: String(patch?.departure),
+          adults: Number(patch?.adults),
+          childAges: Array.isArray(patch?.childAges) ? patch.childAges.map(Number) : [],
+          roomTypeId: String(patch?.roomTypeId),
+        },
+        { force: force === true },
+      );
+    } catch (err) {
+      if (err instanceof OverbookingNeeded) needsOverbooking = true;
+      throw err;
+    }
+    revalidatePath(`/reservations/${reservation.id}`);
+    return { ok: true, message: "Saved." };
+  });
+  return { ...state, ...(needsOverbooking ? { needsOverbooking } : {}) };
+}
+
+export async function previewCancelAction(reservationId: string, whole: boolean): Promise<{ amount: number; deadline: string | null } | { error: string }> {
+  let preview: { amount: number; deadline: string | null } | undefined;
+  const state = await formAction(async () => {
+    const { schema, reservation } = await reservationScope(reservationId);
+    preview = whole ? { amount: (await previewBookingCancellation(pool(), schema, reservation.booking.id)).amount, deadline: null } : await previewCancellation(pool(), schema, reservation.id);
+  });
+  return preview ?? { error: state.error ?? "Something went wrong." };
+}
+
+export async function cancelAction(reservationId: string, whole: boolean): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, reservation, userId } = await reservationScope(reservationId);
+    if (whole) await cancelBooking(pool(), schema, reservation.booking.id, userId);
+    else await cancelReservation(pool(), schema, reservation.id, userId);
+    for (const id of reservation.booking.reservationIds) revalidatePath(`/reservations/${id}`);
+    return { ok: true, message: "Cancelled." };
+  });
+}
+
+export async function feeAction(reservationId: string, status: "confirmed" | "waived"): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, reservation, userId } = await reservationScope(reservationId);
+    await setCancellationFeeStatus(pool(), schema, reservation.id, userId, status === "confirmed" ? "confirmed" : "waived");
+    revalidatePath(`/reservations/${reservation.id}`);
+    return { ok: true, message: "Saved." };
+  });
+}
+
+export async function freeRoomsAction(reservationId: string, from?: string): Promise<{ id: string; name: string }[]> {
+  const { schema, reservation } = await reservationScope(reservationId);
+  return listFreeRooms(pool(), schema, reservation.id, from ? String(from) : undefined);
+}
+
+export async function assignRoomAction(reservationId: string, roomId: string, from: string | null): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, reservation, userId } = await reservationScope(reservationId);
+    if (from && reservation.assignments.length) await moveRoom(pool(), schema, reservation.id, userId, String(roomId), String(from));
+    else await assignRoom(pool(), schema, reservation.id, userId, String(roomId));
+    revalidatePath(`/reservations/${reservation.id}`);
+    return { ok: true, message: "Saved." };
+  });
+}
+
+export async function unassignAction(reservationId: string): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, reservation, userId } = await reservationScope(reservationId);
+    await unassignRooms(pool(), schema, reservation.id, userId);
+    revalidatePath(`/reservations/${reservation.id}`);
+    return { ok: true, message: "Saved." };
+  });
 }

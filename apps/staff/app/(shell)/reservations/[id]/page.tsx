@@ -1,12 +1,13 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { can, canAtAnyProperty, formatCurrency, formatDate } from "@hoteloftware/domain";
-import { findProperty, findReservation } from "@hoteloftware/db";
+import { findProperty, findReservation, listRatePlans, listRoomTypes, listRooms, listTenantUsers, reservationHistory } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
 import { requireAllowed, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { fill } from "@/i18n/messages";
+import { ReservationActions } from "./reservation-actions";
 
 /** One Reservation as a record tab: stay, guests, stored nightly prices, folio placeholder. */
 export default async function ReservationPage({ params }: { params: Promise<{ id: string }> }) {
@@ -26,6 +27,42 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
   const notes = can(actor, "view_guest_contacts", r.propertyId);
   const guestName = `${r.primaryGuest.firstName} ${r.primaryGuest.lastName}`.trim();
   const others = r.booking.reservationIds.filter((x) => x !== r.id);
+  const manage = can(actor, "manage_reservations", r.propertyId);
+  const [allHistory, users, roomTypes, plans, rooms] = await Promise.all([
+    reservationHistory(pool(), tenant.schemaName, r.id),
+    listTenantUsers(pool(), tenant.id),
+    listRoomTypes(pool(), tenant.schemaName, r.propertyId),
+    manage ? listRatePlans(pool(), tenant.schemaName, r.propertyId, { includeInactive: true }) : Promise.resolve([]),
+    listRooms(pool(), tenant.schemaName, r.propertyId),
+  ]);
+  const names = new Map(users.map((u) => [u.id, u.name]));
+  // cancellation fees are folio matters: without folio rights the history shows neither fee entries nor amounts
+  const history = folio
+    ? allHistory
+    : allHistory
+        .filter((h) => h.action !== "fee_confirmed" && h.action !== "fee_waived")
+        .map((h) => ({ ...h, before: Object.fromEntries(Object.entries(h.before).filter(([k]) => k !== "fee")), after: Object.fromEntries(Object.entries(h.after).filter(([k]) => k !== "fee")) }));
+  const plan = plans.find((p) => p.id === r.ratePlan.id);
+  const fmt = new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: property.timeZone });
+  const typeCode = new Map(roomTypes.map((t) => [t.id, t.code]));
+  const roomNumber = new Map(rooms.map((x) => [x.id, x.number]));
+  const FIELDS: [string, (v: unknown) => string][] = [
+    ["arrival", (v) => date(String(v))],
+    ["departure", (v) => date(String(v))],
+    ["adults", (v) => String(v)],
+    ["childAges", (v) => (Array.isArray(v) && v.length ? v.join(", ") : "–")],
+    ["roomTypeId", (v) => typeCode.get(String(v)) ?? "?"],
+    ["total", (v) => money(Number(v))],
+    ["rooms", (v) => (Array.isArray(v) && v.length ? (v as { roomId: string; from: string; to: string }[]).map((x) => `${roomNumber.get(x.roomId) ?? "?"} ${date(x.from)}–${date(x.to)}`).join(", ") : "–")],
+    ["status", (v) => String(v)],
+    ["fee", (v) => money(Number(v))],
+    ["overbooked", () => m["res.overbooked"]],
+  ];
+  // one readable line per side of a change: known fields in a fixed order
+  const describe = (v: Record<string, unknown>) =>
+    FIELDS.filter(([k]) => k in v)
+      .map(([k, show]) => `${m[`res.field.${k}` as keyof typeof m] ?? k}: ${show(v[k])}`)
+      .join(" · ");
   return (
     <div className="mx-auto grid max-w-5xl gap-6 p-6">
       <RecordTab module="reservations" recordId={r.id} title={`${r.booking.confirmationNumber} · ${guestName}`} href={`/reservations/${r.id}`} />
@@ -35,6 +72,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         </h1>
         <p className="text-sm text-ink-60">
           {m[`res.status.${r.status}`]} · {property.name}
+          {r.overbooked ? <span className="ml-2 rounded-full bg-danger/15 px-2 text-xs text-danger">{m["res.overbooked"]}</span> : null}
         </p>
       </div>
 
@@ -46,6 +84,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         <p>
           {r.roomType.code} · {r.roomType.name} · {r.ratePlan.name} ({m[`rates.mealPlan.${r.ratePlan.mealPlan}`]})
         </p>
+        {r.assignments.length ? <p>{r.assignments.map((a) => fill(m["res.roomSegment"], { room: a.roomName, from: date(a.from), to: date(a.to) })).join(" · ")}</p> : null}
         <p>
           {fill(m["res.occupancy"], { adults: String(r.adults) })}
           {r.childAges.length ? ` · ${fill(m["res.children"], { ages: r.childAges.join(", ") })}` : ""}
@@ -121,6 +160,46 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
           </tbody>
         </table>
         <p className="mt-2 text-xs text-ink-60">{m["res.pricesKept"]}</p>
+      </section>
+
+      {manage ? (
+        <ReservationActions
+          reservation={{
+            id: r.id,
+            status: r.status,
+            arrival: r.arrival,
+            departure: r.departure,
+            adults: r.adults,
+            childAges: r.childAges,
+            roomTypeId: r.roomType.id,
+            nights: r.nights.map((n) => n.date),
+            assignments: r.assignments,
+            cancellationFee: r.cancellationFee,
+            cancellationFeeStatus: r.cancellationFeeStatus,
+            openInBooking: r.booking.openReservations,
+          }}
+          roomTypes={roomTypes.filter((t) => plan?.roomTypeIds.includes(t.id) ?? t.id === r.roomType.id).map((t) => ({ id: t.id, label: `${t.code} · ${t.name}` }))}
+          currency={{ code: property.currency, language, country: property.country }}
+          m={m}
+        />
+      ) : null}
+
+      <section aria-label={m["res.history"]} className="rounded-2xl bg-surface-2 p-5 text-sm">
+        <h2 className="mb-1 font-medium">{m["res.history"]}</h2>
+        {history.length === 0 ? <p className="text-ink-60">{m["res.noHistory"]}</p> : null}
+        <ul className="grid gap-2">
+          {history.map((h, i) => (
+            <li key={i}>
+              <span className="text-ink-60">{fmt.format(h.at)}</span> · {names.get(h.userId) ?? h.userId} · <strong>{m[`res.action.${h.action}`]}</strong>
+              <div className="text-ink-80">
+                {m["res.before"]}: {describe(h.before)}
+              </div>
+              <div className="text-ink-80">
+                {m["res.after"]}: {describe(h.after)}
+              </div>
+            </li>
+          ))}
+        </ul>
       </section>
 
       {folio ? (

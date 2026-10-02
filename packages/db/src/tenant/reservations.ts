@@ -9,6 +9,7 @@ import {
   type BookingSource,
   type MealPlan,
   type QuoteReason,
+  type QuotedNight,
   type ReservationStatus,
   type Restriction,
   type StayQuote,
@@ -62,7 +63,7 @@ export interface StayQuotes {
   rateCode: { code: string; companyId: string | null; companyName: string | null } | null;
 }
 
-interface PlanRow {
+export interface PlanRow {
   id: string;
   code: string;
   name: string;
@@ -74,13 +75,15 @@ interface PlanRow {
   rate_code: string | null;
   company_id: string | null;
   company_name: string | null;
+  date_change_allowed: boolean;
   room_type_ids: string[];
   supplements: { kind: Supplement["kind"]; age_band_id: string | null; amount: string }[];
   included_services: { service_id: string; component_price: string }[];
 }
 
 /** Everything a quote needs, read in one transaction: rooms and their Availability, plans, rates, restrictions and Age Bands. */
-async function loadQuoteData(tx: PoolClient, propertyId: string, arrival: string, departure: string) {
+/** `excludeReservationId`: a reservation being edited does not take its own room. */
+export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival: string, departure: string, excludeReservationId: string | null = null) {
   const lastNight = addDays(departure, -1);
   const [types, occupied, plans, rates, restrictions, bands, index] = await Promise.all([
     tx.query<{ id: string; code: string; name: string; max_adults: number; max_occupancy: number; rooms: number }>(
@@ -91,12 +94,12 @@ async function loadQuoteData(tx: PoolClient, propertyId: string, arrival: string
     tx.query<{ room_type_id: string; date: string; n: number }>(
       `select r.room_type_id, to_char(d, 'YYYY-MM-DD') as date, count(*)::int as n
        from reservations r cross join lateral generate_series(greatest(r.arrival, $2::date), least(r.departure, $3::date) - 1, interval '1 day') d
-       where r.property_id = $1 and r.status = any($4::text[]) and r.arrival < $3::date and r.departure > $2::date
+       where r.property_id = $1 and r.status = any($4::text[]) and r.arrival < $3::date and r.departure > $2::date and ($5::uuid is null or r.id <> $5::uuid)
        group by r.room_type_id, d`,
-      [propertyId, arrival, departure, OCCUPYING_STATUSES],
+      [propertyId, arrival, departure, OCCUPYING_STATUSES, excludeReservationId],
     ),
     tx.query<PlanRow>(
-      `select p.id, p.code, p.name, p.kind, p.base_plan_id, p.base_occupancy, p.meal_plan, p.public, p.rate_code, p.company_id, c.name as company_name,
+      `select p.id, p.code, p.name, p.kind, p.base_plan_id, p.base_occupancy, p.meal_plan, p.public, p.rate_code, p.company_id, c.name as company_name, p.date_change_allowed,
          coalesce((select array_agg(rt.room_type_id) from rate_plan_room_types rt where rt.rate_plan_id = p.id), '{}') as room_type_ids,
          coalesce((select json_agg(json_build_object('kind', s.kind, 'age_band_id', s.age_band_id, 'amount', s.amount)) from rate_plan_supplements s where s.rate_plan_id = p.id), '[]'::json) as supplements,
          coalesce((select json_agg(json_build_object('service_id', ps.service_id, 'component_price', ps.component_price)) from rate_plan_services ps where ps.rate_plan_id = p.id), '[]'::json) as included_services
@@ -137,10 +140,10 @@ async function loadQuoteData(tx: PoolClient, propertyId: string, arrival: string
   };
 }
 
-type QuoteData = Awaited<ReturnType<typeof loadQuoteData>>;
+export type QuoteData = Awaited<ReturnType<typeof loadQuoteData>>;
 
 /** `takenByThisBooking` counts rooms earlier reservations of the same booking already take. */
-function quoteFor(data: QuoteData, plan: PlanRow, type: QuoteData["types"][number], stay: StayRequest, takenByThisBooking: (date: string) => number): StayQuote {
+export function quoteFor(data: QuoteData, plan: PlanRow, type: QuoteData["types"][number], stay: StayRequest, takenByThisBooking: (date: string) => number): StayQuote {
   return quoteStay({
     arrival: stay.arrival,
     departure: stay.departure,
@@ -193,6 +196,13 @@ export interface NewReservation extends Omit<StayRequest, "rateCode"> {
   primaryGuestId: string;
   /** The total the user saw; when given, a different current total refuses the booking instead of storing an unseen price. */
   expectedTotal?: number | undefined;
+  /** Book past Availability after the user's explicit confirmation (Front Desk, Property Manager); flagged as overbooked. */
+  force?: boolean | undefined;
+}
+
+/** A quote that fails only for lack of free rooms may still be booked when the user forced it. */
+export function blockingReasons(quote: StayQuote, force: boolean): QuoteReason[] {
+  return quote.reasons.filter((x) => !(force && x === "sold_out"));
 }
 
 export interface NewBooking {
@@ -204,7 +214,7 @@ export interface NewBooking {
   reservations: NewReservation[];
 }
 
-const REASON_TEXT: Record<QuoteReason, string> = {
+export const REASON_TEXT: Record<QuoteReason, string> = {
   no_adult: "at least one adult is needed",
   too_many_adults: "too many adults for the room type",
   too_many_persons: "too many persons for the room type",
@@ -229,6 +239,7 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
   for (const r of input.reservations) checkStayRequest(r);
   return withTenant(pool, schema, async (tx) => {
     await lockProperty(tx, propertyId);
+    // TODO(Night Audit ticket): use the property's Business Date instead of its wall-clock date
     const prop = await tx.query<{ today: string }>("select to_char((now() at time zone time_zone)::date, 'YYYY-MM-DD') as today from properties where id = $1", [propertyId]);
     if (!prop.rows[0]) throw new Error("Property not found");
     const today = prop.rows[0].today;
@@ -255,7 +266,8 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
       if (!plan || !plan.room_type_ids.includes(type.id)) throw new Error(`Rate Plan not sold for ${type.code}`);
       if (!plan.public && !sameCode(plan.rate_code, input.rateCode)) throw new Error(`${plan.code} needs its Rate Code`);
       const quote = quoteFor(data, plan, type, r, (d) => taken.get(`${type.id}|${d}`) ?? 0);
-      if (!quote.bookable) throw new Error(`Room ${i + 1} (${type.code}, ${plan.code}): ${quote.reasons.map((x) => REASON_TEXT[x]).join(", ")}`);
+      const blocking = blockingReasons(quote, r.force === true);
+      if (blocking.length) throw new Error(`Room ${i + 1} (${type.code}, ${plan.code}): ${blocking.map((x) => REASON_TEXT[x]).join(", ")}`);
       if (r.expectedTotal !== undefined && Math.abs(r.expectedTotal - quote.total) > 0.005) throw new Error(`Room ${i + 1} (${type.code}, ${plan.code}): the price changed since it was shown; search again`);
       for (const n of quote.nights) taken.set(`${type.id}|${n.date}`, (taken.get(`${type.id}|${n.date}`) ?? 0) + 1);
       return quote;
@@ -279,23 +291,30 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
     const created: { id: string }[] = [];
     for (const [i, r] of input.reservations.entries()) {
       const res = await tx.query<{ id: string }>(
-        `insert into reservations (booking_id, property_id, room_type_id, rate_plan_id, arrival, departure, adults, child_ages, primary_guest_id, created_by)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id`,
-        [bookingId, propertyId, r.roomTypeId, r.ratePlanId, r.arrival, r.departure, r.adults, r.childAges, r.primaryGuestId, userId],
+        `insert into reservations (booking_id, property_id, room_type_id, rate_plan_id, arrival, departure, adults, child_ages, primary_guest_id, created_by, overbooked)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id`,
+        [bookingId, propertyId, r.roomTypeId, r.ratePlanId, r.arrival, r.departure, r.adults, r.childAges, r.primaryGuestId, userId, quotes[i]!.reasons.includes("sold_out")],
       );
       const id = res.rows[0]!.id;
-      const quote = quotes[i]!;
-      await tx.query("insert into reservation_nights (reservation_id, date, total) select $1, unnest($2::date[]), unnest($3::numeric[])", [id, quote.nights.map((n) => n.date), quote.nights.map((n) => n.total)]);
-      const comps = quote.nights.flatMap((n) => n.components.map((c) => ({ date: n.date, ...c })));
-      await tx.query(
-        `insert into reservation_night_components (reservation_id, date, kind, service_id, persons, unit_price, amount)
-         select $1, unnest($2::date[]), unnest($3::text[]), unnest($4::uuid[]), unnest($5::int[]), unnest($6::numeric[]), unnest($7::numeric[])`,
-        [id, comps.map((c) => c.date), comps.map((c) => c.kind), comps.map((c) => c.serviceId), comps.map((c) => c.persons), comps.map((c) => c.unitPrice), comps.map((c) => c.amount)],
-      );
+      await writeNights(tx, id, quotes[i]!.nights);
       created.push({ id });
     }
     return { id: bookingId, confirmationNumber: booking.rows[0]!.confirmation_number, reservations: created };
   });
+}
+
+/** Store nights with their components; replaces what is stored for those dates. */
+export async function writeNights(tx: PoolClient, reservationId: string, nights: QuotedNight[]): Promise<void> {
+  if (nights.length === 0) return;
+  const dates = nights.map((n) => n.date);
+  await tx.query("delete from reservation_nights where reservation_id = $1 and date = any($2::date[])", [reservationId, dates]);
+  await tx.query("insert into reservation_nights (reservation_id, date, total) select $1, unnest($2::date[]), unnest($3::numeric[])", [reservationId, dates, nights.map((n) => n.total)]);
+  const comps = nights.flatMap((n) => n.components.map((c) => ({ date: n.date, ...c })));
+  await tx.query(
+    `insert into reservation_night_components (reservation_id, date, kind, service_id, persons, unit_price, amount)
+     select $1, unnest($2::date[]), unnest($3::text[]), unnest($4::uuid[]), unnest($5::int[]), unnest($6::numeric[]), unnest($7::numeric[])`,
+    [reservationId, comps.map((c) => c.date), comps.map((c) => c.kind), comps.map((c) => c.serviceId), comps.map((c) => c.persons), comps.map((c) => c.unitPrice), comps.map((c) => c.amount)],
+  );
 }
 
 export interface ReservationDetail {
@@ -323,7 +342,14 @@ export interface ReservationDetail {
     rateCodeCompanyName: string | null;
     notes: string;
     reservationIds: string[];
+    /** Confirmed reservations of the booking (cancellable). */
+    openReservations: number;
   };
+  overbooked: boolean;
+  cancelledAt: Date | null;
+  cancellationFee: number | null;
+  cancellationFeeStatus: "open" | "confirmed" | "waived" | null;
+  assignments: { roomId: string; roomName: string; from: string; to: string }[];
   nights: { date: string; total: number; components: { kind: "room" | "service"; serviceId: string | null; serviceCode: string | null; persons: number | null; unitPrice: number; amount: number }[] }[];
   total: number;
   createdAt: Date;
@@ -334,12 +360,13 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
   if (!isUuid(id)) return null;
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query(
-      `select r.id, r.property_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.adults, r.child_ages, r.created_at,
+      `select r.id, r.property_id, r.status, r.overbooked, r.cancelled_at, r.cancellation_fee, r.cancellation_fee_status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.adults, r.child_ages, r.created_at,
          t.id as rt_id, t.code as rt_code, t.name as rt_name, p.id as rp_id, p.code as rp_code, p.name as rp_name, p.meal_plan,
          g.id as g_id, g.first_name, g.last_name,
          b.id as b_id, b.confirmation_number, b.booker_guest_id, b.booker_company_id, b.source, b.walk_in, b.rate_code, b.rate_code_company_id, rc.name as rate_code_company_name, b.notes,
          coalesce(bc.name, trim(bg.first_name || ' ' || bg.last_name)) as booker_name,
-         (select array_agg(x.id order by x.created_at, x.id) from reservations x where x.booking_id = b.id) as reservation_ids
+         (select array_agg(x.id order by x.created_at, x.id) from reservations x where x.booking_id = b.id) as reservation_ids,
+         (select count(*)::int from reservations x where x.booking_id = b.id and x.status = 'confirmed') as open_reservations
        from reservations r
        join room_types t on t.id = r.room_type_id
        join rate_plans p on p.id = r.rate_plan_id
@@ -359,6 +386,10 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
        from reservation_night_components c left join services s on s.id = c.service_id where c.reservation_id = $1 order by c.date, c.kind, s.code`,
       [id],
     );
+    const assigned = await tx.query<{ room_id: string; name: string; from_date: string; to_date: string }>(
+      "select a.room_id, m.number as name, to_char(a.from_date, 'YYYY-MM-DD') as from_date, to_char(a.to_date, 'YYYY-MM-DD') as to_date from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = $1 order by a.from_date",
+      [id],
+    );
     const list = nights.rows.map((n) => ({
       date: n.date,
       total: Number(n.total),
@@ -370,6 +401,11 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
       id: r.id,
       propertyId: r.property_id,
       status: r.status,
+      overbooked: r.overbooked,
+      cancelledAt: r.cancelled_at,
+      cancellationFee: r.cancellation_fee === null ? null : Number(r.cancellation_fee),
+      cancellationFeeStatus: r.cancellation_fee_status,
+      assignments: assigned.rows.map((a) => ({ roomId: a.room_id, roomName: a.name, from: a.from_date, to: a.to_date })),
       arrival: r.arrival,
       departure: r.departure,
       adults: r.adults,
@@ -390,6 +426,7 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
         rateCodeCompanyName: r.rate_code_company_name,
         notes: r.notes,
         reservationIds: r.reservation_ids,
+        openReservations: r.open_reservations,
       },
       nights: list,
       total: Math.round(list.reduce((s, n) => s + n.total, 0) * 100) / 100,

@@ -571,6 +571,11 @@ export const reservations = pgTable(
     primaryGuestId: uuid("primary_guest_id").notNull().references(() => guests.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     createdBy: text("created_by").notNull(),
+    overbooked: boolean("overbooked").notNull().default(false),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledBy: text("cancelled_by"),
+    cancellationFee: numeric("cancellation_fee", { precision: 12, scale: 2 }),
+    cancellationFeeStatus: text("cancellation_fee_status"),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -579,6 +584,8 @@ export const reservations = pgTable(
     check("reservations_dates_check", sql`${t.departure} > ${t.arrival}`),
     check("reservations_adults_check", sql`${t.adults} >= 1`),
     check("reservations_status_check", sql`${t.status} in ('confirmed', 'checked_in', 'checked_out', 'cancelled', 'no_show')`),
+    check("reservations_fee_status_check", sql`${t.cancellationFeeStatus} in ('open', 'confirmed', 'waived')`),
+    check("reservations_fee_pair_check", sql`(${t.cancellationFee} is null) = (${t.cancellationFeeStatus} is null)`),
   ],
 );
 
@@ -610,6 +617,39 @@ export const reservationNightComponents = pgTable(
     check("reservation_night_components_kind_check", sql`${t.kind} in ('room', 'service')`),
     check("reservation_night_components_service_check", sql`(${t.kind} = 'service') = (${t.serviceId} is not null)`),
     check("reservation_night_components_amount_check", sql`${t.amount} >= 0`),
+  ],
+);
+
+export const reservationChanges = pgTable(
+  "reservation_changes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    action: text("action").notNull(),
+    before: jsonb("before").notNull().default({}),
+    after: jsonb("after").notNull().default({}),
+  },
+  (t) => [
+    index("reservation_changes_reservation_idx").on(t.reservationId, t.at.desc()),
+    check("reservation_changes_action_check", sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived')`),
+  ],
+);
+
+export const roomAssignments = pgTable(
+  "room_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    roomId: uuid("room_id").notNull().references(() => rooms.id),
+    fromDate: date("from_date").notNull(),
+    toDate: date("to_date").notNull(),
+  },
+  (t) => [
+    index("room_assignments_reservation_idx").on(t.reservationId, t.fromDate),
+    index("room_assignments_room_idx").on(t.roomId, t.fromDate, t.toDate),
+    check("room_assignments_dates_check", sql`${t.toDate} > ${t.fromDate}`),
   ],
 );
 
@@ -645,4 +685,6 @@ export const tenantSchema = {
   reservations,
   reservationNights,
   reservationNightComponents,
+  reservationChanges,
+  roomAssignments,
 };

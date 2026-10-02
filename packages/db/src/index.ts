@@ -151,3 +151,21 @@ export {
   type StayQuotes,
   type StayRequest,
 } from "./tenant/reservations";
+export {
+  assignRoom,
+  cancelBooking,
+  cancelReservation,
+  listFreeRooms,
+  listOverbooked,
+  moveRoom,
+  previewBookingCancellation,
+  previewCancellation,
+  reservationHistory,
+  setCancellationFeeStatus,
+  unassignRooms,
+  updateReservation,
+  OverbookingNeeded,
+  type OverbookedReservation,
+  type ReservationChange,
+  type ReservationPatch,
+} from "./tenant/reservation-changes";
