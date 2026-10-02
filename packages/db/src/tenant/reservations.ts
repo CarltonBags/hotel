@@ -19,6 +19,7 @@ import { checkDate, isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
 import { loadPlanIndex, toRestriction, type RestrictionRow } from "./rates";
 import { withTenant } from "./with-tenant";
+import { openFolios } from "./folios";
 
 /**
  * Bookings and Reservations (ADR 0003). Availability lives on room types
@@ -296,6 +297,7 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
       );
       const id = res.rows[0]!.id;
       await writeNights(tx, id, quotes[i]!.nights);
+      await openFolios(tx, id, userId);
       created.push({ id });
     }
     return { id: bookingId, confirmationNumber: booking.rows[0]!.confirmation_number, reservations: created };

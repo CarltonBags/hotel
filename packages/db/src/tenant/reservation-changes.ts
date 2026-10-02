@@ -16,6 +16,7 @@ import {
 } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
+import { syncStayCharges } from "./folios";
 import { REASON_TEXT, loadQuoteData, quoteFor, writeNights } from "./reservations";
 import { withTenant } from "./with-tenant";
 
@@ -102,6 +103,16 @@ export interface ReservationPatch {
   roomTypeId?: string | undefined;
 }
 
+export { ShorteningNeedsConfirmation } from "./folios";
+
+export interface ChangeOptions {
+  force?: boolean | undefined;
+  /** In house: a room-type change from this night on (with a room move); earlier nights keep type, price and Charges. */
+  inHouseFrom?: string | undefined;
+  /** A checked-in stay giving up nights: apply the proposed voids and the early-departure fee. */
+  confirmShortening?: boolean | undefined;
+}
+
 /** Thrown when a change needs rooms the room type no longer has; the caller may ask the user and retry with force. */
 export class OverbookingNeeded extends Error {
   constructor() {
@@ -124,7 +135,7 @@ async function trimAssignments(tx: PoolClient, id: string, after: StayShape, roo
 }
 
 /** Everything an edit would do, computed without writing: shared by the edit and its preview. */
-async function planChange(tx: PoolClient, res: ResRow, patch: ReservationPatch) {
+async function planChange(tx: PoolClient, res: ResRow, patch: ReservationPatch, inHouseFrom?: string) {
   const before: StayShape = { arrival: res.arrival, departure: res.departure, adults: res.adults, childAges: res.child_ages, roomTypeId: res.room_type_id };
   const after: StayShape = {
     arrival: patch.arrival !== undefined ? checkDate(patch.arrival) : res.arrival,
@@ -139,9 +150,12 @@ async function planChange(tx: PoolClient, res: ResRow, patch: ReservationPatch) 
   const oldNights = await nightTotals(tx, res.id);
   if (unchanged) return { before, after, roomTypeChanged, unchanged, oldNights, repriced: [], needsOverbooking: false, overbooked: res.overbooked, total: sumTotals(oldNights) };
   if (res.status === "checked_in" && after.arrival !== before.arrival) throw new Error("The arrival of a checked-in guest cannot move");
-  if (res.status === "checked_in" && roomTypeChanged) throw new Error("A checked-in guest changes room type through a room move");
+  if (res.status === "checked_in" && roomTypeChanged && !inHouseFrom) throw new Error("A checked-in guest changes room type through a room move");
   // TODO(Night Audit ticket): use the property's Business Date instead of its wall-clock date
   const today = (await tx.query<{ today: string }>("select to_char((now() at time zone $1)::date, 'YYYY-MM-DD') as today", [res.time_zone])).rows[0]!.today;
+  // in house, nights already slept (and nights before a room-type move) keep their price and Charges
+  const keepBefore = res.status === "checked_in" ? (inHouseFrom && inHouseFrom > today ? inHouseFrom : today) : null;
+  const fromMove = (d: string) => keepBefore === null || d >= keepBefore;
   if (after.arrival !== before.arrival && after.arrival < today) throw new Error("Arrival cannot move into the past");
   if (after.departure !== before.departure && after.departure < today) throw new Error("Departure cannot move into the past");
 
@@ -154,7 +168,7 @@ async function planChange(tx: PoolClient, res: ResRow, patch: ReservationPatch) 
   const quote = quoteFor(data, plan, type, { arrival: after.arrival, departure: after.departure, adults: after.adults, childAges: after.childAges }, () => 0);
 
   const full = (d: string) => type.rooms - data.roomsTaken(type.id, d) <= 0;
-  const reprice = new Set(nightsToReprice(before, after));
+  const reprice = new Set(nightsToReprice(before, after).filter(fromMove));
   const blockers = quote.reasons.filter((x) => EDIT_BLOCKERS.has(x));
   if (blockers.length) throw new Error(blockers.map((x) => REASON_TEXT[x]).join(", "));
   const missingPrice = [...reprice].filter((d) => !quote.nights.some((n) => n.date === d));
@@ -168,9 +182,9 @@ async function planChange(tx: PoolClient, res: ResRow, patch: ReservationPatch) 
     unchanged,
     oldNights,
     repriced,
-    needsOverbooking: nightsNeedingRoom(before, after).some(full),
+    needsOverbooking: nightsNeedingRoom(before, after).filter(fromMove).some(full),
     // the flag follows the stay: past Availability on any of its nights, or not
-    overbooked: nightsOf(after.arrival, after.departure).some(full),
+    overbooked: nightsOf(after.arrival, after.departure).filter(fromMove).some(full),
     total: sumTotals([...keptOld, ...repriced]),
   };
 }
@@ -182,7 +196,7 @@ async function planChange(tx: PoolClient, res: ResRow, patch: ReservationPatch) 
  * kept nights keep their stored price. Nights that fall away are removed, and
  * Room Assignments follow the stay. The overbooked flag is recomputed.
  */
-export async function updateReservation(pool: Pool, schema: string, id: string, userId: string, patch: ReservationPatch, options: { force?: boolean } = {}): Promise<{ overbooked: boolean }> {
+export async function updateReservation(pool: Pool, schema: string, id: string, userId: string, patch: ReservationPatch, options: ChangeOptions = {}): Promise<{ overbooked: boolean }> {
   return withTenant(pool, schema, (tx) => changeIn(tx, id, userId, patch, options));
 }
 
@@ -194,6 +208,9 @@ export async function updateReservation(pool: Pool, schema: string, id: string, 
 export async function changeStayIntoRoom(pool: Pool, schema: string, id: string, userId: string, patch: ReservationPatch, roomId: string, expectedTotal?: number): Promise<void> {
   if (!isUuid(roomId)) throw new Error("Room not found");
   await withTenant(pool, schema, async (tx) => {
+    // a guest in house keeps the rooms of nights slept and confirms a shortening: that goes through the reservation tab
+    const status = (await tx.query<{ status: string }>("select status from reservations where id = $1", [id])).rows[0]?.status;
+    if (status === "checked_in") throw new Error("Change a checked-in stay on its reservation tab");
     await changeIn(tx, id, userId, patch, expectedTotal === undefined ? {} : { expectedTotal });
     const res = await loadForChange(tx, id);
     const before = await segments(tx, res.id);
@@ -203,11 +220,11 @@ export async function changeStayIntoRoom(pool: Pool, schema: string, id: string,
   });
 }
 
-async function changeIn(tx: PoolClient, id: string, userId: string, patch: ReservationPatch, options: { force?: boolean; expectedTotal?: number }): Promise<{ overbooked: boolean }> {
+async function changeIn(tx: PoolClient, id: string, userId: string, patch: ReservationPatch, options: ChangeOptions & { expectedTotal?: number }): Promise<{ overbooked: boolean }> {
   {
     const res = await loadForChange(tx, id);
     requireOpen(res);
-    const change = await planChange(tx, res, patch);
+    const change = await planChange(tx, res, patch, options.inHouseFrom);
     if (change.unchanged) return { overbooked: res.overbooked };
     if (change.needsOverbooking && !options.force) throw new OverbookingNeeded();
     if (options.expectedTotal !== undefined && Math.abs(options.expectedTotal - change.total) > 0.005) throw new Error("The price changed since it was shown; try again");
@@ -224,13 +241,16 @@ async function changeIn(tx: PoolClient, id: string, userId: string, patch: Reser
       after.roomTypeId,
       change.overbooked,
     ]);
-    await trimAssignments(tx, res.id, after, change.roomTypeChanged);
+    // an in-house move writes its own segments right after
+    if (!options.inHouseFrom) await trimAssignments(tx, res.id, after, change.roomTypeChanged);
     await logChange(tx, res.id, userId, "edit", { ...snapshot(res, change.oldNights, oldRooms), ...(res.overbooked ? { overbooked: true } : {}) }, {
       ...after,
       total: sumTotals(await nightTotals(tx, res.id)),
       rooms: await segments(tx, res.id),
       ...(change.overbooked ? { overbooked: true } : {}),
     });
+    // a checked-in stay's Charges follow its nights; giving up nights waits for confirmation (rolls the change back until then)
+    await syncStayCharges(tx, res.id, userId, Boolean(options.confirmShortening));
     return { overbooked: change.overbooked };
   }
 }
@@ -315,6 +335,9 @@ export async function previewCancellation(pool: Pool, schema: string, id: string
 
 async function cancelIn(tx: PoolClient, r: ResRow, userId: string, now: Date): Promise<number> {
   if (r.status !== "confirmed") throw new Error(r.status === "cancelled" ? "The reservation is already cancelled" : "Only a confirmed reservation can be cancelled");
+  // Charges posted ahead of arrival must be voided (or moved) first, so a cancelled stay leaves none open
+  const open = await tx.query("select 1 from charges where reservation_id = $1 and voided_at is null limit 1", [r.id]);
+  if (open.rows.length) throw new Error("The reservation has open Charges; void them before cancelling");
   const fee = await feeFor(tx, r, now);
   await tx.query(
     "update reservations set status = 'cancelled', cancelled_at = $2, cancelled_by = $3, cancellation_fee = $4, cancellation_fee_status = $5 where id = $1",
@@ -371,10 +394,11 @@ async function roomTaken(tx: PoolClient, roomId: string, from: string, to: strin
   return (rowCount ?? 0) > 0;
 }
 
-async function writeSegments(tx: PoolClient, r: ResRow, segs: AssignmentSegment[]): Promise<void> {
+/** `typeFrom`: segments ending by this night are nights already slept in a room of the earlier room type. */
+async function writeSegments(tx: PoolClient, r: ResRow, segs: AssignmentSegment[], typeFrom?: string): Promise<void> {
   for (const s of segs) {
     const room = await tx.query("select 1 from rooms where id = $1 and room_type_id = $2", [s.roomId, r.room_type_id]);
-    if (!room.rowCount) throw new Error("The room must be of the reservation's room type");
+    if (!room.rowCount && !(typeFrom && s.to <= typeFrom)) throw new Error("The room must be of the reservation's room type");
     if (await roomTaken(tx, s.roomId, s.from, s.to, r.id)) throw new Error("The room is taken by another reservation on those nights");
   }
   await tx.query("delete from room_assignments where reservation_id = $1", [r.id]);
@@ -423,20 +447,48 @@ export async function unassignRooms(pool: Pool, schema: string, id: string, user
 }
 
 /** Rooms (by number) of the reservation's type free for its nights from `from` (default: the whole stay), not already its own. */
-export async function listFreeRooms(pool: Pool, schema: string, id: string, from?: string): Promise<{ id: string; name: string }[]> {
+/**
+ * A checked-in guest moves from a night on, possibly into a room of another
+ * room type: the stay changes type from that night, those nights are
+ * repriced and their Charges voided and posted again (syncStayCharges);
+ * earlier nights keep room, price and Charges. One transaction.
+ */
+export async function moveRoomInHouse(pool: Pool, schema: string, id: string, userId: string, roomId: string, fromNight: string, options: { force?: boolean } = {}): Promise<void> {
+  if (!isUuid(roomId)) throw new Error("Room not found");
+  checkDate(fromNight);
+  await withTenant(pool, schema, async (tx) => {
+    const r = await loadForChange(tx, id);
+    if (r.status !== "checked_in") throw new Error("Only a checked-in guest moves this way");
+    const today = (await tx.query<{ today: string }>("select to_char((now() at time zone $1)::date, 'YYYY-MM-DD') as today", [r.time_zone])).rows[0]!.today;
+    if (fromNight < today) throw new Error("Nights already slept cannot move");
+    if (fromNight <= r.arrival || fromNight >= r.departure) throw new Error("Choose a night of the stay after the first");
+    const room = await tx.query<{ room_type_id: string }>("select room_type_id from rooms where id = $1 and property_id = $2", [roomId, r.property_id]);
+    if (!room.rows[0]) throw new Error("Room not found");
+    const newType = room.rows[0].room_type_id;
+    if (newType !== r.room_type_id) await changeIn(tx, id, userId, { roomTypeId: newType }, { inHouseFrom: fromNight, force: options.force });
+    const res = await loadForChange(tx, id);
+    const before = await segments(tx, res.id);
+    const after = splitAssignment(before, roomId, fromNight);
+    await writeSegments(tx, res, after, fromNight);
+    await logChange(tx, res.id, userId, "move_room", { rooms: before }, { rooms: after });
+  });
+}
+
+/** Free rooms of the reservation's room type; `anyType` (a guest in house changing type) lists every type, named "number · type". */
+export async function listFreeRooms(pool: Pool, schema: string, id: string, from?: string, options: { anyType?: boolean } = {}): Promise<{ id: string; name: string }[]> {
   if (!isUuid(id)) return [];
   return withTenant(pool, schema, async (tx) => {
-    const r = (await tx.query<{ room_type_id: string; arrival: string; departure: string }>("select room_type_id, to_char(arrival, 'YYYY-MM-DD') as arrival, to_char(departure, 'YYYY-MM-DD') as departure from reservations where id = $1", [id])).rows[0];
+    const r = (await tx.query<{ room_type_id: string; property_id: string; arrival: string; departure: string }>("select room_type_id, property_id, to_char(arrival, 'YYYY-MM-DD') as arrival, to_char(departure, 'YYYY-MM-DD') as departure from reservations where id = $1", [id])).rows[0];
     if (!r) return [];
     const start = from && from > r.arrival ? from : r.arrival;
     const { rows } = await tx.query<{ id: string; name: string }>(
-      `select m.id, m.number as name from rooms m
-       where m.room_type_id = $1
+      `select m.id, case when $6 then m.number || ' · ' || t.code else m.number end as name from rooms m join room_types t on t.id = m.room_type_id
+       where (m.room_type_id = $1 or ($6 and m.property_id = $7))
          and not exists (select 1 from room_assignments a join reservations x on x.id = a.reservation_id
                          where a.room_id = m.id and a.from_date < $3 and a.to_date > $2 and x.status = any($5::text[]) and x.id <> $4)
          and not exists (select 1 from room_assignments own where own.room_id = m.id and own.reservation_id = $4 and own.from_date < $3 and own.to_date > $2)
-       order by m.number`,
-      [r.room_type_id, start, r.departure, id, OCCUPYING_STATUSES],
+       order by m.room_type_id <> $1, m.number`,
+      [r.room_type_id, start, r.departure, id, OCCUPYING_STATUSES, options.anyType === true, r.property_id],
     );
     return rows;
   });

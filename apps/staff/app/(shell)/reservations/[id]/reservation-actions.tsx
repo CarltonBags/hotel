@@ -49,12 +49,14 @@ export function ReservationActions({ reservation: r, roomTypes, currency, m }: P
   const [children, setChildren] = useState(r.childAges.join(", "));
   const [roomTypeId, setRoomTypeId] = useState(r.roomTypeId);
   const [overbookAsk, setOverbookAsk] = useState(false);
-  const save = (force: boolean) =>
+  const [shortenAsk, setShortenAsk] = useState<{ voids: { serviceDate: string; description: string; amount: number }[]; fee: number } | null>(null);
+  const save = (force: boolean, confirmShortening = false) =>
     startTransition(async () => {
       const ages = children.split(/[,\s]+/).filter(Boolean).map(Number);
-      const res = await editReservationAction(r.id, { arrival, departure, adults: Number(adults), childAges: ages, roomTypeId }, force);
+      const res = await editReservationAction(r.id, { arrival, departure, adults: Number(adults), childAges: ages, roomTypeId }, force, confirmShortening);
       setOverbookAsk(Boolean(res.needsOverbooking));
-      if (res.needsOverbooking) setMessage(null);
+      setShortenAsk(res.shortening ?? null);
+      if (res.needsOverbooking || res.shortening) setMessage(null);
       else done(res);
     });
 
@@ -133,6 +135,28 @@ export function ReservationActions({ reservation: r, roomTypes, currency, m }: P
               </div>
             </div>
           ) : null}
+          {shortenAsk ? (
+            <div role="alertdialog" aria-label={m["res.shortenTitle"]} className="grid gap-2 rounded-xl border border-danger/40 bg-danger/5 p-3 text-sm">
+              <p className="font-medium">{m["res.shortenTitle"]}</p>
+              <p>{m["res.shortenText"]}</p>
+              <ul className="grid gap-0.5">
+                {shortenAsk.voids.map((v, i) => (
+                  <li key={i}>
+                    {v.serviceDate} · {v.description} · {money(v.amount)}
+                  </li>
+                ))}
+              </ul>
+              <p className="font-medium">{shortenAsk.fee > 0 ? fill(m["res.shortenFee"], { fee: money(shortenAsk.fee) }) : m["res.shortenNoFee"]}</p>
+              <div className="flex gap-2">
+                <button type="button" disabled={pending} onClick={() => save(false, true)} className={`${button} bg-danger text-white`}>
+                  {m["res.shortenConfirm"]}
+                </button>
+                <button type="button" onClick={() => setShortenAsk(null)} className={`${button} hover:bg-ink-5`}>
+                  {m["res.keepAsIs"]}
+                </button>
+              </div>
+            </div>
+          ) : null}
           <button type="button" disabled={pending} onClick={() => save(false)} className={`${button} justify-self-start bg-accent text-white disabled:opacity-60`}>
             {pending ? m["action.saving"] : m["action.save"]}
           </button>
@@ -193,7 +217,7 @@ export function ReservationActions({ reservation: r, roomTypes, currency, m }: P
                 <span className="text-danger">{m["res.noFreeRoom"]}</span>
               )
             ) : null}
-            {r.assignments.length ? (
+            {r.assignments.length && r.status !== "checked_in" ? (
               <button type="button" onClick={() => startTransition(async () => done(await unassignAction(r.id)))} className={`${button} hover:bg-ink-5`}>
                 {m["res.unassign"]}
               </button>

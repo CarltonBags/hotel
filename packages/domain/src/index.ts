@@ -111,3 +111,4 @@ export {
 export { CALENDAR_RANGES, dropOutcome, packLanes, type CalendarBar, type CalendarRange, type DropOutcome, type DropRefusal, type DropTarget } from "./calendar";
 export { includesBreakfast, occupancyPercent, personsByMealPlan, sortRows, type PersonsByMealPlan } from "./lists";
 export { DATA_CHANGE_PREFIX, DATA_KINDS, isDataChange, type DataKind } from "./live";
+export { earlyDepartureFee, folioTotals, routeCharge, staySync, type PostedStayCharge, type TaxCodeTotal, type TotalsInput, type WantedStayCharge } from "./folio";

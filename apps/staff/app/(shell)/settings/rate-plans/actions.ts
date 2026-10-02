@@ -82,6 +82,7 @@ export async function saveRatePlan(_prev: FormState, formData: FormData): Promis
       public: flag(formData, "public"),
       rateCode: field(formData, "rateCode") || null,
       companyId: flag(formData, "public") ? null : field(formData, "companyId") || null,
+      accommodationServiceId: field(formData, "accommodationServiceId") || null,
       soldOnChannels: flag(formData, "soldOnChannels"),
       supplements,
       includedServices,

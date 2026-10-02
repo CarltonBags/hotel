@@ -58,6 +58,8 @@ export interface RatePlanInput {
   rateCode?: string | null | undefined;
   /** A Rate Code may attach a Company (rates model); needs a Rate Code. */
   companyId?: string | null | undefined;
+  /** The Service the room part is charged as: its Tax Code and revenue account apply to room Charges. */
+  accommodationServiceId?: string | null | undefined;
   soldOnChannels?: boolean | undefined;
   active?: boolean | undefined;
   sortOrder?: number | undefined;
@@ -90,6 +92,7 @@ export interface RatePlan {
   rateCode: string | null;
   companyId: string | null;
   companyName: string | null;
+  accommodationServiceId: string | null;
   soldOnChannels: boolean;
   active: boolean;
   sortOrder: number;
@@ -125,6 +128,7 @@ interface Row {
   rate_code: string | null;
   company_id: string | null;
   company_name: string | null;
+  accommodation_service_id: string | null;
   sold_on_channels: boolean;
   active: boolean;
   sort_order: number;
@@ -134,7 +138,7 @@ interface Row {
 
 const SELECT = `select p.id, p.property_id, p.code, p.name, p.names, p.descriptions, p.policy_texts, p.kind, p.base_plan_id, b.code as base_plan_code,
     p.derivation_kind, p.derivation_value, p.inherits, p.base_occupancy, p.meal_plan, p.payment_policy_id, p.cancellation_policy_id,
-    p.date_change_allowed, p.early_departure_fee_kind, p.early_departure_fee_percent, p.public, p.rate_code, p.company_id, co.name as company_name, p.sold_on_channels, p.active, p.sort_order,
+    p.date_change_allowed, p.early_departure_fee_kind, p.early_departure_fee_percent, p.public, p.rate_code, p.company_id, co.name as company_name, p.accommodation_service_id, p.sold_on_channels, p.active, p.sort_order,
     coalesce((select array_agg(rt.room_type_id order by t.sort_order, t.code) from rate_plan_room_types rt join room_types t on t.id = rt.room_type_id where rt.rate_plan_id = p.id), '{}') as room_type_ids,
     coalesce((select json_agg(json_build_object('kind', s.kind, 'age_band_id', s.age_band_id, 'age_band_name', ab.name, 'amount', s.amount) order by s.kind, ab.min_age)
               from rate_plan_supplements s left join age_bands ab on ab.id = s.age_band_id where s.rate_plan_id = p.id), '[]'::json) as supplements,
@@ -172,6 +176,7 @@ function toRatePlan(r: Row): RatePlan {
     rateCode: r.rate_code,
     companyId: r.company_id,
     companyName: r.company_name,
+    accommodationServiceId: r.accommodation_service_id,
     soldOnChannels: r.sold_on_channels,
     active: r.active,
     sortOrder: r.sort_order,
@@ -235,6 +240,15 @@ async function checkBasePlan(tx: PoolClient, propertyId: string, basePlanId: str
   const { rows } = await tx.query<{ kind: string }>("select kind from rate_plans where id = $1 and property_id = $2", [basePlanId, propertyId]);
   if (!rows[0]) throw new Error("Base Rate Plan not found at this property");
   if (rows[0].kind !== "base") throw new Error("A derived plan cannot be the parent of another derived plan");
+}
+
+/** Set the accommodation Service of a plan; it must belong to the plan's property. */
+async function setAccommodationService(tx: PoolClient, planId: string, propertyId: string, serviceId: string | null): Promise<void> {
+  if (serviceId) {
+    const found = await tx.query("select 1 from services where id = $1 and property_id = $2", [serviceId, propertyId]);
+    if (!found.rowCount) throw new Error("Accommodation Service not found at this property");
+  }
+  await tx.query("update rate_plans set accommodation_service_id = $2 where id = $1", [planId, serviceId]);
 }
 
 /** Attach (or clear) the Company a plan's Rate Code stands for; Companies are tenant-wide. */
@@ -400,6 +414,7 @@ export async function createRatePlan(pool: Pool, schema: string, input: RatePlan
       throw err;
     }
     await setCompany(tx, id, companyId);
+    await setAccommodationService(tx, id, input.propertyId, input.accommodationServiceId || null);
     await writeChildren(tx, input.propertyId, options.userId ?? "system", id, supplements, includedServices, roomTypeIds);
     if (input.kind === "derived") await rewriteDerivedPlan(tx, input.propertyId, options.userId ?? "system", id);
     const found = await tx.query<Row>(`${SELECT} where p.id = $1`, [id]);
@@ -484,6 +499,7 @@ export async function updateRatePlan(pool: Pool, schema: string, propertyId: str
       throw err;
     }
     await setCompany(tx, id, companyId);
+    await setAccommodationService(tx, id, propertyId, patch.accommodationServiceId !== undefined ? patch.accommodationServiceId || null : cur.accommodationServiceId);
     await writeChildren(tx, propertyId, options.userId ?? "system", id, supplements, includedServices, roomTypeIds);
     if (kind === "derived") {
       // a base plan's entered prices give way to derived ones; log them before they go

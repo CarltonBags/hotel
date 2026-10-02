@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, Printer } from "lucide-react";
 import { MEAL_PLANS, formatDate, sortRows, type Language, type PersonsByMealPlan } from "@hoteloftware/domain";
 import type { ListRow } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
+import { CheckInButton } from "../../reservations/check-in-button";
 
 export type ListKind = "arrivals" | "departures" | "in-house" | "house" | "breakfast";
 
@@ -29,6 +30,7 @@ export function OperationalList({
   nextDate,
   rows,
   breakfastCounts,
+  checkIn = false,
   language,
   m,
 }: {
@@ -40,6 +42,8 @@ export function OperationalList({
   nextDate: string;
   rows: ListRow[];
   breakfastCounts: PersonsByMealPlan | null;
+  /** Arrivals of today with the check-in right: a Check in button on confirmed rows. */
+  checkIn?: boolean;
   language: Language;
   m: Messages;
 }) {
@@ -125,6 +129,7 @@ export function OperationalList({
                   </button>
                 </th>
               ))}
+              {checkIn ? <th className="print:hidden" /> : null}
             </tr>
           </thead>
           <tbody>
@@ -135,12 +140,15 @@ export function OperationalList({
                     {cell(r, c)}
                   </td>
                 ))}
+                {checkIn ? (
+                  <td className="py-2 pr-3 print:hidden">{r.status === "confirmed" ? <CheckInButton reservationId={r.reservationId} label={m["res.checkIn"]} compact /> : null}</td>
+                ) : null}
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr className="text-ink-60">
-              <td className="py-2 pr-3" colSpan={COLUMNS[kind].length}>
+              <td className="py-2 pr-3" colSpan={COLUMNS[kind].length + (checkIn ? 1 : 0)}>
                 {fill(m["lists.total"], { n: String(rows.length), adults: String(totals.adults), children: String(totals.children) })}
               </td>
             </tr>

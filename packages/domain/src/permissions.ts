@@ -85,6 +85,14 @@ export const PROPERTY_ACTIONS = {
   manage_reservations: ["property_manager", "front_desk"],
   /** Matrix "View folio". */
   view_folio: ["property_manager", "front_desk", "accounting"],
+  /** Matrix "Check-in, check-out". */
+  check_in: ["property_manager", "front_desk"],
+  /** Matrix "Post Charge from Service catalogue" (minibar for housekeeping comes with its ticket). */
+  post_charges: ["property_manager", "front_desk", "accounting"],
+  /** Matrix "Post free-text Charge". */
+  post_free_text_charges: ["property_manager"],
+  /** Matrix "Void uninvoiced Charge (reason)", "Move Charge between folios"; adding a Folio and routing go with them. */
+  manage_folios: ["property_manager", "front_desk", "accounting"],
   /** Matrix "Operational lists (house, arrivals, departures, breakfast)"; housekeeping lists come with their tickets. */
   view_operational_lists: ["property_manager", "front_desk"],
   edit_companies: ["property_manager", "front_desk", "accounting"],

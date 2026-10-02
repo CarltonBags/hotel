@@ -239,6 +239,10 @@ _Avoid_: Payer, invoice recipient, debtor
 A sellable item from a property's catalogue, with a default price, tax code and revenue account.
 _Avoid_: Article, product, extra, item
 
+**Accommodation Service**:
+The service a rate plan's room part is charged as, giving room charges their tax code and revenue account.
+_Avoid_: Room service (that is food delivered to a room), room article
+
 **Charge**:
 One service for one service date on a folio, stored as a gross amount with a tax code.
 _Avoid_: Posting, line item, transaction

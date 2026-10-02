@@ -1,15 +1,29 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { can, canAtAnyProperty, formatCurrency, formatDate } from "@hoteloftware/domain";
-import { findProperty, findReservation, listRatePlans, listRoomTypes, listRooms, listTenantUsers, reservationHistory } from "@hoteloftware/db";
+import { can, canAtAnyProperty, formatCurrency, formatDate, todayIn } from "@hoteloftware/domain";
+import {
+  chargeHistory,
+  findProperty,
+  findReservation,
+  listRatePlans,
+  listRoomTypes,
+  listRooms,
+  listServices,
+  listTaxCodes,
+  listTenantUsers,
+  loadFolios,
+  reservationHistory,
+} from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
 import { requireAllowed, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { fill } from "@/i18n/messages";
+import { CheckInButton } from "../check-in-button";
+import { FolioPanel } from "./folio-panel";
 import { ReservationActions } from "./reservation-actions";
 
-/** One Reservation as a record tab: stay, guests, stored nightly prices, folio placeholder. */
+/** One Reservation as a record tab: stay, guests, stored nightly prices, check-in and its folios. */
 export default async function ReservationPage({ params }: { params: Promise<{ id: string }> }) {
   const { tenant } = await requirePrincipal();
   const { id } = await params;
@@ -28,13 +42,29 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
   const guestName = `${r.primaryGuest.firstName} ${r.primaryGuest.lastName}`.trim();
   const others = r.booking.reservationIds.filter((x) => x !== r.id);
   const manage = can(actor, "manage_reservations", r.propertyId);
-  const [allHistory, users, roomTypes, plans, rooms] = await Promise.all([
+  const rights = {
+    checkIn: can(actor, "check_in", r.propertyId),
+    post: can(actor, "post_charges", r.propertyId),
+    freeText: can(actor, "post_free_text_charges", r.propertyId),
+    manage: can(actor, "manage_folios", r.propertyId),
+    companies: canAtAnyProperty(actor, "view_companies"),
+  };
+  // Charges and folio work only while the stay is open
+  const chargeable = r.status === "confirmed" || r.status === "checked_in";
+  const folioRights = { post: rights.post && chargeable, freeText: rights.freeText && chargeable, manage: rights.manage && chargeable, companies: rights.companies };
+  const [allHistory, users, roomTypes, plans, rooms, folios, chargeLog, services, taxCodes] = await Promise.all([
     reservationHistory(pool(), tenant.schemaName, r.id),
     listTenantUsers(pool(), tenant.id),
     listRoomTypes(pool(), tenant.schemaName, r.propertyId),
     manage ? listRatePlans(pool(), tenant.schemaName, r.propertyId, { includeInactive: true }) : Promise.resolve([]),
     listRooms(pool(), tenant.schemaName, r.propertyId),
+    folio ? loadFolios(pool(), tenant.schemaName, r.id) : Promise.resolve({ folios: [], routing: [] }),
+    folio ? chargeHistory(pool(), tenant.schemaName, r.id) : Promise.resolve([]),
+    folioRights.post ? listServices(pool(), tenant.schemaName, r.propertyId) : Promise.resolve([]),
+    folioRights.freeText ? listTaxCodes(pool(), tenant.schemaName, property.legalEntityId) : Promise.resolve([]),
   ]);
+  // TODO(Night Audit ticket): the property's Business Date
+  const today = todayIn(property.timeZone);
   const names = new Map(users.map((u) => [u.id, u.name]));
   // cancellation fees are folio matters: without folio rights the history shows neither fee entries nor amounts
   const history = folio
@@ -54,7 +84,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
     ["roomTypeId", (v) => typeCode.get(String(v)) ?? "?"],
     ["total", (v) => money(Number(v))],
     ["rooms", (v) => (Array.isArray(v) && v.length ? (v as { roomId: string; from: string; to: string }[]).map((x) => `${roomNumber.get(x.roomId) ?? "?"} ${date(x.from)}–${date(x.to)}`).join(", ") : "–")],
-    ["status", (v) => String(v)],
+    ["status", (v) => m[`res.status.${String(v)}` as keyof typeof m] ?? String(v)],
     ["fee", (v) => money(Number(v))],
     ["overbooked", () => m["res.overbooked"]],
   ];
@@ -84,6 +114,12 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         <p>
           {r.roomType.code} · {r.roomType.name} · {r.ratePlan.name} ({m[`rates.mealPlan.${r.ratePlan.mealPlan}`]})
         </p>
+        {r.status === "confirmed" && rights.checkIn && r.arrival <= today && today < r.departure ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <CheckInButton reservationId={r.id} label={m["res.checkIn"]} />
+            <span className="text-xs text-ink-60">{m["res.checkInHelp"]}</span>
+          </div>
+        ) : null}
         {r.assignments.length ? <p>{r.assignments.map((a) => fill(m["res.roomSegment"], { room: a.roomName, from: date(a.from), to: date(a.to) })).join(" · ")}</p> : null}
         <p>
           {fill(m["res.occupancy"], { adults: String(r.adults) })}
@@ -203,10 +239,30 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
       </section>
 
       {folio ? (
-        <section aria-label={m["res.folio"]} className="rounded-2xl border border-dashed border-ink-10 p-5 text-sm text-ink-60">
-          <h2 className="mb-1 font-medium text-ink">{m["res.folio"]}</h2>
-          {m["res.folioSoon"]}
-        </section>
+        <FolioPanel
+          reservationId={r.id}
+          view={folios}
+          services={services.map((s) => ({ id: s.id, label: `${s.code} · ${s.name} · ${money(s.defaultPrice)}` }))}
+          taxCodes={taxCodes.map((t) => ({ id: t.id, label: `${t.code} · ${t.name}` }))}
+          parties={[
+            { kind: "guest" as const, id: r.primaryGuest.id, label: `${guestName} (${m["folio.billTo.guest"]})` },
+            ...(r.booking.bookerCompanyId ? [{ kind: "company" as const, id: r.booking.bookerCompanyId, label: r.booking.bookerName }] : []),
+            ...(r.booking.rateCodeCompanyId && r.booking.rateCodeCompanyId !== r.booking.bookerCompanyId
+              ? [{ kind: "company" as const, id: r.booking.rateCodeCompanyId, label: r.booking.rateCodeCompanyName ?? "" }]
+              : []),
+          ]}
+          log={chargeLog.map((e) => ({
+            at: fmt.format(new Date(e.at)),
+            user: names.get(e.userId) ?? e.userId,
+            action: e.action,
+            description: e.origin === "fee" ? m["folio.earlyDepartureFee"] : e.description,
+            reason: e.detail.auto === "early_departure" || e.detail.auto === "stay_changed" ? m[`folio.autoVoid.${e.detail.auto}`] : typeof e.detail.reason === "string" ? e.detail.reason : null,
+          }))}
+          today={today}
+          rights={folioRights}
+          currency={{ code: property.currency, language, country: property.country }}
+          m={m}
+        />
       ) : null}
     </div>
   );

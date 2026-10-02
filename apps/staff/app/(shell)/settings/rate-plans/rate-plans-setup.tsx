@@ -157,6 +157,15 @@ function PlanForm({ property, plan, ratePlans, roomTypes, ageBands, services, pa
         <Select label={m["rates.paymentPolicy"]} name="paymentPolicyId" options={paymentPolicies.map((p) => ({ value: p.id, label: p.name }))} defaultValue={plan?.paymentPolicyId} />
         <Select label={m["rates.cancellationPolicy"]} name="cancellationPolicyId" options={cancellationPolicies.map((p) => ({ value: p.id, label: p.name }))} defaultValue={plan?.cancellationPolicyId} />
       </div>
+      <div className="grid gap-1">
+        <Select
+          label={m["rates.accommodationService"]}
+          name="accommodationServiceId"
+          options={[{ value: "", label: "–" }, ...services.map((s) => ({ value: s.id, label: `${s.code} · ${s.name} · ${s.taxCodeCode}` }))]}
+          defaultValue={plan?.accommodationServiceId ?? ""}
+        />
+        <p className="text-xs text-ink-60">{m["rates.accommodationServiceHelp"]}</p>
+      </div>
 
       <fieldset className="grid gap-2 rounded-xl border border-ink-10 p-3">
         <legend className="px-1 text-sm text-ink-80">{m["rates.supplements"]}</legend>

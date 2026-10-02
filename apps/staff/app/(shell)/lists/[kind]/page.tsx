@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { DATA_KINDS, addDays, todayIn, isCalendarDate } from "@hoteloftware/domain";
+import { DATA_KINDS, addDays, can, todayIn, isCalendarDate } from "@hoteloftware/domain";
 import { breakfastList, houseList, listArrivals, listDepartures, listInHouse, type BreakfastList, type ListRow } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -25,7 +25,7 @@ export default async function ListPage({ params, searchParams }: { params: Promi
       </div>
     );
   }
-  const { tenant } = await requireAllowed("view_operational_lists", property.id);
+  const { tenant, actor } = await requireAllowed("view_operational_lists", property.id);
   // TODO(Night Audit ticket): default to the open Business Date
   const today = todayIn(property.timeZone);
   const requested = (await searchParams).date;
@@ -53,6 +53,7 @@ export default async function ListPage({ params, searchParams }: { params: Promi
         nextDate={addDays(date, 1)}
         rows={rows}
         breakfastCounts={breakfast?.counts ?? null}
+        checkIn={listKind === "arrivals" && date === today && can(actor, "check_in", property.id)}
         language={shell.language}
         m={m}
       />

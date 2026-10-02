@@ -307,6 +307,7 @@ export const ratePlans = pgTable(
     rateCode: text("rate_code"),
     soldOnChannels: boolean("sold_on_channels").notNull().default(true),
     companyId: uuid("company_id").references((): AnyPgColumn => companies.id),
+    accommodationServiceId: uuid("accommodation_service_id").references(() => services.id),
     active: boolean("active").notNull().default(true),
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -576,6 +577,8 @@ export const reservations = pgTable(
     cancelledBy: text("cancelled_by"),
     cancellationFee: numeric("cancellation_fee", { precision: 12, scale: 2 }),
     cancellationFeeStatus: text("cancellation_fee_status"),
+    checkedInAt: timestamp("checked_in_at", { withTimezone: true }),
+    checkedInBy: text("checked_in_by"),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -633,7 +636,7 @@ export const reservationChanges = pgTable(
   },
   (t) => [
     index("reservation_changes_reservation_idx").on(t.reservationId, t.at.desc()),
-    check("reservation_changes_action_check", sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived')`),
+    check("reservation_changes_action_check", sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in')`),
   ],
 );
 
@@ -651,6 +654,84 @@ export const roomAssignments = pgTable(
     index("room_assignments_room_idx").on(t.roomId, t.fromDate, t.toDate),
     check("room_assignments_dates_check", sql`${t.toDate} > ${t.fromDate}`),
   ],
+);
+
+export const folios = pgTable(
+  "folios",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    number: integer("number").notNull(),
+    billToGuestId: uuid("bill_to_guest_id").references(() => guests.id),
+    billToCompanyId: uuid("bill_to_company_id").references(() => companies.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    unique("folios_reservation_id_number_key").on(t.reservationId, t.number),
+    check("folios_bill_to_check", sql`(${t.billToGuestId} is null) <> (${t.billToCompanyId} is null)`),
+  ],
+);
+
+export const reservationRouting = pgTable(
+  "reservation_routing",
+  {
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+    folioId: uuid("folio_id").notNull().references(() => folios.id),
+  },
+  (t) => [primaryKey({ columns: [t.reservationId, t.category] }), check("reservation_routing_category_check", sql`${t.category} in ('accommodation', 'package', 'extras', 'city_tax')`)],
+);
+
+export const charges = pgTable(
+  "charges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    folioId: uuid("folio_id").notNull().references(() => folios.id),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    serviceId: uuid("service_id").references(() => services.id),
+    description: text("description").notNull(),
+    serviceDate: date("service_date").notNull(),
+    quantity: numeric("quantity", { precision: 10, scale: 2 }).notNull().default("1"),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    taxCodeId: uuid("tax_code_id").notNull().references(() => taxCodes.id),
+    taxRate: numeric("tax_rate", { precision: 5, scale: 2 }).notNull(),
+    revenueAccount: text("revenue_account").notNull().default(""),
+    category: text("category").notNull(),
+    origin: text("origin").notNull(),
+    component: text("component"),
+    postedAt: timestamp("posted_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    postedBy: text("posted_by").notNull(),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedBy: text("voided_by"),
+    voidReason: text("void_reason"),
+    autoVoid: text("auto_void"),
+  },
+  (t) => [
+    index("charges_folio_idx").on(t.folioId),
+    index("charges_reservation_idx").on(t.reservationId, t.serviceDate),
+    index("charges_property_date_idx").on(t.propertyId, t.serviceDate).where(sql`${t.voidedAt} is null`),
+    check("charges_category_check", sql`${t.category} in ('accommodation', 'package', 'extras', 'city_tax')`),
+    check("charges_origin_check", sql`${t.origin} in ('stay', 'catalogue', 'free_text', 'fee')`),
+    check("charges_component_check", sql`(${t.origin} = 'stay') = (${t.component} is not null)`),
+    check("charges_auto_void_check", sql`${t.autoVoid} in ('early_departure', 'stay_changed')`),
+    check("charges_void_check", sql`(${t.voidedAt} is null) = (${t.voidReason} is null) and (${t.voidedAt} is null) = (${t.voidedBy} is null) and (${t.autoVoid} is null or ${t.voidedAt} is not null)`),
+  ],
+);
+
+export const chargeEvents = pgTable(
+  "charge_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    chargeId: uuid("charge_id").notNull().references(() => charges.id),
+    userId: text("user_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    action: text("action").notNull(),
+    detail: jsonb("detail").notNull().default({}),
+  },
+  (t) => [index("charge_events_charge_idx").on(t.chargeId, t.at), check("charge_events_action_check", sql`${t.action} in ('post', 'void', 'move')`)],
 );
 
 export const tenantSchema = {
@@ -687,4 +768,8 @@ export const tenantSchema = {
   reservationNightComponents,
   reservationChanges,
   roomAssignments,
+  folios,
+  reservationRouting,
+  charges,
+  chargeEvents,
 };

@@ -11,6 +11,7 @@ import {
   createGuest,
   listFreeRooms,
   moveRoom,
+  moveRoomInHouse,
   previewBookingCancellation,
   previewCancellation,
   searchCompanies,
@@ -19,6 +20,7 @@ import {
   unassignRooms,
   updateReservation,
   OverbookingNeeded,
+  ShorteningNeedsConfirmation,
   type NewBooking,
 } from "@hoteloftware/db";
 import { authorize, authorizeAnywhere } from "@/lib/authorize";
@@ -106,14 +108,18 @@ export async function createBookingAction(propertyId: string, input: NewBooking)
 export interface EditState extends FormState {
   /** The change needs rooms the room type no longer has; the user may confirm to overbook. */
   needsOverbooking?: boolean;
+  /** A checked-in stay gives up nights: the Charges that would be voided and the early-departure fee, to confirm. */
+  shortening?: { voids: { serviceDate: string; description: string; amount: number }[]; fee: number };
 }
 
 export async function editReservationAction(
   reservationId: string,
   patch: { arrival: string; departure: string; adults: number; childAges: number[]; roomTypeId: string },
   force: boolean,
+  confirmShortening = false,
 ): Promise<EditState> {
   let needsOverbooking = false;
+  let shortening: EditState["shortening"];
   const state = await formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     try {
@@ -129,17 +135,18 @@ export async function editReservationAction(
           childAges: Array.isArray(patch?.childAges) ? patch.childAges.map(Number) : [],
           roomTypeId: String(patch?.roomTypeId),
         },
-        { force: force === true },
+        { force: force === true, confirmShortening: confirmShortening === true },
       );
     } catch (err) {
       if (err instanceof OverbookingNeeded) needsOverbooking = true;
+      if (err instanceof ShorteningNeedsConfirmation) shortening = { voids: err.voids.map((v) => ({ serviceDate: v.serviceDate, description: v.description, amount: v.amount })), fee: err.fee };
       throw err;
     }
     revalidatePath(`/reservations/${reservation.id}`);
     await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Saved." };
   });
-  return { ...state, ...(needsOverbooking ? { needsOverbooking } : {}) };
+  return { ...state, ...(needsOverbooking ? { needsOverbooking } : {}), ...(shortening ? { shortening } : {}) };
 }
 
 export async function previewCancelAction(reservationId: string, whole: boolean): Promise<{ amount: number; deadline: string | null } | { error: string }> {
@@ -172,15 +179,18 @@ export async function feeAction(reservationId: string, status: "confirmed" | "wa
   });
 }
 
+/** Free rooms; a guest in house may move into another room type, so every type is listed for them. */
 export async function freeRoomsAction(reservationId: string, from?: string): Promise<{ id: string; name: string }[]> {
   const { schema, reservation } = await reservationScope(reservationId);
-  return listFreeRooms(pool(), schema, reservation.id, from ? String(from) : undefined);
+  return listFreeRooms(pool(), schema, reservation.id, from ? String(from) : undefined, { anyType: reservation.status === "checked_in" });
 }
 
 export async function assignRoomAction(reservationId: string, roomId: string, from: string | null): Promise<FormState> {
   return formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
-    if (from && reservation.assignments.length) await moveRoom(pool(), schema, reservation.id, userId, String(roomId), String(from));
+    // in house: the move may change the room type, repricing those nights and their Charges
+    if (from && reservation.status === "checked_in") await moveRoomInHouse(pool(), schema, reservation.id, userId, String(roomId), String(from));
+    else if (from && reservation.assignments.length) await moveRoom(pool(), schema, reservation.id, userId, String(roomId), String(from));
     else await assignRoom(pool(), schema, reservation.id, userId, String(roomId));
     revalidatePath(`/reservations/${reservation.id}`);
     await announceReservations(tenantId, reservation.propertyId);
