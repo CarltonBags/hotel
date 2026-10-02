@@ -1,4 +1,4 @@
-# Hoteloftware
+# Hotelsoftware
 
 Multi-tenant hotel property management system. Spec: `CONTEXT.md`, `docs/adr/`, `docs/research/`, `.scratch/hotel-pms-v1/map.md`. Build tickets: `.scratch/hotel-pms-v1-build/`.
 
