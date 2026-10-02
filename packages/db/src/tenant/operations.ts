@@ -53,7 +53,8 @@ interface Row {
  * figure always matches its list. `$D` is the list date.
  */
 const RULES = {
-  arrivals: "r.arrival = $D::date and r.status in ('confirmed', 'checked_in')",
+  // still to arrive: a guest who has checked in is in house, no longer an arrival
+  arrivals: "r.arrival = $D::date and r.status = 'confirmed'",
   departures: "r.departure = $D::date and r.status in ('confirmed', 'checked_in', 'checked_out')",
   inHouse: "r.status = 'checked_in'",
   staying: "r.arrival <= $D::date and r.departure > $D::date and r.status in ('confirmed', 'checked_in')",
@@ -104,7 +105,7 @@ async function list(pool: Pool, schema: string, propertyId: string, roomNight: s
   });
 }
 
-/** Reservations arriving on the date, still to check in or already in. */
+/** Reservations arriving on the date and not yet checked in. */
 export function listArrivals(pool: Pool, schema: string, propertyId: string, date: string): Promise<ListRow[]> {
   return list(pool, schema, propertyId, date, rule("arrivals", "$2"));
 }

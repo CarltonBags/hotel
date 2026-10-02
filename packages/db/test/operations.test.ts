@@ -113,4 +113,12 @@ describe("operational lists", () => {
     const byNumber = await searchReservations(pool, tenant.schemaName, all[0]!.confirmationNumber, [berlin, munich]);
     expect(byNumber.map((r) => r.id)).toEqual([ids.munich]);
   });
+  it("a guest who has checked in leaves the arrivals list and Today's arrivals", async () => {
+    const s = tenant.schemaName;
+    const g = (await createGuest(pool, s, { firstName: "X", lastName: "Arrived" }, { userId: fd, propertyId: berlin })).id;
+    const b = await createBooking(pool, s, berlin, fd, { booker: { guestId: g }, walkIn: false, notes: "", reservations: [{ arrival: "2026-12-10", departure: "2026-12-11", roomTypeId: ids[`${berlin}:type`]!, ratePlanId: ids[`${berlin}:RO`]!, adults: 1, childAges: [], primaryGuestId: g }] });
+    await withTenant(pool, s, (tx) => tx.query("update reservations set status = 'checked_in' where id = $1", [b.reservations[0]!.id]));
+    expect((await listArrivals(pool, s, berlin, "2026-12-10")).map((r) => r.guestLastName)).toEqual(["Arriving"]);
+    expect((await todaySummary(pool, s, berlin, "2026-12-10")).arrivals).toBe(1);
+  });
 });

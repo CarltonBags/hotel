@@ -52,3 +52,5 @@ After check-in, stay Charges follow the stay. Nights already slept keep their pr
 - The property's wall-clock date stands in for the Business Date until Night Audit (TODOs in code).
 - Reservations booked before this ticket get their folios with their first Charge or at check-in.
 - Payments and the balance after payments come with ticket 27, City Tax with its own ticket.
+
+**Follow-up (2026-10-02, owner):** Arrivals list only guests still to arrive (Confirmed). A checked-in guest leaves the list and Today's arrivals count, and is found under In house. The arrivals list no longer has a status column.

@@ -13,7 +13,7 @@ export type ListKind = "arrivals" | "departures" | "in-house" | "house" | "break
 type Column = "room" | "guest" | "persons" | "roomTypeCode" | "arrival" | "departure" | "nights" | "ratePlanName" | "mealPlan" | "status" | "bookerName" | "confirmationNumber";
 
 const COLUMNS: Record<ListKind, Column[]> = {
-  arrivals: ["room", "guest", "persons", "roomTypeCode", "nights", "departure", "ratePlanName", "mealPlan", "bookerName", "status", "confirmationNumber"],
+  arrivals: ["room", "guest", "persons", "roomTypeCode", "nights", "departure", "ratePlanName", "mealPlan", "bookerName", "confirmationNumber"],
   departures: ["room", "guest", "persons", "roomTypeCode", "arrival", "nights", "bookerName", "status", "confirmationNumber"],
   "in-house": ["room", "guest", "persons", "roomTypeCode", "arrival", "departure", "mealPlan", "confirmationNumber"],
   house: ["room", "guest", "persons", "roomTypeCode", "arrival", "departure", "mealPlan", "status", "confirmationNumber"],
