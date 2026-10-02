@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client, Pool } from "pg";
 import { migrateControl, provisionTenant, type Tenant } from "@hoteloftware/db";
 import { controlMigrations, tenantMigrations } from "@hoteloftware/db/migrations";
-import { EVENTS_CHANNEL, notificationsAfter, publishNotification, signEventsToken, verifyEventsToken } from "../src/index";
+import { EVENTS_CHANNEL, isDataChange, notificationsAfter, publishDataChange, publishNotification, signEventsToken, verifyEventsToken } from "../src/index";
 
 /**
  * Seams: the signed token a browser presents to the SSE endpoint, and the
@@ -73,5 +73,14 @@ describe("notifications", () => {
       [mine, "B"],
     ]);
     expect(await notificationsAfter(pool, { tenantId: beta.id, userId: "u3", afterId: 0 })).toHaveLength(1);
+  });
+
+  it("a data change reaches every user of the tenant, names only kind and property, and is no toast", async () => {
+    const before = await publishNotification(pool, { tenantId: alpha.id, userId: "u1", kind: "test", title: "cursor" });
+    const id = await publishDataChange(pool, { tenantId: alpha.id, kind: "reservations", propertyId: "11111111-1111-4111-8111-111111111111" });
+    const [row] = await notificationsAfter(pool, { tenantId: alpha.id, userId: "u2", afterId: before });
+    expect(row).toMatchObject({ id, userId: null, kind: "data.reservations", title: "", body: "11111111-1111-4111-8111-111111111111" });
+    expect(isDataChange(row!.kind)).toBe(true);
+    expect(isDataChange("test")).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import { todayIn, type AssignmentSegment } from "@hoteloftware/domain";
 import { assignRoom, changeStayIntoRoom, findProperty, findReservation, moveRoom, OverbookingNeeded, previewReservationChange, restoreAssignments, type ChangePreview } from "@hoteloftware/db";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
+import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
 
 /** A drop to other nights or another room type. */
@@ -23,7 +24,7 @@ export interface DropResult extends FormState {
 export async function dropOnRoom(reservationId: string, roomId: string, fromNight: string | null): Promise<DropResult> {
   let undo: DropResult["undo"];
   const state = await formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId);
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     const before = reservation.assignments.map((a) => ({ roomId: a.roomId, from: a.from, to: a.to }));
     if (fromNight && before.length) {
       let from = String(fromNight);
@@ -40,15 +41,17 @@ export async function dropOnRoom(reservationId: string, roomId: string, fromNigh
     const now = await findReservation(pool(), schema, reservation.id);
     undo = { reservationId: reservation.id, segments: before, current: (now?.assignments ?? []).map((a) => ({ roomId: a.roomId, from: a.from, to: a.to })) };
     revalidatePath("/calendar");
+    await announceReservations(tenantId, reservation.propertyId);
   });
   return { ...state, ...(undo ? { ok: true, undo } : {}) };
 }
 
 export async function undoDrop(reservationId: string, segments: AssignmentSegment[], current: AssignmentSegment[]): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId);
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     await restoreAssignments(pool(), schema, reservation.id, userId, Array.isArray(segments) ? segments : [], Array.isArray(current) ? current : []);
     revalidatePath("/calendar");
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true };
   });
 }
@@ -66,7 +69,7 @@ export async function previewDrop(reservationId: string, change: StayMove): Prom
 /** After the confirmation: change the stay in place, then put it in the dropped room. */
 export async function applyDrop(reservationId: string, change: StayMove, roomId: string, expectedTotal: number): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId);
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     try {
       await changeStayIntoRoom(pool(), schema, reservation.id, userId, { arrival: String(change?.arrival), departure: String(change?.departure), roomTypeId: String(change?.roomTypeId) }, String(roomId), Number(expectedTotal));
     } catch (err) {
@@ -74,6 +77,7 @@ export async function applyDrop(reservationId: string, change: StayMove, roomId:
       throw err;
     }
     revalidatePath("/calendar");
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Saved." };
   });
 }

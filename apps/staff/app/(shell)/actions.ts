@@ -2,8 +2,8 @@
 
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
-import { isAccentId, isLanguage, isTheme } from "@hoteloftware/domain";
-import { getPreferences, setPinnedTabs, setPreferences, setTenantAccent, type PinnedTab } from "@hoteloftware/db";
+import { can, canAtAnyProperty, isAccentId, isLanguage, isTheme } from "@hoteloftware/domain";
+import { getPreferences, searchGuests, searchReservations, setPinnedTabs, setPreferences, setTenantAccent, type PinnedTab } from "@hoteloftware/db";
 import { MODULE_BY_ID } from "@/shell/registry";
 import { authorize, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -67,4 +67,38 @@ export async function saveTenantAccent(accent: string): Promise<void> {
   await setTenantAccent(pool(), tenant.id, accent);
   (await cookies()).set(ACCENT_COOKIE, accent, { path: "/", maxAge: YEAR, sameSite: "lax" });
   revalidatePath("/", "layout");
+}
+
+export interface SearchHits {
+  reservations: { id: string; confirmationNumber: string; guestName: string; arrival: string; departure: string; propertyId: string; propertyName: string }[];
+  guests: { id: string; name: string }[];
+}
+
+/**
+ * Navbar search across properties: reservations by confirmation number or
+ * guest name at every property where the user may see reservations, and
+ * tenant-wide Guest profiles for users who may see them.
+ */
+export async function globalSearch(query: string): Promise<SearchHits> {
+  const q = String(query ?? "").trim().slice(0, 100);
+  if (q.length < 2) return { reservations: [], guests: [] };
+  const { principal, properties } = await loadShell();
+  const { tenant, actor } = principal;
+  const visible = properties.filter((p) => can(actor, "view_reservations", p.id)).map((p) => p.id);
+  const [reservations, guests] = await Promise.all([
+    searchReservations(pool(), tenant.schemaName, q, visible, 8),
+    canAtAnyProperty(actor, "view_guests") ? searchGuests(pool(), tenant.schemaName, q, { limit: 5 }) : Promise.resolve([]),
+  ]);
+  return {
+    reservations: reservations.map((r) => ({
+      id: r.id,
+      confirmationNumber: r.confirmationNumber,
+      guestName: `${r.guestLastName}, ${r.guestFirstName}`,
+      arrival: r.arrival,
+      departure: r.departure,
+      propertyId: r.propertyId,
+      propertyName: r.propertyName,
+    })),
+    guests: guests.map((g) => ({ id: g.id, name: `${g.lastName}, ${g.firstName}` })),
+  };
 }

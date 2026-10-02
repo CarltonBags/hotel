@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { DATA_KINDS } from "@hoteloftware/domain";
 
 type Queryable = Pool | PoolClient;
 
@@ -43,6 +44,17 @@ export async function publishNotification(db: Queryable, input: NotificationInpu
   const hint: EventHint = { tenantId: input.tenantId, userId: input.userId, id };
   await db.query("select pg_notify($1, $2)", [EVENTS_CHANNEL, JSON.stringify(hint)]);
   return id;
+}
+
+export { DATA_CHANGE_PREFIX, isDataChange } from "@hoteloftware/domain";
+
+/**
+ * Tell every user of the tenant that data of a kind changed at a property, so
+ * open lists can refresh. Carries no personal data: kind and property id only.
+ */
+export function publishDataChange(db: Queryable, input: { tenantId: string; kind: "reservations"; propertyId: string }): Promise<number> {
+  // the property id rides in the body: these rows are tenant-wide and carry no personal data
+  return publishNotification(db, { tenantId: input.tenantId, userId: null, kind: DATA_KINDS[input.kind], title: "", body: input.propertyId });
 }
 
 /** The newest notification id, the starting cursor for a fresh stream. */

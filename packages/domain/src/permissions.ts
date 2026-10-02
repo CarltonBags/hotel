@@ -85,6 +85,8 @@ export const PROPERTY_ACTIONS = {
   manage_reservations: ["property_manager", "front_desk"],
   /** Matrix "View folio". */
   view_folio: ["property_manager", "front_desk", "accounting"],
+  /** Matrix "Operational lists (house, arrivals, departures, breakfast)"; housekeeping lists come with their tickets. */
+  view_operational_lists: ["property_manager", "front_desk"],
   edit_companies: ["property_manager", "front_desk", "accounting"],
 } as const satisfies Record<string, readonly PropertyRole[]>;
 export type PropertyAction = keyof typeof PROPERTY_ACTIONS;

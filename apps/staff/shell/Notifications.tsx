@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Bell, X } from "lucide-react";
+import { isDataChange } from "@hoteloftware/domain";
+import { DATA_EVENT } from "./LiveRefresh";
 import { useShell } from "./ShellProvider";
 
 interface Toast {
@@ -47,6 +49,11 @@ export function Notifications() {
           const msg = e as MessageEvent<string>;
           lastId.current = msg.lastEventId;
           const n = JSON.parse(msg.data) as Toast;
+          // data changes refresh open screens and are no toast
+          if (isDataChange(n.kind)) {
+            window.dispatchEvent(new CustomEvent(DATA_EVENT, { detail: { kind: n.kind, propertyId: n.body } }));
+            return;
+          }
           setToasts((list) => [...list.filter((x) => x.id !== n.id), n].slice(-4));
           setTimeout(() => setToasts((list) => list.filter((x) => x.id !== n.id)), TOAST_MS);
         });
@@ -76,7 +83,7 @@ export function Notifications() {
   }, [tenant.id, user.id]);
 
   return (
-    <div aria-live="polite" aria-label={t("shell.notifications")} className="pointer-events-none fixed right-5 top-20 z-50 flex w-80 flex-col gap-2">
+    <div aria-live="polite" aria-label={t("shell.notifications")} className="pointer-events-none fixed print:hidden right-5 top-20 z-50 flex w-80 flex-col gap-2">
       {offline && WORKER_URL ? <div className="pointer-events-auto rounded-xl bg-surface px-3 py-2 text-[12px] text-ink-60 shadow-pill">{t("shell.liveUpdatesOff")}</div> : null}
       {toasts.map((n) => (
         <div key={n.id} role="status" className="pointer-events-auto flex items-start gap-3 rounded-2xl bg-surface p-3 shadow-pop">

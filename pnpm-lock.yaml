@@ -235,6 +235,9 @@ importers:
       '@hoteloftware/db':
         specifier: workspace:*
         version: link:../db
+      '@hoteloftware/domain':
+        specifier: workspace:*
+        version: link:../domain
       pg:
         specifier: ^8.23.0
         version: 8.23.1

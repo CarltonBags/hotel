@@ -1,15 +1,9 @@
-import { addDays, can, todayIn } from "@hoteloftware/domain";
+import { addDays, can, todayIn, isCalendarDate } from "@hoteloftware/domain";
 import { quoteStays } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { NewReservation } from "./new-reservation";
-
-function isDate(s: string | undefined): s is string {
-  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
-  const t = Date.parse(`${s}T00:00:00Z`);
-  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
-}
 
 /** Child ages typed as "7, 3": whole years 0 to 17. */
 function parseAges(s: string | undefined): number[] | null {
@@ -34,8 +28,8 @@ export default async function NewReservationPage({ searchParams }: { searchParam
   const { tenant, actor } = await requireAllowed("manage_reservations", property.id);
   const sp = await searchParams;
   const today = todayIn(property.timeZone);
-  const arrival = isDate(sp.arrival) ? sp.arrival : today;
-  const departure = isDate(sp.departure) && sp.departure > arrival ? sp.departure : addDays(arrival, 1);
+  const arrival = isCalendarDate(sp.arrival) ? sp.arrival : today;
+  const departure = isCalendarDate(sp.departure) && sp.departure > arrival ? sp.departure : addDays(arrival, 1);
   const adults = Math.min(20, Math.max(0, Number.parseInt(sp.adults ?? "2", 10) || 0));
   const childAges = parseAges(sp.children);
   const rateCode = (sp.rateCode ?? "").trim().slice(0, 50);

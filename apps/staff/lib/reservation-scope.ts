@@ -12,5 +12,5 @@ export async function reservationScope(reservationId: string) {
   const r = await findReservation(pool(), tenant.schemaName, String(reservationId));
   if (!r) throw new Error("Reservation not found");
   const { session } = await authorize("manage_reservations", r.propertyId);
-  return { schema: tenant.schemaName, reservation: r, userId: session.user.id };
+  return { schema: tenant.schemaName, tenantId: tenant.id, reservation: r, userId: session.user.id };
 }

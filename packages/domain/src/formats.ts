@@ -37,3 +37,10 @@ export function formatDateTime(moment: Date, language: Language, country: string
 export function weekStartsOn(): 1 {
   return 1;
 }
+
+/** A real calendar date as YYYY-MM-DD (rejects 2026-02-31); for dates arriving in URLs and forms. */
+export function isCalendarDate(s: string | undefined | null): s is string {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const t = Date.parse(`${s}T00:00:00Z`);
+  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
+}

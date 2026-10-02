@@ -22,6 +22,7 @@ import {
   type NewBooking,
 } from "@hoteloftware/db";
 import { authorize, authorizeAnywhere } from "@/lib/authorize";
+import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
@@ -94,6 +95,7 @@ export async function createBookingAction(propertyId: string, input: NewBooking)
     const { tenant, session } = await authorize("manage_reservations", String(propertyId));
     const booking = await createBooking(pool(), tenant.schemaName, String(propertyId), session.user.id, readBooking(input));
     firstId = booking.reservations[0]!.id;
+    await announceReservations(tenant.id, String(propertyId));
   });
   if (firstId) redirect(`/reservations/${firstId}`);
   return state;
@@ -113,7 +115,7 @@ export async function editReservationAction(
 ): Promise<EditState> {
   let needsOverbooking = false;
   const state = await formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId);
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     try {
       await updateReservation(
         pool(),
@@ -134,6 +136,7 @@ export async function editReservationAction(
       throw err;
     }
     revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Saved." };
   });
   return { ...state, ...(needsOverbooking ? { needsOverbooking } : {}) };
@@ -150,19 +153,21 @@ export async function previewCancelAction(reservationId: string, whole: boolean)
 
 export async function cancelAction(reservationId: string, whole: boolean): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId);
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     if (whole) await cancelBooking(pool(), schema, reservation.booking.id, userId);
     else await cancelReservation(pool(), schema, reservation.id, userId);
     for (const id of reservation.booking.reservationIds) revalidatePath(`/reservations/${id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Cancelled." };
   });
 }
 
 export async function feeAction(reservationId: string, status: "confirmed" | "waived"): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId);
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     await setCancellationFeeStatus(pool(), schema, reservation.id, userId, status === "confirmed" ? "confirmed" : "waived");
     revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Saved." };
   });
 }
@@ -174,19 +179,21 @@ export async function freeRoomsAction(reservationId: string, from?: string): Pro
 
 export async function assignRoomAction(reservationId: string, roomId: string, from: string | null): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId);
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     if (from && reservation.assignments.length) await moveRoom(pool(), schema, reservation.id, userId, String(roomId), String(from));
     else await assignRoom(pool(), schema, reservation.id, userId, String(roomId));
     revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Saved." };
   });
 }
 
 export async function unassignAction(reservationId: string): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId);
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
     await unassignRooms(pool(), schema, reservation.id, userId);
     revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Saved." };
   });
 }
