@@ -1,80 +1,42 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { can, canAtAnyProperty, formatCurrency, formatDate, todayIn } from "@hoteloftware/domain";
-import {
-  chargeHistory,
-  findProperty,
-  findReservation,
-  listRatePlans,
-  listRoomTypes,
-  listRooms,
-  listServices,
-  listTaxCodes,
-  listTenantUsers,
-  loadFolios,
-  reservationHistory,
-} from "@hoteloftware/db";
+import { formatDate } from "@hoteloftware/domain";
+import { listRooms, reservationHistory } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
-import { requireAllowed, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
-import { loadShell } from "@/lib/shell";
+import { reservationView } from "@/lib/reservation-view";
+import { requirePrincipal } from "@/lib/authorize";
 import { fill } from "@/i18n/messages";
 import { CheckInButton } from "../check-in-button";
+import { FixedCharges } from "./fixed-charges";
 import { FolioPanel } from "./folio-panel";
+import { RegistrationStatus } from "./guest-details";
+import { GuestDrawerButton } from "./guest-drawer-button";
 import { ReservationActions } from "./reservation-actions";
 
 /** One Reservation as a record tab: stay, guests, stored nightly prices, check-in and its folios. */
 export default async function ReservationPage({ params }: { params: Promise<{ id: string }> }) {
   const { tenant } = await requirePrincipal();
   const { id } = await params;
-  const r = await findReservation(pool(), tenant.schemaName, id);
-  if (!r) notFound();
-  const { actor } = await requireAllowed("view_reservations", r.propertyId);
-  const { messages: m, language } = await loadShell();
-  const property = (await findProperty(pool(), tenant.schemaName, r.propertyId))!;
-  const money = (v: number) => formatCurrency(v, property.currency, language, property.country);
+  const v = await reservationView(id);
+  if (!v) notFound();
+  const { r, property, m, language, rights, today, names, fmt, money, guestName } = v;
   // calendar dates: format at noon UTC so no zone shifts the day
   const date = (d: string) => formatDate(new Date(`${d}T12:00:00Z`), language, property.country, "UTC");
-  const guestLinks = canAtAnyProperty(actor, "view_guests");
-  const folio = can(actor, "view_folio", r.propertyId);
+  const guestLinks = rights.guests;
+  const folio = rights.folio;
   // notes may carry contact details; Revenue sees reservations without them (matrix)
-  const notes = can(actor, "view_guest_contacts", r.propertyId);
-  const guestName = `${r.primaryGuest.firstName} ${r.primaryGuest.lastName}`.trim();
+  const notes = rights.contacts;
   const others = r.booking.reservationIds.filter((x) => x !== r.id);
-  const manage = can(actor, "manage_reservations", r.propertyId);
-  const rights = {
-    checkIn: can(actor, "check_in", r.propertyId),
-    post: can(actor, "post_charges", r.propertyId),
-    freeText: can(actor, "post_free_text_charges", r.propertyId),
-    manage: can(actor, "manage_folios", r.propertyId),
-    companies: canAtAnyProperty(actor, "view_companies"),
-  };
-  // Charges and folio work only while the stay is open
-  const chargeable = r.status === "confirmed" || r.status === "checked_in";
-  const folioRights = { post: rights.post && chargeable, freeText: rights.freeText && chargeable, manage: rights.manage && chargeable, companies: rights.companies };
-  const [allHistory, users, roomTypes, plans, rooms, folios, chargeLog, services, taxCodes] = await Promise.all([
-    reservationHistory(pool(), tenant.schemaName, r.id),
-    listTenantUsers(pool(), tenant.id),
-    listRoomTypes(pool(), tenant.schemaName, r.propertyId),
-    manage ? listRatePlans(pool(), tenant.schemaName, r.propertyId, { includeInactive: true }) : Promise.resolve([]),
-    listRooms(pool(), tenant.schemaName, r.propertyId),
-    folio ? loadFolios(pool(), tenant.schemaName, r.id) : Promise.resolve({ folios: [], routing: [] }),
-    folio ? chargeHistory(pool(), tenant.schemaName, r.id) : Promise.resolve([]),
-    folioRights.post ? listServices(pool(), tenant.schemaName, r.propertyId) : Promise.resolve([]),
-    folioRights.freeText ? listTaxCodes(pool(), tenant.schemaName, property.legalEntityId) : Promise.resolve([]),
-  ]);
-  // TODO(Night Audit ticket): the property's Business Date
-  const today = todayIn(property.timeZone);
-  const names = new Map(users.map((u) => [u.id, u.name]));
+  const manage = rights.manage;
+  const [allHistory, rooms] = await Promise.all([reservationHistory(pool(), tenant.schemaName, r.id), listRooms(pool(), tenant.schemaName, r.propertyId)]);
   // cancellation fees are folio matters: without folio rights the history shows neither fee entries nor amounts
   const history = folio
     ? allHistory
     : allHistory
         .filter((h) => h.action !== "fee_confirmed" && h.action !== "fee_waived")
         .map((h) => ({ ...h, before: Object.fromEntries(Object.entries(h.before).filter(([k]) => k !== "fee")), after: Object.fromEntries(Object.entries(h.after).filter(([k]) => k !== "fee")) }));
-  const plan = plans.find((p) => p.id === r.ratePlan.id);
-  const fmt = new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: property.timeZone });
-  const typeCode = new Map(roomTypes.map((t) => [t.id, t.code]));
+  const typeCode = new Map(v.roomTypes.map((t) => [t.id, t.code]));
   const roomNumber = new Map(rooms.map((x) => [x.id, x.number]));
   const FIELDS: [string, (v: unknown) => string][] = [
     ["arrival", (v) => date(String(v))],
@@ -87,6 +49,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
     ["status", (v) => m[`res.status.${String(v)}` as keyof typeof m] ?? String(v)],
     ["fee", (v) => money(Number(v))],
     ["overbooked", () => m["res.overbooked"]],
+    ["notes", (v) => (String(v) ? `“${String(v)}”` : "–")],
   ];
   // one readable line per side of a change: known fields in a fixed order
   const describe = (v: Record<string, unknown>) =>
@@ -141,7 +104,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         </p>
         <p>
           {m["res.booker"]}:{" "}
-          {r.booking.bookerCompanyId && canAtAnyProperty(actor, "view_companies") ? (
+          {r.booking.bookerCompanyId && rights.companies ? (
             <Link href={`/companies/${r.booking.bookerCompanyId}`} className="underline">
               {r.booking.bookerName}
             </Link>
@@ -166,6 +129,16 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
           </p>
         ) : null}
       </section>
+
+      {v.guest ? (
+        <section aria-label={m["res.guestDetails"]} className="grid gap-2 rounded-2xl bg-surface-2 p-5 text-sm">
+          <h2 className="font-medium">
+            {m["res.guestDetails"]} · {guestName}
+          </h2>
+          <RegistrationStatus gaps={v.registration.gaps} m={m} />
+          <GuestDrawerButton guest={{ id: v.guest.id, label: `${v.guest.lastName}, ${v.guest.firstName}` }} propertyCountry={property.country} m={m} />
+        </section>
+      ) : null}
 
       <section aria-label={m["res.prices"]} className="rounded-2xl bg-surface-2 p-5 text-sm">
         <h2 className="mb-2 font-medium">{m["res.prices"]}</h2>
@@ -199,25 +172,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
       </section>
 
       {manage ? (
-        <ReservationActions
-          reservation={{
-            id: r.id,
-            status: r.status,
-            arrival: r.arrival,
-            departure: r.departure,
-            adults: r.adults,
-            childAges: r.childAges,
-            roomTypeId: r.roomType.id,
-            nights: r.nights.map((n) => n.date),
-            assignments: r.assignments,
-            cancellationFee: r.cancellationFee,
-            cancellationFeeStatus: r.cancellationFeeStatus,
-            openInBooking: r.booking.openReservations,
-          }}
-          roomTypes={roomTypes.filter((t) => plan?.roomTypeIds.includes(t.id) ?? t.id === r.roomType.id).map((t) => ({ id: t.id, label: `${t.code} · ${t.name}` }))}
-          currency={{ code: property.currency, language, country: property.country }}
-          m={m}
-        />
+        <ReservationActions {...v.actionsProps} m={m} />
       ) : null}
 
       <section aria-label={m["res.history"]} className="rounded-2xl bg-surface-2 p-5 text-sm">
@@ -239,30 +194,26 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
       </section>
 
       {folio ? (
-        <FolioPanel
-          reservationId={r.id}
-          view={folios}
-          services={services.map((s) => ({ id: s.id, label: `${s.code} · ${s.name} · ${money(s.defaultPrice)}` }))}
-          taxCodes={taxCodes.map((t) => ({ id: t.id, label: `${t.code} · ${t.name}` }))}
-          parties={[
-            { kind: "guest" as const, id: r.primaryGuest.id, label: `${guestName} (${m["folio.billTo.guest"]})` },
-            ...(r.booking.bookerCompanyId ? [{ kind: "company" as const, id: r.booking.bookerCompanyId, label: r.booking.bookerName }] : []),
-            ...(r.booking.rateCodeCompanyId && r.booking.rateCodeCompanyId !== r.booking.bookerCompanyId
-              ? [{ kind: "company" as const, id: r.booking.rateCodeCompanyId, label: r.booking.rateCodeCompanyName ?? "" }]
-              : []),
-          ]}
-          log={chargeLog.map((e) => ({
-            at: fmt.format(new Date(e.at)),
-            user: names.get(e.userId) ?? e.userId,
-            action: e.action,
-            description: e.origin === "fee" ? m["folio.earlyDepartureFee"] : e.description,
-            reason: e.detail.auto === "early_departure" || e.detail.auto === "stay_changed" ? m[`folio.autoVoid.${e.detail.auto}`] : typeof e.detail.reason === "string" ? e.detail.reason : null,
-          }))}
-          today={today}
-          rights={folioRights}
-          currency={{ code: property.currency, language, country: property.country }}
-          m={m}
-        />
+        <FolioPanel {...v.folioProps} m={m} />
+      ) : null}
+      {folio ? (
+        <details open={v.fixedCharges.length > 0} className="rounded-2xl bg-surface-2 p-5 text-sm">
+          <summary className="cursor-pointer font-medium">{m["fixed.title"]}</summary>
+          <div className="mt-3">
+            <FixedCharges
+              // new stay dates: the form's default range follows them
+              key={`${r.arrival}|${r.departure}`}
+              reservationId={r.id}
+              arrival={r.arrival}
+              departure={r.departure}
+              items={v.fixedCharges}
+              services={v.serviceOptions}
+              rights={{ add: rights.post, remove: rights.manageFolios }}
+              currency={v.currency}
+              m={m}
+            />
+          </div>
+        </details>
       ) : null}
     </div>
   );

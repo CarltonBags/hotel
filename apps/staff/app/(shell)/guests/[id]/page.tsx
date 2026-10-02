@@ -3,7 +3,7 @@ import { can } from "@hoteloftware/domain";
 import Link from "next/link";
 import { findGuest, findGuestDuplicates, guestHistory, listGuestMerges, listGuestReservations, listProperties, listTenantUsers, searchGuests } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
-import { requireAllowedAnywhere } from "@/lib/authorize";
+import { requireAllowedAnywhere, workingPropertyId } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { fill } from "@/i18n/messages";
@@ -31,8 +31,11 @@ export default async function GuestPage({ params, searchParams }: { params: Prom
   ]);
   const names = new Map(users.map((u) => [u.id, u.name]));
   // reservations only at properties where the user may see reservations
-  const stays = allStays.filter((s) => can(actor, "view_reservations", s.propertyId));
-  const createdAt = properties.find((p) => p.id === stored.createdPropertyId)?.name ?? null;
+  // the front office sees its working property only
+  const working = await workingPropertyId();
+  const visible = (propertyId: string | null) => propertyId !== null && (working === null || working === propertyId);
+  const stays = allStays.filter((s) => visible(s.propertyId) && can(actor, "view_reservations", s.propertyId));
+  const createdAt = visible(stored.createdPropertyId) ? (properties.find((p) => p.id === stored.createdPropertyId)?.name ?? null) : null;
   const fmt = new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "medium", timeStyle: "short" });
   const title = `${guest.firstName} ${guest.lastName}`.trim();
   return (

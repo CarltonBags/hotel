@@ -22,6 +22,7 @@ import {
   previewCancellation,
   reservationHistory,
   setCancellationFeeStatus,
+  updateBookingNotes,
   updateReservation,
 } from "../src/tenant/reservation-changes";
 import { resetTestDatabase, testPool } from "./helpers";
@@ -170,5 +171,10 @@ describe("reservation changes", () => {
     const result = await cancelBooking(pool, tenant.schemaName, b.id, fd, { now: new Date("2026-11-01T00:00:00Z") });
     expect(result.cancelled).toBe(2);
     for (const r of b.reservations) expect((await findReservation(pool, tenant.schemaName, r.id))!).toMatchObject({ status: "cancelled", cancellationFee: null });
+  });
+  it("booking notes change from a reservation and are logged there", async () => {
+    await updateBookingNotes(pool, tenant.schemaName, resId, fd, "  Late arrival, around 23:00 ");
+    expect((await findReservation(pool, tenant.schemaName, resId))!.booking.notes).toBe("Late arrival, around 23:00");
+    expect((await reservationHistory(pool, tenant.schemaName, resId))[0]).toMatchObject({ action: "edit", before: { notes: "" }, after: { notes: "Late arrival, around 23:00" } });
   });
 });

@@ -14,13 +14,16 @@ import {
   moveRoomInHouse,
   previewBookingCancellation,
   previewCancellation,
+  findGuest,
   searchCompanies,
   searchGuests,
   setCancellationFeeStatus,
   unassignRooms,
+  updateBookingNotes,
   updateReservation,
   OverbookingNeeded,
   ShorteningNeedsConfirmation,
+  type Guest,
   type NewBooking,
 } from "@hoteloftware/db";
 import { authorize, authorizeAnywhere } from "@/lib/authorize";
@@ -206,4 +209,27 @@ export async function unassignAction(reservationId: string): Promise<FormState> 
     await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Saved." };
   });
+}
+
+export async function notesAction(reservationId: string, notes: string): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId);
+    await updateBookingNotes(pool(), schema, reservation.id, userId, String(notes ?? "").slice(0, 2000));
+    for (const id of reservation.booking.reservationIds) revalidatePath(`/reservations/${id}`);
+    revalidatePath("/");
+    await announceReservations(tenantId, reservation.propertyId);
+    return { ok: true, message: "Saved." };
+  });
+}
+
+/** One guest's full profile for the side drawer, with what the user may see and change. */
+export async function guestForDrawer(guestId: string): Promise<{ guest: Guest; contacts: boolean; canEdit: boolean } | { error: string }> {
+  let out: { guest: Guest; contacts: boolean; canEdit: boolean } | undefined;
+  const state = await formAction(async () => {
+    const { tenant, actor } = await authorizeAnywhere("view_guests");
+    const guest = await findGuest(pool(), tenant.schemaName, String(guestId));
+    if (!guest) throw new Error("Guest not found");
+    out = { guest, contacts: canAtAnyProperty(actor, "view_guest_contacts"), canEdit: canAtAnyProperty(actor, "edit_guests") };
+  });
+  return out ?? { error: state.error ?? "Something went wrong." };
 }

@@ -62,6 +62,7 @@ Proposed by the agent from hotel trade usage, 2026-09-30. Status: confirmed by t
 | Service | Leistung |  |
 | Charge | Buchungsposten |  |
 | Accommodation Service | Logis-Leistung | proposed with ticket 26, not yet confirmed by the owner |
+| Fixed Charge | Fixleistung | proposed with ticket 96, not yet confirmed by the owner |
 | Service Date | Leistungsdatum |  |
 | Tax Code | Steuerschlüssel |  |
 | Posting Rhythm | Buchungsrhythmus |  |

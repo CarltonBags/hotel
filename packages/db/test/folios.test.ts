@@ -16,7 +16,7 @@ import { createGuest } from "../src/tenant/guests";
 import { createCompany } from "../src/tenant/companies";
 import { createBooking } from "../src/tenant/reservations";
 import { assignRoom, cancelReservation, listFreeRooms, moveRoomInHouse, ShorteningNeedsConfirmation, updateReservation } from "../src/tenant/reservation-changes";
-import { addFolio, checkIn, chargeHistory, loadFolios, moveCharge, postFreeTextCharge, postServiceCharge, voidCharge } from "../src/tenant/folios";
+import { addFixedCharge, addFolio, checkIn, chargeHistory, listFixedCharges, loadFolios, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, voidCharge } from "../src/tenant/folios";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -209,8 +209,43 @@ describe("check-in and folios", () => {
     await expect(cancelReservation(pool, s, other, fd)).resolves.toBeTruthy();
   });
 
+  it("a Fixed Charge posts night by night at check-in and follows the stay", async () => {
+    const s = tenant.schemaName;
+    const codes = await listTaxCodes(pool, s, (await pool.query(`select legal_entity_id from ${s}.properties where id = $1`, [berlin])).rows[0].legal_entity_id);
+    const parking = await createService(pool, s, { propertyId: berlin, code: "PARK", name: "Parking", defaultPrice: 10, taxCodeId: codes.find((c) => c.code === "STD")!.id, revenueAccount: "8420", postingRhythm: "per_night", bookableOnline: false });
+    const b = await createBooking(pool, s, berlin, fd, { booker: { guestId: guest }, walkIn: false, notes: "", reservations: [{ arrival: today, departure: day(3), roomTypeId: dbl, ratePlanId: bar.id, adults: 2, childAges: [], primaryGuestId: guest }] });
+    const id = b.reservations[0]!.id;
+    await addFixedCharge(pool, s, id, { serviceId: parking.id, from: today, to: day(3) }, fd);
+    expect(await listFixedCharges(pool, s, id)).toMatchObject([{ serviceName: "Parking", from: today, to: day(3), quantity: 1, unitPrice: 10 }]);
+    await assignRoom(pool, s, id, fd, rooms[1]!.id);
+    await checkIn(pool, s, id, fd);
+    const parkingNights = async () =>
+      (await loadFolios(pool, s, id)).folios.flatMap((f) => f.charges).filter((c) => c.description === "Parking" && !c.voided).map((c) => c.serviceDate).sort();
+    expect(await parkingNights()).toEqual([day(0), day(1), day(2)]);
+    // shortening: the fee is the night's price only (150), parking is not part of it
+    let proposal: ShorteningNeedsConfirmation | null = null;
+    await updateReservation(pool, s, id, fd, { departure: day(2) }).catch((e) => (proposal = e));
+    expect(proposal!.fee).toBe(150);
+    await updateReservation(pool, s, id, fd, { departure: day(2) }, { confirmShortening: true });
+    expect(await parkingNights()).toEqual([day(0), day(1)]);
+    // extending again: the Fixed Charge ran to the end of the stay, so it does again
+    await updateReservation(pool, s, id, fd, { departure: day(3) });
+    expect(await parkingNights()).toEqual([day(0), day(1), day(2)]);
+    // a Fixed Charge for the last night only goes when the stay no longer has that night; the change itself goes through
+    await addFixedCharge(pool, s, id, { serviceId: parking.id, from: day(2), to: day(3), quantity: 2 }, fd);
+    await updateReservation(pool, s, id, fd, { departure: day(2) }, { confirmShortening: true });
+    expect((await listFixedCharges(pool, s, id)).map((f) => [f.from, f.to, f.quantity])).toEqual([[today, day(2), 1]]);
+    // removing it voids the nights from today on
+    const [fixed] = await listFixedCharges(pool, s, id);
+    await removeFixedCharge(pool, s, id, fixed!.id, fd);
+    expect(await parkingNights()).toEqual([]);
+  });
+
   it("staff add Folios with another Bill-to", async () => {
     const folio = await addFolio(pool, tenant.schemaName, res, { guestId: guest }, fd);
     expect(folio.number).toBe(3);
+    // company billing: Acme's accommodation routing moves to its new folio
+    const acmeFolio = await addFolio(pool, tenant.schemaName, res, { companyId: acme }, fd);
+    expect((await loadFolios(pool, tenant.schemaName, res)).routing).toEqual([{ category: "accommodation", folioId: acmeFolio.id }]);
   });
 });

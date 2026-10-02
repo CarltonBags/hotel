@@ -1,21 +1,26 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
-import { ACCENTS, defaultQuickAccess, type Language, type Theme } from "@hoteloftware/domain";
+import { ACCENTS, defaultQuickAccess, isFrontOfficeOnly, type Language, type Theme } from "@hoteloftware/domain";
 import { getPreferences, getWorkspace, type PinnedTab, type Preferences, type Property } from "@hoteloftware/db";
 import { messagesFor, type Messages } from "@/i18n/messages";
-import { accessibleProperties, requirePrincipal, type Principal } from "./authorize";
+import { SCOPE_COOKIE, accessibleProperties, requirePrincipal, workingPropertyId, type Principal } from "./authorize";
 import { pool } from "./db";
 
-export const SCOPE_COOKIE = "hs_scope";
+export { SCOPE_COOKIE };
 export const THEME_COOKIE = "hs_theme";
 export const ACCENT_COOKIE = "hs_accent";
 export const LANGUAGE_COOKIE = "hs_lang";
 
 export interface ShellData {
   principal: Principal;
+  /** The properties the shell shows: for front-office users only the one they work in. */
   properties: Property[];
-  /** "all" or a property id the user may open. */
+  /** "all", a property id the user may open, or "" while a front-office user has yet to choose one. */
   scope: string;
+  /** Front-office roles only: one property at a time, no "All properties" (ticket 96). */
+  frontOffice: boolean;
+  /** Properties a front-office user may change to, from the user menu (empty with one property or for other users). */
+  propertyChoices: Property[];
   preferences: Preferences;
   quickAccess: string[];
   pinnedTabs: PinnedTab[];
@@ -28,15 +33,26 @@ export interface ShellData {
 /** Everything the shell needs for one request, loaded once. */
 export const loadShell = cache(async (): Promise<ShellData> => {
   const principal = await requirePrincipal();
-  const properties = await accessibleProperties();
+  const available = await accessibleProperties();
   const jar = await cookies();
   const requested = jar.get(SCOPE_COOKIE)?.value;
-  const scope =
-    properties.length === 1
-      ? properties[0]!.id
-      : requested && (requested === "all" || properties.some((p) => p.id === requested))
-        ? requested
-        : "all";
+  const frontOffice = isFrontOfficeOnly(principal.actor);
+  let properties = available;
+  let scope: string;
+  if (frontOffice) {
+    // the front office sees the property it works in, chosen after sign-in when it has several
+    const working = await workingPropertyId();
+    const current = available.find((p) => p.id === working);
+    properties = current ? [current] : [];
+    scope = current?.id ?? "";
+  } else {
+    scope =
+      available.length === 1
+        ? available[0]!.id
+        : requested && (requested === "all" || available.some((p) => p.id === requested))
+          ? requested
+          : "all";
+  }
   const [preferences, workspace] = await Promise.all([
     getPreferences(pool(), principal.session.user.id),
     getWorkspace(pool(), principal.session.user.id, scope),
@@ -46,6 +62,8 @@ export const loadShell = cache(async (): Promise<ShellData> => {
     principal,
     properties,
     scope,
+    frontOffice,
+    propertyChoices: frontOffice && available.length > 1 ? available : [],
     preferences,
     quickAccess: preferences.quickAccess ?? defaultQuickAccess(principal.actor, properties.map((p) => p.id)),
     pinnedTabs: workspace.pinnedTabs,

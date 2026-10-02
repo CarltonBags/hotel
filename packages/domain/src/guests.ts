@@ -7,17 +7,26 @@
 export const DOCUMENT_TYPES = ["passport", "id_card", "driving_licence", "other"] as const;
 export type DocumentType = (typeof DOCUMENT_TYPES)[number];
 
+export const SALUTATIONS = ["mr", "ms", "mx"] as const;
+export type Salutation = (typeof SALUTATIONS)[number];
+
 export interface GuestData {
+  salutation: Salutation | null;
   firstName: string;
   lastName: string;
   /** YYYY-MM-DD */
   dateOfBirth: string | null;
+  /** Needed for Swiss registration (federal minimum) */
+  placeOfBirth: string | null;
   /** ISO 3166 alpha-2 */
   nationality: string | null;
   countryOfResidence: string | null;
   postalCode: string | null;
   addressLine1: string;
+  addressLine2: string;
   city: string;
+  /** Region or state, where the country uses one */
+  region: string;
   email: string | null;
   phone: string | null;
   /** Language for guest communication */
@@ -62,7 +71,7 @@ const empty = (v: unknown) => v === null || v === undefined || (typeof v === "st
  */
 export function mergeGuestData(keep: GuestData, other: GuestData): GuestData {
   const out: GuestData = { ...keep };
-  const simple: (keyof GuestData)[] = ["firstName", "lastName", "dateOfBirth", "nationality", "countryOfResidence", "postalCode", "addressLine1", "city", "email", "phone", "language"];
+  const simple: (keyof GuestData)[] = ["salutation", "firstName", "lastName", "dateOfBirth", "placeOfBirth", "nationality", "countryOfResidence", "postalCode", "addressLine1", "addressLine2", "city", "region", "email", "phone", "language"];
   for (const k of simple) if (empty(out[k]) && !empty(other[k])) (out as unknown as Record<string, unknown>)[k] = other[k];
   const prefs = [keep.preferences.trim(), other.preferences.trim()].filter((p, i, all) => p !== "" && all.indexOf(p) === i);
   out.preferences = prefs.join("\n");
@@ -83,14 +92,18 @@ export function mergeGuestData(keep: GuestData, other: GuestData): GuestData {
 
 /** A profile with nothing filled in; the starting point for new profiles and forms. */
 export const EMPTY_GUEST: GuestData = {
+  salutation: null,
   firstName: "",
   lastName: "",
   dateOfBirth: null,
+  placeOfBirth: null,
   nationality: null,
   countryOfResidence: null,
   postalCode: null,
   addressLine1: "",
+  addressLine2: "",
   city: "",
+  region: "",
   email: null,
   phone: null,
   language: null,

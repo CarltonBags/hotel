@@ -2,6 +2,7 @@ import { PROPERTY_ACTIONS, can, type PropertyAction } from "@hoteloftware/domain
 import { loadShell } from "@/lib/shell";
 import { Shell } from "@/shell/Shell";
 import { ShellProvider } from "@/shell/ShellProvider";
+import { PropertyChooser } from "@/shell/PropertyChooser";
 
 /** Every signed-in page renders inside the shell's Stage. */
 export default async function ShellLayout({ children }: { children: React.ReactNode }) {
@@ -14,6 +15,7 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       user={{ id: session.user.id, name: session.user.name, email: session.user.email, username: session.user.username }}
       properties={shell.properties}
       scope={shell.scope}
+      propertyChoices={shell.propertyChoices}
       pinnedTabs={shell.pinnedTabs}
       quickAccess={shell.quickAccess}
       messages={shell.messages}
@@ -23,7 +25,8 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       canManageTenant={can(actor, "manage_tenant_settings")}
       propertyActions={propertyActions}
     >
-      <Shell>{children}</Shell>
+      {/* a front-office user with several properties picks the one they work in first */}
+      {shell.frontOffice && !shell.scope && shell.propertyChoices.length > 1 ? <PropertyChooser /> : <Shell>{children}</Shell>}
     </ShellProvider>
   );
 }

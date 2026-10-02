@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { DOCUMENT_TYPES, EMPTY_GUEST, isOneOf, mergeGuestData, normaliseEmail, normalisePhone, phoneSearchDigits, type GuestData } from "@hoteloftware/domain";
+import { DOCUMENT_TYPES, EMPTY_GUEST, SALUTATIONS, isOneOf, mergeGuestData, normaliseEmail, normalisePhone, phoneSearchDigits, type GuestData } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { withTenant } from "./with-tenant";
 
@@ -36,14 +36,18 @@ export interface GuestDuplicate extends GuestSummary {
 
 /** Profile field → column; one map for reading, writing, history and merge. */
 const COLUMNS: Record<keyof GuestData, string> = {
+  salutation: "salutation",
   firstName: "first_name",
   lastName: "last_name",
   dateOfBirth: "date_of_birth",
+  placeOfBirth: "place_of_birth",
   nationality: "nationality",
   countryOfResidence: "country_of_residence",
   postalCode: "postal_code",
   addressLine1: "address_line1",
+  addressLine2: "address_line2",
   city: "city",
+  region: "region",
   email: "email",
   phone: "phone",
   language: "language",
@@ -91,9 +95,13 @@ function clean(data: GuestData): GuestData {
   out.lastName = (data.lastName ?? "").trim();
   if (!out.lastName) throw new Error("Last name is required");
   out.addressLine1 = (data.addressLine1 ?? "").trim();
+  out.addressLine2 = (data.addressLine2 ?? "").trim();
   out.city = (data.city ?? "").trim();
+  out.region = (data.region ?? "").trim();
+  out.salutation = text(data.salutation) as GuestData["salutation"];
+  if (out.salutation !== null && !isOneOf(SALUTATIONS, out.salutation)) throw new Error("Unknown salutation");
   out.preferences = (data.preferences ?? "").trim();
-  for (const f of ["postalCode", "email", "phone", "language", "marketingConsentSource", "documentNumber"] as const) out[f] = text(data[f]);
+  for (const f of ["postalCode", "email", "phone", "language", "marketingConsentSource", "documentNumber", "placeOfBirth"] as const) out[f] = text(data[f]);
   for (const f of COUNTRY_FIELDS) {
     const v = text(data[f] as string | null)?.toUpperCase() ?? null;
     if (v !== null && !/^[A-Z]{2}$/.test(v)) throw new Error("Countries are two-letter codes");

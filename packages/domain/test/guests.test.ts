@@ -22,6 +22,10 @@ describe("guest data", () => {
   });
 
   const base: GuestData = {
+    salutation: null,
+    placeOfBirth: null,
+    addressLine2: "",
+    region: "",
     firstName: "Aiko",
     lastName: "Tanaka",
     dateOfBirth: null,

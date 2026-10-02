@@ -490,6 +490,10 @@ export const guests = pgTable(
     createdBy: text("created_by").notNull(),
     createdPropertyId: uuid("created_property_id").references(() => properties.id),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    salutation: text("salutation"),
+    placeOfBirth: text("place_of_birth"),
+    addressLine2: text("address_line2").notNull().default(""),
+    region: text("region").notNull().default(""),
   },
   (t) => [
     index("guests_email_idx").on(t.emailNormalised).where(sql`${t.emailNormalised} is not null`),
@@ -497,6 +501,7 @@ export const guests = pgTable(
     index("guests_name_idx").on(sql`lower(${t.lastName})`, sql`lower(${t.firstName})`),
     check("guests_consent_proof_check", sql`not ${t.marketingConsent} or (${t.marketingConsentAt} is not null and ${t.marketingConsentSource} is not null)`),
     check("guests_document_type_check", sql`${t.documentType} in ('passport', 'id_card', 'driving_licence', 'other')`),
+    check("guests_salutation_check", sql`${t.salutation} in ('mr', 'ms', 'mx')`),
   ],
 );
 
@@ -734,6 +739,27 @@ export const chargeEvents = pgTable(
   (t) => [index("charge_events_charge_idx").on(t.chargeId, t.at), check("charge_events_action_check", sql`${t.action} in ('post', 'void', 'move')`)],
 );
 
+export const fixedCharges = pgTable(
+  "fixed_charges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    serviceId: uuid("service_id").notNull().references(() => services.id),
+    fromDate: date("from_date").notNull(),
+    toDate: date("to_date").notNull(),
+    quantity: numeric("quantity", { precision: 10, scale: 2 }).notNull().default("1"),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    index("fixed_charges_reservation_idx").on(t.reservationId),
+    check("fixed_charges_dates_check", sql`${t.toDate} > ${t.fromDate}`),
+    check("fixed_charges_quantity_check", sql`${t.quantity} > 0`),
+    check("fixed_charges_price_check", sql`${t.unitPrice} >= 0`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -772,4 +798,5 @@ export const tenantSchema = {
   reservationRouting,
   charges,
   chargeEvents,
+  fixedCharges,
 };

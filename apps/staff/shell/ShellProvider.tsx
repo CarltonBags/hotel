@@ -14,6 +14,8 @@ export interface ShellProps {
   user: { id: string; name: string; email: string; username: string | null };
   properties: Property[];
   scope: string;
+  /** A front-office user with several properties changes between these from the user menu. */
+  propertyChoices: Property[];
   pinnedTabs: PinnedTab[];
   quickAccess: string[];
   messages: Messages;

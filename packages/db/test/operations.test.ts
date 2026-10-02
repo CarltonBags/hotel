@@ -12,7 +12,7 @@ import { setRates } from "../src/tenant/rates";
 import { createGuest } from "../src/tenant/guests";
 import { createBooking } from "../src/tenant/reservations";
 import { assignRoom } from "../src/tenant/reservation-changes";
-import { breakfastList, houseList, listArrivals, listDepartures, listInHouse, searchReservations, todaySummary } from "../src/tenant/operations";
+import { breakfastList, houseList, listArrivals, listDepartures, listInHouse, searchReservations, todaySummary, workspaceList } from "../src/tenant/operations";
 import { withTenant } from "../src/tenant/with-tenant";
 import { resetTestDatabase, testPool } from "./helpers";
 
@@ -98,6 +98,17 @@ describe("operational lists", () => {
     // today, a stay still Confirmed from last night (not arrived) is not counted
     const todayList = await breakfastList(pool, tenant.schemaName, berlin, "2026-12-11", "2026-12-11");
     expect(todayList.counts.breakfast).toEqual({ adults: 0, children: 0 });
+  });
+
+  it("the Today workspace lists arrivals, expected departures, in house and checked out with balance", async () => {
+    const s = tenant.schemaName;
+    const names = async (kind: Parameters<typeof workspaceList>[3]) => (await workspaceList(pool, s, berlin, kind, "2026-12-10")).map((r) => r.guestLastName).sort();
+    expect(await names("arrivals")).toEqual(["Arriving"]);
+    expect(await names("departures")).toEqual(["Leaving"]);
+    expect(await names("in_house")).toEqual(["Leaving", "Roomonly", "Staying"]);
+    expect(await names("checked_out")).toEqual([]);
+    const [arriving] = await workspaceList(pool, s, berlin, "arrivals", "2026-12-10");
+    expect(arriving).toMatchObject({ room: "101", roomTypeCode: "DBL", ratePlanName: "Breakfast", vip: false, balance: 0, cardHold: null, arrival: "2026-12-10", departure: "2026-12-12" });
   });
 
   it("summarises Today with Occupancy", async () => {

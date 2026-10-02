@@ -37,18 +37,78 @@
 
 **Blocked by:** None — can start immediately (builds on 12, 20, 21 and 25, all done).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A Front Desk user with a role at one property sees no property switcher and no other property anywhere in the app
-- [ ] A Front Desk user with roles at two properties chooses one after sign-in and sees only that one until they change it
-- [ ] A Property Manager still has the switcher and "All properties"
-- [ ] A one-room booking from dates to "Book" completes without scrolling the page at 1440 × 900
-- [ ] Salutation, address line 2, region and place of birth can be entered and are kept on the guest profile
-- [ ] The full guest form opens from the booking screen and the reservation tab without leaving them
-- [ ] Country and nationality are picked from a searchable list in both languages
-- [ ] Today shows Arrivals, Expected departures, In house and Checked out as buttons; the chosen list stays visible and scrolls inside its box
-- [ ] List rows show room, guest name, folio balance and Card Hold (status and amount, once ticket 27 is done)
-- [ ] Searching by room number or name and filtering or sorting narrows the list without leaving Today
-- [ ] Clicking a row shows the reservation on the right, editable; saving updates the list row
-- [ ] Action buttons Abkassieren, Türschließsystem, Reservierung, Folio, Fixed Charge, Company billing and Move room are on the selected reservation; unbuilt ones are disabled with their ticket named
-- [ ] A Fixed Charge for parking over three nights posts one Charge per night and follows a shortened stay
+- [x] A Front Desk user with a role at one property sees no property switcher and no other property anywhere in the app
+- [x] A Front Desk user with roles at two properties chooses one after sign-in and sees only that one until they change it
+- [x] A Property Manager still has the switcher and "All properties"
+- [x] A one-room booking from dates to "Book" completes without scrolling the page at 1440 × 900
+- [x] Salutation, address line 2, region and place of birth can be entered and are kept on the guest profile
+- [x] The full guest form opens from the booking screen and the reservation tab without leaving them
+- [x] Country and nationality are picked from a searchable list in both languages
+- [x] Today shows Arrivals, Expected departures, In house and Checked out as buttons; the chosen list stays visible and scrolls inside its box
+- [x] List rows show room, guest name, folio balance and Card Hold (status and amount, once ticket 27 is done)
+- [x] Searching by room number or name and filtering or sorting narrows the list without leaving Today
+- [x] Clicking a row shows the reservation on the right, editable; saving updates the list row
+- [x] Action buttons Abkassieren, Türschließsystem, Reservierung, Folio, Fixed Charge, Company billing and Move room are on the selected reservation; unbuilt ones are disabled with their ticket named
+- [x] A Fixed Charge for parking over three nights posts one Charge per night and follows a shortened stay
+
+## Comments
+
+**Done (2026-10-02).**
+
+**One property for the front office.** A user whose roles are only Front Desk, Housekeeper, Housekeeping Supervisor or Maintenance works in one property at a time:
+- With one property, the navbar shows its name with no switcher.
+- With several, a chooser appears after sign-in, and the user menu changes property under "Working at".
+- The choice is cleared at sign-in and sign-out, so a shared desk PC does not carry it to the next user.
+- Every page and action refuses other properties for these users, not only the shell. A Berlin reservation opened by URL while working at Zürich lands on "not allowed". Guest profiles show stays and "created at" only for the working property.
+- Everyone else keeps the switcher and "All properties".
+
+**Today workspace.** With one property selected and the right to see operational lists, Today is the front-office workspace:
+- Buttons for Arrivals, Expected departures, In house and Checked out, with counts.
+- The list scrolls in its own box. Rows show room, guest, VIP, folio balance on the guest's own folios, and Card Hold.
+- Search matches a room number from its start or a name anywhere. Filters are room type, Rate Plan, Booker, VIP, no room and open balance. Sorting is by room, name, arrival, departure or balance. These are kept per list for the session.
+- Clicking a row opens the reservation on the right, in tabs: Stay (edit and room assignment), Guest (full details), Folio, Fixed Charges, Company billing, Notes.
+- Action buttons: Check in, Abkassieren, Türschließsystem, Reservierung, Folio, Fixleistung, Firmenrechnung, Zimmer umziehen. Abkassieren waits for tickets 27 and 28, and Türschließsystem for 68 and 70–77. Both are disabled with a hint naming the ticket.
+- Lists update live, including after notes, Charges and Fixed Charges change.
+
+**Fixed Charges** (new glossary term, "Fixleistung" proposed in German):
+- A Service for a range of nights, posted night by night: at check-in, or at once for a guest in house.
+- A range that ran to an end of the stay follows the stay; the rest is clipped to it.
+- The early-departure fee leaves them out.
+- Removing one voids its nights from today on.
+
+**Company billing** adds a folio billed to the Company and moves the Company's default Routing Rules to it at once.
+
+**Booking screen.** The stay bar sits on top. Availability is a table, with room types as rows and Rate Plans as columns. The cart is a side panel with the Book button always visible. A one-room booking needs no page scrolling at 1440 × 900. The guest box searches, or creates a guest from "Last, First".
+
+**Guest details.**
+- New fields: salutation, place of birth, address line 2, region.
+- Country and nationality come from a searchable list of the 249 ISO countries, named in the user's language.
+- The full form opens in a side drawer from the booking screen and the reservation tab, and inline in the workspace.
+- Fields the property's registration needs are marked, and the missing ones are listed.
+
+**Verified:** 254 tests green (domain 101, db 107, auth 17, events 5, staff 10, worker 14), plus typecheck, lint and the tenant SQL lint. Browser walkthrough 30/30:
+- The workspace lists, search and filters, selection, and the action buttons.
+- A Fixed Charge posted night by night, and company billing.
+- Guest details through the country picker until registration is complete. Notes.
+- A one-room booking without page scroll, with the guest drawer on the booking screen and on the reservation tab.
+- Two invited Front Desk users: one property with no switcher; two properties with the chooser, the user-menu change, and refusal at the other property.
+- The owner keeps the switcher.
+
+**Review fixes applied:**
+- The workspace remounts per reservation, so no typed values carry over.
+- Notes are shown only with the contact-data right.
+- A Fixed Charge left without nights is removed before the stay update.
+- A night already slept is never charged twice.
+- German "Kartenvorautorisierung" is used for Card Hold.
+- The reservation tab uses the drawer.
+- Live updates after notes and Charges.
+- Move room scrolls to the room assignment.
+- Duplicated helpers were merged.
+
+**Open points:**
+- Registration fields are the statutory minimum per country (DE, AT, CH) until the registration tickets bring each property's rules, such as the Swiss Canton Profile.
+- German terms "Fixleistung" and the earlier "Logis-Leistung" need the owner's confirmation in the glossary.
+- The Card Hold column, the "no card preauthorisation" filter and balances after payments arrive with ticket 27. The Checked out list fills with check-out in ticket 28.
+- Service and spa staff roles are treated like back-office roles for property scope, since the ticket names only the four front-office roles. Outlet tickets may revisit this.

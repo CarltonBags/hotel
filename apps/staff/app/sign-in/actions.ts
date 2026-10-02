@@ -4,7 +4,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { signInToTenant } from "@hoteloftware/auth";
 import { getPreferences } from "@hoteloftware/db";
-import { ACCENT_COOKIE, LANGUAGE_COOKIE, THEME_COOKIE } from "@/lib/shell";
+import { ACCENT_COOKIE, LANGUAGE_COOKIE, SCOPE_COOKIE, THEME_COOKIE } from "@/lib/shell";
 import { auth } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { currentTenant } from "@/lib/tenant";
@@ -52,6 +52,8 @@ export async function signIn(_prev: SignInState, formData: FormData): Promise<Si
       ...(opts.has("expires") ? { expires: new Date(opts.get("expires")!) } : {}),
     });
   }
+  // a shared desk PC: the property chosen by whoever signed in before does not carry over
+  jar.delete(SCOPE_COOKIE);
   // Mirror the user's display settings so the next page already paints correctly.
   const session = await auth().api.getSession({ headers: new Headers({ cookie: jar.toString() }) });
   if (session) {
@@ -70,5 +72,6 @@ export async function signOut(): Promise<void> {
   for (const c of jar.getAll()) {
     if (c.name.includes("session_token")) jar.delete(c.name);
   }
+  jar.delete(SCOPE_COOKIE);
   redirect("/sign-in");
 }

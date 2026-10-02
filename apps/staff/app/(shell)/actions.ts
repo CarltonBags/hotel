@@ -55,8 +55,11 @@ export async function savePreferences(input: { language?: string; theme?: string
 }
 
 export async function setPropertyScope(scope: string): Promise<void> {
-  const { properties } = await loadShell();
-  if (scope !== "all" && !properties.some((p) => p.id === scope)) return;
+  const { properties, frontOffice, propertyChoices } = await loadShell();
+  // the front office changes between its properties only; everyone else may also pick "all"
+  const allowed = frontOffice ? propertyChoices : properties;
+  const known = allowed.some((p) => p.id === scope) || (!frontOffice && scope === "all");
+  if (!known) return;
   (await cookies()).set(SCOPE_COOKIE, scope, { path: "/", maxAge: YEAR, sameSite: "lax" });
   revalidatePath("/", "layout");
 }

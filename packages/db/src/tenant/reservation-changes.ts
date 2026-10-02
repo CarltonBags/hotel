@@ -16,7 +16,7 @@ import {
 } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
-import { syncStayCharges } from "./folios";
+import { followStay, syncStayCharges } from "./folios";
 import { REASON_TEXT, loadQuoteData, quoteFor, writeNights } from "./reservations";
 import { withTenant } from "./with-tenant";
 
@@ -243,6 +243,7 @@ async function changeIn(tx: PoolClient, id: string, userId: string, patch: Reser
     ]);
     // an in-house move writes its own segments right after
     if (!options.inHouseFrom) await trimAssignments(tx, res.id, after, change.roomTypeChanged);
+    await followStay(tx, res.id, { arrival: res.arrival, departure: res.departure }, after);
     await logChange(tx, res.id, userId, "edit", { ...snapshot(res, change.oldNights, oldRooms), ...(res.overbooked ? { overbooked: true } : {}) }, {
       ...after,
       total: sumTotals(await nightTotals(tx, res.id)),
@@ -533,5 +534,18 @@ export async function listOverbooked(pool: Pool, schema: string, propertyId: str
       [propertyId, checkDate(today), OCCUPYING_STATUSES],
     );
     return rows.map((r) => ({ reservationId: r.id, confirmationNumber: r.confirmation_number, guestName: r.guest, roomTypeCode: r.code, arrival: r.arrival, departure: r.departure }));
+  });
+}
+
+/** The booking's notes, changed from one of its reservations and logged there. */
+export async function updateBookingNotes(pool: Pool, schema: string, id: string, userId: string, notes: string): Promise<void> {
+  const text = notes.trim();
+  if (text.length > 2000) throw new Error("The notes are too long");
+  await withTenant(pool, schema, async (tx) => {
+    const r = await loadForChange(tx, id);
+    const before = (await tx.query<{ notes: string }>("select notes from bookings where id = $1", [r.booking_id])).rows[0]!.notes;
+    if (before === text) return;
+    await tx.query("update bookings set notes = $2 where id = $1", [r.booking_id, text]);
+    await logChange(tx, r.id, userId, "edit", { notes: before }, { notes: text });
   });
 }

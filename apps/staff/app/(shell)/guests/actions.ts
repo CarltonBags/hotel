@@ -21,14 +21,18 @@ const opt = (formData: FormData, name: string) => field(formData, name) || null;
 function guestData(formData: FormData): Partial<GuestData> & { lastName: string } {
   const consent = flag(formData, "marketingConsent");
   return {
+    salutation: (opt(formData, "salutation") as GuestData["salutation"]) ?? null,
     firstName: field(formData, "firstName"),
     lastName: field(formData, "lastName"),
     dateOfBirth: opt(formData, "dateOfBirth"),
+    placeOfBirth: opt(formData, "placeOfBirth"),
     nationality: opt(formData, "nationality"),
     countryOfResidence: opt(formData, "countryOfResidence"),
     postalCode: opt(formData, "postalCode"),
     addressLine1: field(formData, "addressLine1"),
+    addressLine2: field(formData, "addressLine2"),
     city: field(formData, "city"),
+    region: field(formData, "region"),
     email: opt(formData, "email"),
     phone: opt(formData, "phone"),
     language: opt(formData, "language"),
@@ -71,6 +75,9 @@ export async function saveGuestAction(_prev: FormState, formData: FormData): Pro
     const id = field(formData, "id");
     await updateGuest(pool(), tenant.schemaName, id, guestData(formData), { userId: session.user.id });
     revalidatePath(`/guests/${id}`);
+    // the guest shows on reservation tabs and the Today workspace too
+    revalidatePath("/reservations/[id]", "page");
+    revalidatePath("/");
     return { ok: true, message: "Saved." };
   });
 }

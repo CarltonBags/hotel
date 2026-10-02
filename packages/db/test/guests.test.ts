@@ -64,6 +64,17 @@ describe("guests and companies", () => {
     expect(await findGuestDuplicates(pool, tenant.schemaName, { firstName: "Aiko", lastName: "Tanaka" })).toEqual([]);
   });
 
+  it("keeps salutation, second address line, region and place of birth", async () => {
+    const g = await createGuest(
+      pool,
+      tenant.schemaName,
+      { salutation: "ms", firstName: "Lea", lastName: "Keller", placeOfBirth: "Luzern", addressLine1: "Seestrasse 1", addressLine2: "c/o Hotel", region: "LU" },
+      { userId: bob, propertyId: berlin },
+    );
+    expect(await findGuest(pool, tenant.schemaName, g.id)).toMatchObject({ salutation: "ms", placeOfBirth: "Luzern", addressLine2: "c/o Hotel", region: "LU" });
+    await expect(createGuest(pool, tenant.schemaName, { lastName: "X", salutation: "sir" as never }, { userId: bob, propertyId: berlin })).rejects.toThrow(/salutation/i);
+  });
+
   it("refuses marketing consent without its proof", async () => {
     await expect(createGuest(pool, tenant.schemaName, { firstName: "N", lastName: "O", marketingConsent: true }, { userId: bob, propertyId: berlin })).rejects.toThrow(/proof/i);
   });

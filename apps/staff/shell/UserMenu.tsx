@@ -32,7 +32,7 @@ function initials(name: string): string {
 }
 
 export function UserMenu() {
-  const { t, user, language, theme, setLanguage, setTheme, openModule } = useShell();
+  const { t, user, language, theme, setLanguage, setTheme, openModule, propertyChoices, scope, setScope } = useShell();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
@@ -56,6 +56,27 @@ export function UserMenu() {
             <div className="text-[14px] font-medium">{user.name}</div>
             <div className="text-[12px] text-ink-60">{user.username ?? user.email}</div>
           </div>
+          {propertyChoices.length > 1 ? (
+            <>
+              <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-ink-40">{t("shell.workingAt")}</div>
+              {propertyChoices.map((p) => (
+                <button
+                  type="button"
+                  key={p.id}
+                  role="menuitemradio"
+                  aria-checked={scope === p.id}
+                  onClick={() => {
+                    setScope(p.id);
+                    setOpen(false);
+                  }}
+                  className={row}
+                >
+                  {p.name}
+                  {scope === p.id && <Check size={16} className="text-accent" />}
+                </button>
+              ))}
+            </>
+          ) : null}
           <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-ink-40">{t("shell.language")}</div>
           {(["de", "en"] as const).map((l) => (
             <button type="button" key={l} role="menuitemradio" aria-checked={language === l} onClick={() => setLanguage(l)} className={row}>

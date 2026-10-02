@@ -85,6 +85,8 @@ export { ROUTING_CATEGORIES, type RoutingCategory } from "./companies";
 export {
   DOCUMENT_TYPES,
   EMPTY_GUEST,
+  SALUTATIONS,
+  type Salutation,
   mergeGuestData,
   needsPostalCode,
   normaliseEmail,
@@ -112,3 +114,17 @@ export { CALENDAR_RANGES, dropOutcome, packLanes, type CalendarBar, type Calenda
 export { includesBreakfast, occupancyPercent, personsByMealPlan, sortRows, type PersonsByMealPlan } from "./lists";
 export { DATA_CHANGE_PREFIX, DATA_KINDS, isDataChange, type DataKind } from "./live";
 export { earlyDepartureFee, folioTotals, routeCharge, staySync, type PostedStayCharge, type TaxCodeTotal, type TotalsInput, type WantedStayCharge } from "./folio";
+export { WORLD_COUNTRIES } from "./world-countries";
+export {
+  WORKSPACE_SORT_KEYS,
+  fixedChargeNights,
+  isFrontOfficeOnly,
+  registrationFields,
+  registrationGaps,
+  workspaceRows,
+  type RegistrationField,
+  type WorkspaceFilters,
+  type WorkspaceRow,
+  type WorkspaceSortKey,
+  type WorkspaceView,
+} from "./front-office";

@@ -5,7 +5,7 @@ import { Building2, Check, ChevronDown } from "lucide-react";
 import { useShell } from "./ShellProvider";
 import { onArrowKeys, useDismiss } from "./useDismiss";
 
-/** Property switcher; "All properties" for users with access to more than one. */
+/** Property switcher; "All properties" for users with access to more than one; a plain label with one. */
 export function PropertyMenu() {
   const { t, properties, scope, setScope } = useShell();
   const [open, setOpen] = useState(false);
@@ -19,6 +19,18 @@ export function PropertyMenu() {
   const options = properties.length > 1 ? [{ id: "all", name: t("shell.allProperties"), sub: `${properties.length} ${t("shell.properties")}` }, ...properties.map((p) => ({ id: p.id, name: p.name, sub: `${p.legalEntityName} · ${p.country}` }))] : properties.map((p) => ({ id: p.id, name: p.name, sub: `${p.legalEntityName} · ${p.country}` }));
 
   if (properties.length === 0) return null;
+  // one property: its name only, nothing to switch
+  if (properties.length === 1 && current) {
+    return (
+      <div aria-label={t("shell.property")} className="flex h-12 w-56 shrink-0 items-center gap-2 rounded-[16px] bg-surface px-3 shadow-pill">
+        <Building2 size={18} className="shrink-0 text-ink-60" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-medium leading-tight">{current.name}</span>
+          <span className="block truncate text-[11px] leading-tight text-ink-60">{subtitle}</span>
+        </span>
+      </div>
+    );
+  }
   return (
     <div ref={ref} className="relative w-56 shrink-0">
       <button

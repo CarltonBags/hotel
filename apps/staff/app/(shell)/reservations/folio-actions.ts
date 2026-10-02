@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { ROUTING_CATEGORIES, isOneOf } from "@hoteloftware/domain";
-import { addFolio, checkIn, moveCharge, postFreeTextCharge, postServiceCharge, setRouting, voidCharge } from "@hoteloftware/db";
+import { addFixedCharge, addFolio, checkIn, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, setRouting, voidCharge } from "@hoteloftware/db";
 import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
 import { pool } from "@/lib/db";
@@ -27,16 +27,17 @@ export async function checkInAction(reservationId: string): Promise<FormState> {
 
 export async function postServiceAction(reservationId: string, input: { serviceId: string; quantity: number; serviceDate?: string }): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId, "post_charges");
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "post_charges");
     await postServiceCharge(pool(), schema, reservation.id, { serviceId: String(input?.serviceId), quantity: Number(input?.quantity), serviceDate: optionalDate(input?.serviceDate) }, userId);
     revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Posted." };
   });
 }
 
 export async function postFreeTextAction(reservationId: string, input: { description: string; amount: number; taxCodeId: string; serviceDate?: string }): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId, "post_free_text_charges");
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "post_free_text_charges");
     await postFreeTextCharge(
       pool(),
       schema,
@@ -45,24 +46,27 @@ export async function postFreeTextAction(reservationId: string, input: { descrip
       userId,
     );
     revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Posted." };
   });
 }
 
 export async function voidChargeAction(reservationId: string, chargeId: string, reason: string): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId, "manage_folios");
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "manage_folios");
     await voidCharge(pool(), schema, reservation.id, String(chargeId), String(reason ?? ""), userId);
     revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Voided." };
   });
 }
 
 export async function moveChargeAction(reservationId: string, chargeId: string, folioId: string): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation, userId } = await reservationScope(reservationId, "manage_folios");
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "manage_folios");
     await moveCharge(pool(), schema, reservation.id, String(chargeId), String(folioId), userId);
     revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Moved." };
   });
 }
@@ -84,5 +88,39 @@ export async function routingAction(reservationId: string, category: string, fol
     await setRouting(pool(), schema, reservation.id, String(category), folioId ? String(folioId) : null);
     revalidatePath(`/reservations/${reservation.id}`);
     return { ok: true, message: "Saved." };
+  });
+}
+
+export async function addFixedChargeAction(reservationId: string, input: { serviceId: string; from: string; to: string; quantity: number; unitPrice?: number | null }): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "post_charges");
+    await addFixedCharge(
+      pool(),
+      schema,
+      reservation.id,
+      {
+        serviceId: String(input?.serviceId),
+        from: String(input?.from),
+        to: String(input?.to),
+        quantity: Number(input?.quantity),
+        unitPrice: typeof input?.unitPrice === "number" ? input.unitPrice : undefined,
+      },
+      userId,
+    );
+    revalidatePath(`/reservations/${reservation.id}`);
+    revalidatePath("/");
+    await announceReservations(tenantId, reservation.propertyId);
+    return { ok: true, message: "Saved." };
+  });
+}
+
+export async function removeFixedChargeAction(reservationId: string, fixedChargeId: string): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "manage_folios");
+    await removeFixedCharge(pool(), schema, reservation.id, String(fixedChargeId), userId);
+    revalidatePath(`/reservations/${reservation.id}`);
+    revalidatePath("/");
+    await announceReservations(tenantId, reservation.propertyId);
+    return { ok: true, message: "Removed." };
   });
 }

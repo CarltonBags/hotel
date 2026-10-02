@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import {
   ROUTING_CATEGORIES,
   earlyDepartureFee,
+  fixedChargeNights,
   folioTotals,
   isOneOf,
   roundMoney,
@@ -219,11 +220,41 @@ async function wantedStay(tx: PoolClient, res: ResRow): Promise<WantedLine[]> {
     "select to_char(date, 'YYYY-MM-DD') as date, kind, service_id, persons, unit_price, amount from reservation_night_components where reservation_id = $1 order by date, kind, service_id",
     [res.id],
   );
-  return rows.map((r) =>
+  const lines: WantedLine[] = rows.map((r) =>
     r.kind === "room"
       ? { serviceDate: r.date, component: "room", amount: Number(r.amount), serviceId: roomService, quantity: 1, unitPrice: Number(r.amount) }
       : { serviceDate: r.date, component: `svc:${r.service_id}`, amount: Number(r.amount), serviceId: r.service_id!, quantity: r.persons ?? 1, unitPrice: Number(r.unit_price) },
   );
+  // Fixed Charges: one line per night of the stay they cover
+  for (const f of await fixedRows(tx, res.id)) {
+    for (const date of fixedChargeNights({ from: f.from_date, to: f.to_date }, res.arrival, res.departure)) {
+      lines.push({ serviceDate: date, component: `fix:${f.id}`, amount: roundMoney(Number(f.quantity) * Number(f.unit_price)), serviceId: f.service_id, quantity: Number(f.quantity), unitPrice: Number(f.unit_price) });
+    }
+  }
+  return lines;
+}
+
+/** Stay components: the room part, included Services ("svc:") and Fixed Charges ("fix:"). */
+const isNightPrice = (component: string) => component === "room" || component.startsWith("svc:");
+const categoryOf = (component: string): RoutingCategory => (component === "room" ? "accommodation" : component.startsWith("svc:") ? "package" : "extras");
+
+interface FixedRow {
+  id: string;
+  service_id: string;
+  service_name: string;
+  from_date: string;
+  to_date: string;
+  quantity: string;
+  unit_price: string;
+}
+
+async function fixedRows(tx: PoolClient, reservationId: string): Promise<FixedRow[]> {
+  const { rows } = await tx.query<FixedRow>(
+    `select f.id, f.service_id, s.name as service_name, to_char(f.from_date, 'YYYY-MM-DD') as from_date, to_char(f.to_date, 'YYYY-MM-DD') as to_date, f.quantity, f.unit_price
+     from fixed_charges f join services s on s.id = f.service_id where f.reservation_id = $1 order by f.created_at`,
+    [reservationId],
+  );
+  return rows;
 }
 
 interface ServiceRow {
@@ -252,7 +283,7 @@ async function postStay(tx: PoolClient, res: ResRow, userId: string, lines: Want
       amount: l.amount,
       taxCodeId: s.tax_code_id,
       revenueAccount: s.revenue_account,
-      category: l.component === "room" ? "accommodation" : "package",
+      category: categoryOf(l.component),
       origin: "stay",
       component: l.component,
     });
@@ -304,7 +335,14 @@ export async function syncStayCharges(tx: PoolClient, reservationId: string, use
   // a night's component voided by hand (say, a night given for free) is settled: not posted again, whatever its price now
   const settled = new Set(rows.filter((h) => !h.live && !have.some((x) => nightKey(x) === nightKey(h))).map(nightKey));
   const wanted = (await wantedStay(tx, res)).filter((w) => !settled.has(nightKey(w)));
-  const plan = staySync(have, wanted);
+  const sync = staySync(have, wanted);
+  // nights already slept keep their Charges: a change voids only from today on
+  const plan = {
+    ...sync,
+    voids: sync.voids.filter((v) => have.find((h) => h.id === v)!.serviceDate >= res.today),
+    // a night already slept is posted only when it has nothing yet (a Fixed Charge added late), never a second time
+    posts: sync.posts.filter((p) => p.serviceDate >= res.today || !have.some((h) => h.serviceDate === p.serviceDate && h.component === p.component)),
+  };
   if (plan.voids.length === 0 && plan.posts.length === 0) return;
   const removed = new Set(plan.removedDates);
   let fee = 0;
@@ -314,7 +352,8 @@ export async function syncStayCharges(tx: PoolClient, reservationId: string, use
       [res.rate_plan_id],
     );
     const p = policy.rows[0]!;
-    const perNight = plan.removedDates.map((d) => roundMoney(have.filter((h) => h.serviceDate === d).reduce((s, h) => s + h.amount, 0)));
+    // the fee is on the nights' price (room and included Services), not on Fixed Charges such as parking
+    const perNight = plan.removedDates.map((d) => roundMoney(have.filter((h) => h.serviceDate === d && isNightPrice(h.component)).reduce((s, h) => s + h.amount, 0)));
     fee = earlyDepartureFee(p.early_departure_fee_kind, p.early_departure_fee_percent === null ? null : Number(p.early_departure_fee_percent), perNight);
     if (!confirmShortening) {
       const voids = have.filter((h) => plan.voids.includes(h.id)).map((h) => ({ id: h.id, serviceDate: h.serviceDate, description: h.description, amount: h.amount }));
@@ -460,7 +499,7 @@ export async function moveCharge(pool: Pool, schema: string, reservationId: stri
   });
 }
 
-/** Another folio with its own Bill-to (a Guest or a Company). */
+/** Another folio with its own Bill-to (a Guest or a Company); a Company's default Routing Rules move to it. */
 export async function addFolio(pool: Pool, schema: string, reservationId: string, billTo: { guestId: string } | { companyId: string }, userId: string): Promise<{ id: string; number: number }> {
   const guestId = "guestId" in billTo ? billTo.guestId : null;
   const companyId = "companyId" in billTo ? billTo.companyId : null;
@@ -478,6 +517,14 @@ export async function addFolio(pool: Pool, schema: string, reservationId: string
        select $1, coalesce(max(number), 0) + 1, $2, $3, $4 from folios where reservation_id = $1 returning id, number`,
       [res.id, guestId, companyId, userId],
     );
+    // company billing: the Company's default Routing Rules point at its new folio at once
+    if (companyId) {
+      await tx.query(
+        `insert into reservation_routing (reservation_id, category, folio_id) select $1, unnest(routing), $2 from companies where id = $3
+         on conflict (reservation_id, category) do update set folio_id = excluded.folio_id`,
+        [res.id, rows[0]!.id, companyId],
+      );
+    }
     return rows[0]!;
   });
 }
@@ -605,4 +652,83 @@ export async function chargeHistory(pool: Pool, schema: string, reservationId: s
     );
     return rows.map((r) => ({ chargeId: r.charge_id, description: r.description, origin: r.origin, action: r.action, userId: r.user_id, at: r.at.toISOString(), detail: r.detail }));
   });
+}
+
+export interface FixedCharge {
+  id: string;
+  serviceId: string;
+  serviceName: string;
+  /** First night covered. */
+  from: string;
+  /** Night after the last one covered. */
+  to: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export async function listFixedCharges(pool: Pool, schema: string, reservationId: string): Promise<FixedCharge[]> {
+  if (!isUuid(reservationId)) return [];
+  return withTenant(pool, schema, async (tx) =>
+    (await fixedRows(tx, reservationId)).map((f) => ({ id: f.id, serviceId: f.service_id, serviceName: f.service_name, from: f.from_date, to: f.to_date, quantity: Number(f.quantity), unitPrice: Number(f.unit_price) })),
+  );
+}
+
+/**
+ * A Service the stay carries for a range of nights (parking, a dog). Posted
+ * night by night at check-in, at once for a guest in house; follows the stay
+ * when it is extended or shortened. The price defaults to the Service's.
+ */
+export async function addFixedCharge(
+  pool: Pool,
+  schema: string,
+  reservationId: string,
+  input: { serviceId: string; from: string; to: string; quantity?: number | undefined; unitPrice?: number | undefined },
+  userId: string,
+): Promise<{ id: string }> {
+  if (!isUuid(input.serviceId)) throw new Error("Service not found");
+  const from = checkDate(input.from);
+  const to = checkDate(input.to);
+  if (to <= from) throw new Error("A Fixed Charge covers at least one night");
+  return withTenant(pool, schema, async (tx) => {
+    const res = await loadReservation(tx, reservationId);
+    requireChargeable(res);
+    if (from < res.arrival || to > res.departure) throw new Error("A Fixed Charge covers nights of the stay only");
+    const s = await tx.query<{ default_price: string; active: boolean }>("select default_price, active from services where id = $1 and property_id = $2", [input.serviceId, res.property_id]);
+    if (!s.rows[0]?.active) throw new Error("Service not found");
+    const quantity = input.quantity === undefined ? 1 : checkAmount(input.quantity, "Quantity");
+    const unitPrice = input.unitPrice === undefined ? Number(s.rows[0].default_price) : roundMoney(input.unitPrice);
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new Error("Price must be zero or more");
+    const { rows } = await tx.query<{ id: string }>(
+      "insert into fixed_charges (reservation_id, service_id, from_date, to_date, quantity, unit_price, created_by) values ($1, $2, $3, $4, $5, $6, $7) returning id",
+      [res.id, input.serviceId, from, to, quantity, unitPrice, userId],
+    );
+    await ensureFolios(tx, res, userId);
+    await syncStayCharges(tx, res.id, userId, false);
+    return rows[0]!;
+  });
+}
+
+/** Remove a Fixed Charge; its Charges from today on are voided, nights already slept keep theirs. */
+export async function removeFixedCharge(pool: Pool, schema: string, reservationId: string, fixedChargeId: string, userId: string): Promise<void> {
+  if (!isUuid(fixedChargeId)) throw new Error("Fixed Charge not found");
+  await withTenant(pool, schema, async (tx) => {
+    const res = await loadReservation(tx, reservationId);
+    const { rowCount } = await tx.query("delete from fixed_charges where id = $1 and reservation_id = $2", [fixedChargeId, res.id]);
+    if (!rowCount) throw new Error("Fixed Charge not found");
+    await syncStayCharges(tx, res.id, userId, false);
+  });
+}
+
+/**
+ * Fixed Charges follow a changed stay: one that started on the first night or
+ * ran to the last keeps doing so. Called inside the change's transaction.
+ */
+export async function followStay(tx: PoolClient, reservationId: string, before: { arrival: string; departure: string }, after: { arrival: string; departure: string }): Promise<void> {
+  // a range that ran to an end of the stay keeps doing so; the rest is clipped to the new stay
+  const from = "case when from_date <= $3 then $2::date else greatest(from_date, $2::date) end";
+  const to = "case when to_date >= $5 then $4::date else least(to_date, $4::date) end";
+  const args = [reservationId, after.arrival, before.arrival, after.departure, before.departure];
+  // a range left with no night of the stay goes first, so the update never writes an empty range
+  await tx.query(`delete from fixed_charges where reservation_id = $1 and ${to} <= ${from}`, args);
+  await tx.query(`update fixed_charges set from_date = ${from}, to_date = ${to} where reservation_id = $1`, args);
 }

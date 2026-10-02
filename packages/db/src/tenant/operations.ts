@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { addDays, includesBreakfast, occupancyPercent, personsByMealPlan, type MealPlan, type PersonsByMealPlan, type ReservationStatus } from "@hoteloftware/domain";
+import { addDays, includesBreakfast, occupancyPercent, personsByMealPlan, type MealPlan, type PersonsByMealPlan, type ReservationStatus, type WorkspaceRow } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { withTenant } from "./with-tenant";
 
@@ -174,6 +174,91 @@ export async function todaySummary(pool: Pool, schema: string, propertyId: strin
   });
 }
 
+
+export const WORKSPACE_LISTS = ["arrivals", "departures", "in_house", "checked_out"] as const;
+export type WorkspaceList = (typeof WORKSPACE_LISTS)[number];
+
+/** Which reservations each Today workspace list holds on the property's date `$2`. */
+const WORKSPACE_RULES: Record<WorkspaceList, string> = {
+  arrivals: RULES.arrivals.replaceAll("$D", "$2"),
+  // expected departures: guests in house who leave today
+  departures: "r.departure = $2::date and r.status = 'checked_in'",
+  // the date parameter is unused here but typed, so every rule takes the same parameters
+  in_house: `${RULES.inHouse} and $2::date is not null`,
+  checked_out: "r.departure = $2::date and r.status = 'checked_out'",
+};
+
+/**
+ * One list of the Today workspace with what the desk needs per row: room,
+ * guest, the open amount on the guest's own folios, VIP, Booker. The room
+ * shown is tonight's, or last night's for departures. Search, filters and
+ * sorting run in the browser (domain workspaceRows).
+ */
+export async function workspaceList(pool: Pool, schema: string, propertyId: string, kind: WorkspaceList, today: string): Promise<WorkspaceRow[]> {
+  if (!isUuid(propertyId)) return [];
+  const night = kind === "departures" || kind === "checked_out" ? addDays(checkDate(today), -1) : checkDate(today);
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<{
+      id: string;
+      confirmation_number: string;
+      room: string | null;
+      first_name: string;
+      last_name: string;
+      type_code: string;
+      plan_name: string;
+      booker: string;
+      arrival: string;
+      departure: string;
+      vip: boolean;
+      balance: string;
+    }>(
+      `select r.id, b.confirmation_number, g.first_name, g.last_name, g.vip,
+         (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = r.id and a.from_date <= $3::date and a.to_date > $3::date limit 1) as room,
+         t.code as type_code, p.name as plan_name, coalesce(c.name, trim(bg.first_name || ' ' || bg.last_name)) as booker,
+         to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
+         -- TODO(ticket 27): less payments received
+         (select coalesce(sum(ch.amount), 0) from charges ch join folios f on f.id = ch.folio_id
+           where ch.reservation_id = r.id and ch.voided_at is null and f.bill_to_guest_id is not null) as balance
+       from reservations r
+       join bookings b on b.id = r.booking_id
+       join guests g on g.id = r.primary_guest_id
+       join room_types t on t.id = r.room_type_id
+       join rate_plans p on p.id = r.rate_plan_id
+       left join companies c on c.id = b.booker_company_id
+       left join guests bg on bg.id = b.booker_guest_id
+       where r.property_id = $1 and ${WORKSPACE_RULES[kind]}`,
+      [propertyId, checkDate(today), night],
+    );
+    return rows.map((r) => ({
+      reservationId: r.id,
+      confirmationNumber: r.confirmation_number,
+      room: r.room,
+      guestFirstName: r.first_name,
+      guestLastName: r.last_name,
+      roomTypeCode: r.type_code,
+      ratePlanName: r.plan_name,
+      bookerName: r.booker,
+      arrival: r.arrival,
+      departure: r.departure,
+      vip: r.vip,
+      balance: Number(r.balance),
+      // TODO(ticket 27): the Card Hold amount
+      cardHold: null,
+    }));
+  });
+}
+
+/** Counts for the workspace buttons, by the same rules as the lists. */
+export async function workspaceCounts(pool: Pool, schema: string, propertyId: string, today: string): Promise<Record<WorkspaceList, number>> {
+  if (!isUuid(propertyId)) return { arrivals: 0, departures: 0, in_house: 0, checked_out: 0 };
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<Record<WorkspaceList, number>>(
+      `select ${WORKSPACE_LISTS.map((k) => `(select count(*)::int from reservations r where r.property_id = $1 and ${WORKSPACE_RULES[k]}) as ${k}`).join(", ")}`,
+      [propertyId, checkDate(today)],
+    );
+    return rows[0]!;
+  });
+}
 
 export interface ReservationHit {
   id: string;

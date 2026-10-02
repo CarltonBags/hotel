@@ -243,6 +243,10 @@ _Avoid_: Article, product, extra, item
 The service a rate plan's room part is charged as, giving room charges their tax code and revenue account.
 _Avoid_: Room service (that is food delivered to a room), room article
 
+**Fixed Charge**:
+A service a stay carries for a range of its nights, such as parking or a dog, posted night by night and following the stay when it changes.
+_Avoid_: Recurring posting, package add-on, fixed cost
+
 **Charge**:
 One service for one service date on a folio, stored as a gross amount with a tax code.
 _Avoid_: Posting, line item, transaction
