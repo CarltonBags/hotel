@@ -9,7 +9,6 @@ import {
   cancelReservation,
   createBooking,
   createGuest,
-  findReservation,
   listFreeRooms,
   moveRoom,
   previewBookingCancellation,
@@ -22,7 +21,8 @@ import {
   OverbookingNeeded,
   type NewBooking,
 } from "@hoteloftware/db";
-import { authorize, authorizeAnywhere, requirePrincipal } from "@/lib/authorize";
+import { authorize, authorizeAnywhere } from "@/lib/authorize";
+import { reservationScope } from "@/lib/reservation-scope";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
 import { loadShell } from "@/lib/shell";
@@ -100,15 +100,6 @@ export async function createBookingAction(propertyId: string, input: NewBooking)
 }
 
 // ── changes on an existing reservation (ticket 22) ──
-
-/** The reservation's own property decides the right; ids from the browser are re-read on the server. */
-async function reservationScope(reservationId: string) {
-  const { tenant } = await requirePrincipal();
-  const r = await findReservation(pool(), tenant.schemaName, String(reservationId));
-  if (!r) throw new Error("Reservation not found");
-  const { session } = await authorize("manage_reservations", r.propertyId);
-  return { schema: tenant.schemaName, reservation: r, userId: session.user.id };
-}
 
 export interface EditState extends FormState {
   /** The change needs rooms the room type no longer has; the user may confirm to overbook. */

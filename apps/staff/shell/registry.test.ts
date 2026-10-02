@@ -13,7 +13,8 @@ describe("module registry", () => {
     expect(moduleForPath("/")?.id).toBe("today");
     expect(moduleForPath("/settings/users")?.id).toBe("settings_users");
     expect(moduleForPath("/settings/users/anything")?.id).toBe("settings_users");
-    expect(moduleForPath("/soon/calendar")?.id).toBe("calendar");
+    expect(moduleForPath("/calendar")?.id).toBe("calendar");
+    expect(moduleForPath("/soon/arrivals")?.id).toBe("arrivals");
     expect(moduleForPath("/nowhere")).toBeUndefined();
   });
 });

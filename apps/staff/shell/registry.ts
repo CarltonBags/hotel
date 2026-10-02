@@ -49,7 +49,7 @@ const soon = (id: string, group: GroupId, label: MessageKey, icon: string, hue: 
 export const MODULES: ModuleDef[] = [
   { id: "today", group: "front_desk", label: "module.today", icon: "LayoutDashboard", hue: "#0071e3", href: "/" },
   { id: "new_reservation", group: "front_desk", label: "module.new_reservation", icon: "ClipboardList", hue: "#0071e3", href: "/reservations/new", requiresProperty: "manage_reservations" },
-  soon("calendar", "front_desk", "module.calendar", "CalendarDays", "#7c5cff", 23),
+  { id: "calendar", group: "front_desk", label: "module.calendar", icon: "CalendarDays", hue: "#7c5cff", href: "/calendar", requiresProperty: "view_reservations" },
   soon("arrivals", "front_desk", "module.arrivals", "LogIn", "#1fa971", 25),
   soon("departures", "front_desk", "module.departures", "LogOut", "#e0900b", 25),
   soon("registration", "front_desk", "module.registration", "FileSignature", "#4f5bd5", 45),

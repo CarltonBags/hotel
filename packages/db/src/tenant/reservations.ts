@@ -85,20 +85,20 @@ export interface PlanRow {
 /** `excludeReservationId`: a reservation being edited does not take its own room. */
 export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival: string, departure: string, excludeReservationId: string | null = null) {
   const lastNight = addDays(departure, -1);
-  const [types, occupied, plans, rates, restrictions, bands, index] = await Promise.all([
-    tx.query<{ id: string; code: string; name: string; max_adults: number; max_occupancy: number; rooms: number }>(
+  // one connection runs one query at a time: read in sequence
+  const types = await tx.query<{ id: string; code: string; name: string; max_adults: number; max_occupancy: number; rooms: number }>(
       `select t.id, t.code, t.name, t.max_adults, t.max_occupancy, (select count(*)::int from rooms r where r.room_type_id = t.id) as rooms
        from room_types t where t.property_id = $1 order by t.sort_order, t.code`,
       [propertyId],
-    ),
-    tx.query<{ room_type_id: string; date: string; n: number }>(
+    );
+  const occupied = await tx.query<{ room_type_id: string; date: string; n: number }>(
       `select r.room_type_id, to_char(d, 'YYYY-MM-DD') as date, count(*)::int as n
        from reservations r cross join lateral generate_series(greatest(r.arrival, $2::date), least(r.departure, $3::date) - 1, interval '1 day') d
        where r.property_id = $1 and r.status = any($4::text[]) and r.arrival < $3::date and r.departure > $2::date and ($5::uuid is null or r.id <> $5::uuid)
        group by r.room_type_id, d`,
       [propertyId, arrival, departure, OCCUPYING_STATUSES, excludeReservationId],
-    ),
-    tx.query<PlanRow>(
+    );
+  const plans = await tx.query<PlanRow>(
       `select p.id, p.code, p.name, p.kind, p.base_plan_id, p.base_occupancy, p.meal_plan, p.public, p.rate_code, p.company_id, c.name as company_name, p.date_change_allowed,
          coalesce((select array_agg(rt.room_type_id) from rate_plan_room_types rt where rt.rate_plan_id = p.id), '{}') as room_type_ids,
          coalesce((select json_agg(json_build_object('kind', s.kind, 'age_band_id', s.age_band_id, 'amount', s.amount)) from rate_plan_supplements s where s.rate_plan_id = p.id), '[]'::json) as supplements,
@@ -106,20 +106,19 @@ export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival:
        from rate_plans p left join companies c on c.id = p.company_id
        where p.property_id = $1 and p.active order by p.sort_order, p.code`,
       [propertyId],
-    ),
-    tx.query<{ rate_plan_id: string; room_type_id: string; date: string; price: string }>(
+    );
+  const rates = await tx.query<{ rate_plan_id: string; room_type_id: string; date: string; price: string }>(
       `select r.rate_plan_id, r.room_type_id, to_char(r.date, 'YYYY-MM-DD') as date, r.price
        from rates r join rate_plans p on p.id = r.rate_plan_id where p.property_id = $1 and r.date between $2 and $3`,
       [propertyId, arrival, lastNight],
-    ),
-    tx.query<RestrictionRow>(
+    );
+  const restrictions = await tx.query<RestrictionRow>(
       `select r.rate_plan_id, r.room_type_id, to_char(r.date, 'YYYY-MM-DD') as date, r.stop_sell, r.closed_to_arrival, r.closed_to_departure, r.min_stay_arrival, r.min_stay_through, r.max_stay
        from restrictions r join rate_plans p on p.id = r.rate_plan_id where p.property_id = $1 and r.date between $2 and $3`,
       [propertyId, arrival, departure],
-    ),
-    tx.query<{ id: string; min_age: number; max_age: number | null }>("select id, min_age, max_age from age_bands where property_id = $1", [propertyId]),
-    loadPlanIndex(tx, propertyId),
-  ]);
+    );
+  const bands = await tx.query<{ id: string; min_age: number; max_age: number | null }>("select id, min_age, max_age from age_bands where property_id = $1", [propertyId]);
+  const index = await loadPlanIndex(tx, propertyId);
   const occ = new Map(occupied.rows.map((r) => [`${r.room_type_id}|${r.date}`, r.n]));
   const price = new Map(rates.rows.map((r) => [`${r.rate_plan_id}|${r.room_type_id}|${r.date}`, Number(r.price)]));
   const stored = new Map(restrictions.rows.map((r) => [`${r.rate_plan_id}|${r.room_type_id}|${r.date}`, toRestriction(r)]));
