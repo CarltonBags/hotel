@@ -182,8 +182,8 @@ async function insertCharge(tx: PoolClient, res: ResRow, userId: string, c: NewC
 }
 
 /** Voids the stay sync makes itself; their reason is stored for the log, the kind tells them from a void by hand. */
-export type AutoVoid = "early_departure" | "stay_changed";
-const AUTO_VOID_REASON: Record<AutoVoid, string> = { early_departure: "Early departure", stay_changed: "Stay changed" };
+export type AutoVoid = "early_departure" | "stay_changed" | "check_in_cancelled";
+const AUTO_VOID_REASON: Record<AutoVoid, string> = { early_departure: "Early departure", stay_changed: "Stay changed", check_in_cancelled: "Check-in cancelled" };
 
 async function voidIn(tx: PoolClient, chargeId: string, reason: string, userId: string, auto: AutoVoid | null = null): Promise<void> {
   const { rowCount } = await tx.query("update charges set voided_at = clock_timestamp(), voided_by = $2, void_reason = $3, auto_void = $4 where id = $1 and voided_at is null", [
@@ -311,6 +311,28 @@ export async function checkIn(pool: Pool, schema: string, id: string, userId: st
       userId,
       JSON.stringify({ status: "confirmed" }),
       JSON.stringify({ status: "checked_in" }),
+    ]);
+  });
+}
+
+/**
+ * Undo a check-in made by mistake, on the arrival day only (no night slept
+ * yet): the stay is Confirmed again and the stay Charges the check-in posted
+ * are voided; Charges posted by hand stay on the folio. The room stays assigned.
+ */
+export async function cancelCheckIn(pool: Pool, schema: string, id: string, userId: string): Promise<void> {
+  await withTenant(pool, schema, async (tx) => {
+    const res = await loadReservationForStayChange(tx, id);
+    if (res.status !== "checked_in") throw new Error("The reservation is not checked in");
+    if (res.today !== res.arrival) throw new Error("A guest who has slept a night here checks out instead");
+    const { rows } = await tx.query<{ id: string }>("select id from charges where reservation_id = $1 and origin = 'stay' and voided_at is null", [res.id]);
+    for (const c of rows) await voidIn(tx, c.id, AUTO_VOID_REASON.check_in_cancelled, userId, "check_in_cancelled");
+    await tx.query("update reservations set status = 'confirmed', checked_in_at = null, checked_in_by = null where id = $1", [res.id]);
+    await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'cancel_check_in', $3, $4)", [
+      res.id,
+      userId,
+      JSON.stringify({ status: "checked_in" }),
+      JSON.stringify({ status: "confirmed" }),
     ]);
   });
 }

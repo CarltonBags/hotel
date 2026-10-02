@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { ROUTING_CATEGORIES, isOneOf } from "@hoteloftware/domain";
-import { addFixedCharge, addFolio, checkIn, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, setRouting, voidCharge } from "@hoteloftware/db";
+import { addFixedCharge, addFolio, assignRoom, cancelCheckIn, checkIn, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, setRouting, voidCharge } from "@hoteloftware/db";
+import { authorize } from "@/lib/authorize";
 import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
 import { pool } from "@/lib/db";
@@ -15,9 +16,14 @@ import { formAction, type FormState } from "@/lib/form";
 
 const optionalDate = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 
-export async function checkInAction(reservationId: string): Promise<FormState> {
+/** Check in; with a room chosen at the desk, that room is assigned for the stay first. */
+export async function checkInAction(reservationId: string, roomId?: string | null): Promise<FormState> {
   return formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "check_in");
+    if (roomId) {
+      await authorize("manage_reservations", reservation.propertyId);
+      await assignRoom(pool(), schema, reservation.id, userId, String(roomId));
+    }
     await checkIn(pool(), schema, reservation.id, userId);
     revalidatePath(`/reservations/${reservation.id}`);
     await announceReservations(tenantId, reservation.propertyId);
@@ -122,5 +128,17 @@ export async function removeFixedChargeAction(reservationId: string, fixedCharge
     revalidatePath("/");
     await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Removed." };
+  });
+}
+
+/** Undo a check-in made by mistake, on the arrival day. */
+export async function cancelCheckInAction(reservationId: string): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "check_in");
+    await cancelCheckIn(pool(), schema, reservation.id, userId);
+    revalidatePath(`/reservations/${reservation.id}`);
+    revalidatePath("/");
+    await announceReservations(tenantId, reservation.propertyId);
+    return { ok: true, message: "Check-in cancelled." };
   });
 }

@@ -475,6 +475,79 @@ export async function moveRoomInHouse(pool: Pool, schema: string, id: string, us
   });
 }
 
+export interface RoomChoice {
+  id: string;
+  number: string;
+  /** Optional name beside the number. */
+  name: string;
+  roomTypeId: string;
+  roomTypeCode: string;
+  floor: string;
+  section: string | null;
+  features: string[];
+  bedPlaces: number;
+  /** No other stay holds the room on the nights asked for. */
+  free: boolean;
+  /** Who holds it when taken: confirmation number and guest. */
+  occupiedBy: string | null;
+}
+
+/**
+ * Rooms to choose from for a reservation from a night on (default: the whole
+ * stay, or tonight on for a guest in house): every room of its room type,
+ * of every type for a guest in house, with features, floor and section;
+ * rooms another stay holds on those nights are marked taken. Free rooms first.
+ */
+export async function listRoomChoices(pool: Pool, schema: string, id: string, options: { from?: string | undefined } = {}): Promise<RoomChoice[]> {
+  if (!isUuid(id)) return [];
+  return withTenant(pool, schema, async (tx) => {
+    const r = await loadForRead(tx, id);
+    const today = (await tx.query<{ today: string }>("select to_char((now() at time zone $1)::date, 'YYYY-MM-DD') as today", [r.time_zone])).rows[0]!.today;
+    const inHouse = r.status === "checked_in";
+    // a guest in house keeps the rooms of nights slept: choices start tonight at the earliest
+    const earliest = inHouse && today > r.arrival ? today : r.arrival;
+    const start = options.from && options.from > earliest ? checkDate(options.from) : earliest;
+    const { rows } = await tx.query<{
+      id: string;
+      number: string;
+      name: string;
+      room_type_id: string;
+      type_code: string;
+      floor: string;
+      section: string | null;
+      features: string[];
+      bed_places: number;
+      occupied_by: string | null;
+    }>(
+      `select m.id, m.number, m.name, m.room_type_id, t.code as type_code, m.floor, sec.name as section, m.bed_places,
+         coalesce((select array_agg(f.name order by f.name) from room_feature_assignments fa join room_features f on f.id = fa.feature_id where fa.room_id = m.id), '{}') as features,
+         (select b.confirmation_number || ' · ' || g.last_name from room_assignments a
+            join reservations x on x.id = a.reservation_id join bookings b on b.id = x.booking_id join guests g on g.id = x.primary_guest_id
+           where a.room_id = m.id and a.from_date < $3 and a.to_date > $2 and x.status = any($5::text[]) and x.id <> $4
+           order by a.from_date limit 1) as occupied_by
+       from rooms m join room_types t on t.id = m.room_type_id left join sections sec on sec.id = m.section_id
+       where m.property_id = $6 and (m.room_type_id = $1 or $7)
+         and not exists (select 1 from room_assignments own where own.room_id = m.id and own.reservation_id = $4 and own.from_date < $3 and own.to_date > $2)
+       order by m.room_type_id <> $1, m.number`,
+      [r.room_type_id, start, r.departure, r.id, OCCUPYING_STATUSES, r.property_id, inHouse],
+    );
+    const choices = rows.map((x) => ({
+      id: x.id,
+      number: x.number,
+      name: x.name,
+      roomTypeId: x.room_type_id,
+      roomTypeCode: x.type_code,
+      floor: x.floor,
+      section: x.section,
+      features: x.features,
+      bedPlaces: x.bed_places,
+      free: x.occupied_by === null,
+      occupiedBy: x.occupied_by,
+    }));
+    return [...choices.filter((c) => c.free), ...choices.filter((c) => !c.free)];
+  });
+}
+
 /** Free rooms of the reservation's room type; `anyType` (a guest in house changing type) lists every type, named "number · type". */
 export async function listFreeRooms(pool: Pool, schema: string, id: string, from?: string, options: { anyType?: boolean } = {}): Promise<{ id: string; name: string }[]> {
   if (!isUuid(id)) return [];

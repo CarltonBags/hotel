@@ -6,7 +6,7 @@ import { controlMigrations, tenantMigrations } from "../src/migrations/load";
 import { provisionTenant, type Tenant } from "../src/tenant/provision";
 import { createLegalEntity } from "../src/tenant/legal-entities";
 import { createProperty } from "../src/tenant/properties";
-import { createRoomType, createRooms, type Room } from "../src/tenant/rooms";
+import { createRoomFeature, createRoomType, createRooms, createSection, updateRoom, type Room } from "../src/tenant/rooms";
 import { applyTaxPreset, listTaxCodes } from "../src/tenant/tax-codes";
 import { createService } from "../src/tenant/services";
 import { createCancellationPolicy, createPaymentPolicy } from "../src/tenant/policies";
@@ -15,8 +15,8 @@ import { setRates } from "../src/tenant/rates";
 import { createGuest } from "../src/tenant/guests";
 import { createCompany } from "../src/tenant/companies";
 import { createBooking } from "../src/tenant/reservations";
-import { assignRoom, cancelReservation, listFreeRooms, moveRoomInHouse, ShorteningNeedsConfirmation, updateReservation } from "../src/tenant/reservation-changes";
-import { addFixedCharge, addFolio, checkIn, chargeHistory, listFixedCharges, loadFolios, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, voidCharge } from "../src/tenant/folios";
+import { assignRoom, cancelReservation, listFreeRooms, listRoomChoices, reservationHistory, moveRoomInHouse, ShorteningNeedsConfirmation, updateReservation } from "../src/tenant/reservation-changes";
+import { addFixedCharge, addFolio, cancelCheckIn, checkIn, chargeHistory, listFixedCharges, loadFolios, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, voidCharge } from "../src/tenant/folios";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -95,6 +95,18 @@ describe("check-in and folios", () => {
 
   it("check-in needs a room", async () => {
     await expect(checkIn(pool, tenant.schemaName, res, fd)).rejects.toThrow(/room/i);
+  });
+
+  it("room choices show every room of the type with features, floor and section, taken ones marked", async () => {
+    const s = tenant.schemaName;
+    const balcony = await createRoomFeature(pool, s, { propertyId: berlin, code: "BAL", name: "Balcony" });
+    const north = await createSection(pool, s, { propertyId: berlin, name: "North wing" });
+    await updateRoom(pool, s, berlin, rooms[0]!.id, { floor: "1", sectionId: north.id, featureIds: [balcony.id] });
+    const choices = await listRoomChoices(pool, s, res);
+    expect(choices.map((c) => [c.number, c.roomTypeCode, c.features, c.floor, c.section, c.free])).toEqual([
+      ["101", "DBL", ["Balcony"], "1", "North wing", true],
+      ["102", "DBL", [], "", null, true],
+    ]);
   });
 
   it("check-in of a 3-night package posts 6 Charges with Service Dates and Tax Codes, routed by the Company's rules", async () => {
@@ -239,6 +251,29 @@ describe("check-in and folios", () => {
     const [fixed] = await listFixedCharges(pool, s, id);
     await removeFixedCharge(pool, s, id, fixed!.id, fd);
     expect(await parkingNights()).toEqual([]);
+  });
+
+  it("cancelling a check-in on the arrival day voids the stay Charges and makes the stay Confirmed again", async () => {
+    const s = tenant.schemaName;
+    const b = await createBooking(pool, s, berlin, fd, { booker: { guestId: guest }, walkIn: false, notes: "", reservations: [{ arrival: today, departure: day(2), roomTypeId: dbl, ratePlanId: bar.id, adults: 2, childAges: [], primaryGuestId: guest }] });
+    const id = b.reservations[0]!.id;
+    await createRooms(pool, s, { propertyId: berlin, roomTypeId: dbl, numbers: ["103"] });
+    const free = (await listRoomChoices(pool, s, id)).find((c) => c.free)!;
+    expect(free.number).toBe("103");
+    expect((await listRoomChoices(pool, s, id)).some((c) => !c.free && c.occupiedBy)).toBe(true);
+    await assignRoom(pool, s, id, fd, free.id);
+    await checkIn(pool, s, id, fd);
+    const mini = await postServiceCharge(pool, s, id, { serviceId: minibar, quantity: 1 }, fd);
+    await cancelCheckIn(pool, s, id, fd);
+    const charges = (await loadFolios(pool, s, id)).folios.flatMap((f) => f.charges);
+    expect(charges.filter((c) => c.origin === "stay").every((c) => c.voided && c.autoVoid === "check_in_cancelled")).toBe(true);
+    // a Charge posted by hand stays on the folio
+    expect(charges.find((c) => c.id === mini.id)!.voided).toBe(false);
+    expect((await reservationHistory(pool, s, id))[0]).toMatchObject({ action: "cancel_check_in", before: { status: "checked_in" }, after: { status: "confirmed" } });
+    await expect(cancelCheckIn(pool, s, id, fd)).rejects.toThrow(/not checked in/);
+    // checking in again posts the stay afresh
+    await checkIn(pool, s, id, fd);
+    expect((await loadFolios(pool, s, id)).folios.flatMap((f) => f.charges).filter((c) => c.origin === "stay" && !c.voided)).toHaveLength(4);
   });
 
   it("staff add Folios with another Bill-to", async () => {

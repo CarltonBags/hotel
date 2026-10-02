@@ -112,3 +112,11 @@
 - German terms "Fixleistung" and the earlier "Logis-Leistung" need the owner's confirmation in the glossary.
 - The Card Hold column, the "no card preauthorisation" filter and balances after payments arrive with ticket 27. The Checked out list fills with check-out in ticket 28.
 - Service and spa staff roles are treated like back-office roles for property scope, since the ticket names only the four front-office roles. Outlet tickets may revisit this.
+
+**Follow-up (2026-10-02, owner):**
+- On the reservation, Room Assignment sits beside Cancel, or beside Cancel check-in for a guest in house. Secondary buttons have a visible outline.
+- Rooms to choose from are cards with number and name, room type, floor, section, beds and features. Taken rooms show who holds them. A filter matches number, type or feature, with a "free only" switch.
+- Check-in without a room for tonight opens that room choice and assigns and checks in in one step, from the reservation, the Today workspace and the arrivals list.
+- Cancel check-in, for a check-in made by mistake, works on the arrival day only. The stay is Confirmed again, the night Charges are voided as "Check-in cancelled", and Charges posted by hand stay. It is logged in the history (migration 0012).
+- Verified: 256 tests green; browser walkthrough 9/9.
+- Dev data: Berlin has one real room type (Doppelzimmer, 21 rooms) plus a one-room test type. Some rooms got features (Balcony, Bathtub, Accessible, Quiet courtyard side) and floors for the room cards.

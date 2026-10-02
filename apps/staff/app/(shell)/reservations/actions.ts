@@ -9,7 +9,7 @@ import {
   cancelReservation,
   createBooking,
   createGuest,
-  listFreeRooms,
+  listRoomChoices,
   moveRoom,
   moveRoomInHouse,
   previewBookingCancellation,
@@ -25,6 +25,7 @@ import {
   ShorteningNeedsConfirmation,
   type Guest,
   type NewBooking,
+  type RoomChoice,
 } from "@hoteloftware/db";
 import { authorize, authorizeAnywhere } from "@/lib/authorize";
 import { announceReservations } from "@/lib/live";
@@ -182,10 +183,10 @@ export async function feeAction(reservationId: string, status: "confirmed" | "wa
   });
 }
 
-/** Free rooms; a guest in house may move into another room type, so every type is listed for them. */
-export async function freeRoomsAction(reservationId: string, from?: string): Promise<{ id: string; name: string }[]> {
+/** Rooms to choose from, with features; a guest in house may move into another room type, so every type is listed for them. */
+export async function roomChoicesAction(reservationId: string, from?: string): Promise<RoomChoice[]> {
   const { schema, reservation } = await reservationScope(reservationId);
-  return listFreeRooms(pool(), schema, reservation.id, from ? String(from) : undefined, { anyType: reservation.status === "checked_in" });
+  return listRoomChoices(pool(), schema, reservation.id, { from: from ? String(from) : undefined });
 }
 
 export async function assignRoomAction(reservationId: string, roomId: string, from: string | null): Promise<FormState> {

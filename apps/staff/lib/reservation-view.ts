@@ -88,15 +88,18 @@ export async function reservationView(id: string, options: { propertyId?: string
     registration: guest ? { gaps: registrationGaps(guest, property.country), fields: registrationFields(property.country, guest.nationality) } : { gaps: [] as RegistrationField[], fields: [] as RegistrationField[] },
     fixedCharges,
     roomTypes,
-    actionsProps: actionsProps(r, roomTypes.filter((t) => plan?.roomTypeIds.includes(t.id) ?? t.id === r.roomType.id).map((t) => ({ id: t.id, label: `${t.code} · ${t.name}` })), currency),
+    actionsProps: actionsProps(r, r.status === "checked_in" && rights.checkIn && r.arrival === today, roomTypes.filter((t) => plan?.roomTypeIds.includes(t.id) ?? t.id === r.roomType.id).map((t) => ({ id: t.id, label: `${t.code} · ${t.name}` })), currency),
     folioProps: folioProps(r, m, guestName, folios, services, taxCodes, chargeLog, names, fmt, money, today, rights, currency),
     serviceOptions: services.filter((x) => x.active).map((x) => ({ id: x.id, label: `${x.code} · ${x.name}`, price: x.defaultPrice })),
   };
 }
 
+const AUTO_VOIDS = ["early_departure", "stay_changed", "check_in_cancelled"] as const;
+const isAutoVoid = (v: unknown): v is (typeof AUTO_VOIDS)[number] => typeof v === "string" && (AUTO_VOIDS as readonly string[]).includes(v);
+
 export type ReservationView = NonNullable<Awaited<ReturnType<typeof reservationView>>>;
 
-function actionsProps(r: ReservationDetail, roomTypes: { id: string; label: string }[], currency: { code: string; language: Language; country: string }) {
+function actionsProps(r: ReservationDetail, canCancelCheckIn: boolean, roomTypes: { id: string; label: string }[], currency: { code: string; language: Language; country: string }) {
   return {
     reservation: {
       id: r.id,
@@ -111,6 +114,7 @@ function actionsProps(r: ReservationDetail, roomTypes: { id: string; label: stri
       cancellationFee: r.cancellationFee,
       cancellationFeeStatus: r.cancellationFeeStatus,
       openInBooking: r.booking.openReservations,
+      canCancelCheckIn,
     },
     roomTypes,
     currency,
@@ -149,7 +153,7 @@ function folioProps(
       user: names.get(e.userId) ?? e.userId,
       action: e.action,
       description: e.origin === "fee" ? m["folio.earlyDepartureFee"] : e.description,
-      reason: e.detail.auto === "early_departure" || e.detail.auto === "stay_changed" ? m[`folio.autoVoid.${e.detail.auto}`] : typeof e.detail.reason === "string" ? e.detail.reason : null,
+      reason: isAutoVoid(e.detail.auto) ? m[`folio.autoVoid.${e.detail.auto}`] : typeof e.detail.reason === "string" ? e.detail.reason : null,
     })),
     today,
     rights: { post: rights.post, freeText: rights.freeText, manage: rights.manageFolios, companies: rights.companies },

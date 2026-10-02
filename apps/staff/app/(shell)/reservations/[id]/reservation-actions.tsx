@@ -4,7 +4,10 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatCurrency, type Language } from "@hoteloftware/domain";
 import { fill, type Messages } from "@/i18n/messages";
-import { assignRoomAction, cancelAction, editReservationAction, feeAction, freeRoomsAction, previewCancelAction, unassignAction } from "../actions";
+import type { RoomChoice } from "@hoteloftware/db";
+import { assignRoomAction, cancelAction, editReservationAction, feeAction, previewCancelAction, roomChoicesAction, unassignAction } from "../actions";
+import { cancelCheckInAction } from "../folio-actions";
+import { RoomPicker } from "../room-picker";
 
 interface Props {
   reservation: {
@@ -21,6 +24,8 @@ interface Props {
     cancellationFeeStatus: "open" | "confirmed" | "waived" | null;
     /** Confirmed reservations in the booking, this one included. */
     openInBooking: number;
+    /** A check-in made today that may still be undone. */
+    canCancelCheckIn: boolean;
   };
   roomTypes: { id: string; label: string }[];
   currency: { code: string; language: Language; country: string };
@@ -29,6 +34,8 @@ interface Props {
 
 const input = "h-9 w-full rounded-xl border border-ink-10 bg-surface px-3 text-sm";
 const button = "h-9 rounded-full px-4 text-sm font-medium";
+/** Secondary actions: a visible outline, not bare text. */
+const secondary = `${button} border border-ink-10 bg-surface hover:bg-ink-5`;
 
 /** Edit, cancel and room assignment on the reservation tab. Every action is checked again on the server. */
 export function ReservationActions({ reservation: r, roomTypes, currency, m }: Props) {
@@ -70,14 +77,15 @@ export function ReservationActions({ reservation: r, roomTypes, currency, m }: P
     });
 
   // rooms
-  const [rooms, setRooms] = useState<{ id: string; name: string }[] | null>(null);
+  const [rooms, setRooms] = useState<RoomChoice[] | null>(null);
+  const [cancelCheckInAsk, setCancelCheckInAsk] = useState(false);
   // the night a move starts; defaults to the second night once a room is assigned (also after an assignment made here)
   const [moveFromChoice, setMoveFrom] = useState<string>("");
   const moveFrom = moveFromChoice && r.nights.includes(moveFromChoice) ? moveFromChoice : (r.nights[1] ?? r.nights[0] ?? "");
   const [room, setRoom] = useState("");
   const loadRooms = (from: string) =>
     startTransition(async () => {
-      setRooms(await freeRoomsAction(r.id, from || undefined));
+      setRooms(await roomChoicesAction(r.id, from || undefined));
       setRoom("");
     });
 
@@ -129,7 +137,7 @@ export function ReservationActions({ reservation: r, roomTypes, currency, m }: P
                 <button type="button" disabled={pending} onClick={() => save(true)} className={`${button} bg-danger text-white`}>
                   {m["res.overbookConfirm"]}
                 </button>
-                <button type="button" onClick={() => setOverbookAsk(false)} className={`${button} hover:bg-ink-5`}>
+                <button type="button" onClick={() => setOverbookAsk(false)} className={secondary}>
                   {m["res.keepAsIs"]}
                 </button>
               </div>
@@ -151,7 +159,7 @@ export function ReservationActions({ reservation: r, roomTypes, currency, m }: P
                 <button type="button" disabled={pending} onClick={() => save(false, true)} className={`${button} bg-danger text-white`}>
                   {m["res.shortenConfirm"]}
                 </button>
-                <button type="button" onClick={() => setShortenAsk(null)} className={`${button} hover:bg-ink-5`}>
+                <button type="button" onClick={() => setShortenAsk(null)} className={secondary}>
                   {m["res.keepAsIs"]}
                 </button>
               </div>
@@ -163,101 +171,106 @@ export function ReservationActions({ reservation: r, roomTypes, currency, m }: P
         </section>
       ) : null}
 
-      {open ? (
-        <section aria-label={m["res.roomAssignment"]} className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm">
-          <h2 className="font-medium">{m["res.roomAssignment"]}</h2>
-          {r.assignments.length === 0 ? <p className="text-ink-60">{m["res.noRoom"]}</p> : null}
-          <ul className="grid gap-1">
-            {r.assignments.map((a) => (
-              <li key={`${a.from}`}>
-                {fill(m["res.roomSegment"], { room: a.roomName, from: a.from, to: a.to })}
-              </li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap items-end gap-2">
-            {r.assignments.length ? (
-              <label className="grid gap-1">
-                <span className="text-ink-80">{m["res.moveFrom"]}</span>
-                <select value={moveFrom} onChange={(e) => setMoveFrom(e.target.value)} className={input}>
-                  {r.nights.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <button type="button" onClick={() => loadRooms(r.assignments.length ? moveFrom : "")} className={`${button} hover:bg-ink-5`}>
-              {m["res.findRooms"]}
-            </button>
-            {rooms ? (
-              rooms.length ? (
-                <>
-                  <label className="grid gap-1">
-                    <span className="text-ink-80">{m["res.freeRoom"]}</span>
-                    <select value={room} onChange={(e) => setRoom(e.target.value)} className={input} aria-label={m["res.freeRoom"]}>
-                      <option value="">–</option>
-                      {rooms.map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    disabled={!room || pending}
-                    onClick={() => startTransition(async () => done(await assignRoomAction(r.id, room, r.assignments.length ? moveFrom : null)))}
-                    className={`${button} bg-accent text-white disabled:opacity-40`}
-                  >
-                    {r.assignments.length ? m["res.move"] : m["res.assign"]}
-                  </button>
-                </>
-              ) : (
-                <span className="text-danger">{m["res.noFreeRoom"]}</span>
-              )
-            ) : null}
-            {r.assignments.length && r.status !== "checked_in" ? (
-              <button type="button" onClick={() => startTransition(async () => done(await unassignAction(r.id)))} className={`${button} hover:bg-ink-5`}>
-                {m["res.unassign"]}
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        {open ? (
+          <section aria-label={m["res.roomAssignment"]} className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm">
+            <h2 className="font-medium">{m["res.roomAssignment"]}</h2>
+            {r.assignments.length === 0 ? <p className="text-ink-60">{m["res.noRoom"]}</p> : null}
+            <ul className="grid gap-1">
+              {r.assignments.map((a) => (
+                <li key={`${a.from}`}>{fill(m["res.roomSegment"], { room: a.roomName, from: a.from, to: a.to })}</li>
+              ))}
+            </ul>
+            <div className="flex flex-wrap items-end gap-2">
+              {r.assignments.length ? (
+                <label className="grid gap-1">
+                  <span className="text-ink-80">{m["res.moveFrom"]}</span>
+                  <select value={moveFrom} onChange={(e) => (setMoveFrom(e.target.value), setRooms(null))} className={input}>
+                    {r.nights.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button type="button" onClick={() => loadRooms(r.assignments.length ? moveFrom : "")} className={secondary}>
+                {m["res.findRooms"]}
               </button>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      {r.status === "confirmed" ? (
-        <section aria-label={m["res.cancel"]} className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm">
-          <h2 className="font-medium">{m["res.cancel"]}</h2>
-          {cancelAsk ? (
-            <div role="alertdialog" aria-label={m["res.cancel"]} className="grid gap-2 rounded-xl border border-ink-10 bg-surface p-3">
-              <p>
-                {cancelAsk.amount > 0 ? fill(m["res.feeDue"], { fee: money(cancelAsk.amount) }) : m["res.freeCancel"]}
-              </p>
-              {cancelAsk.whole ? <p className="text-ink-60">{fill(m["res.cancelWholeNote"], { n: String(r.openInBooking) })}</p> : null}
-              <div className="flex gap-2">
-                <button type="button" disabled={pending} onClick={() => startTransition(async () => done(await cancelAction(r.id, cancelAsk.whole)))} className={`${button} bg-danger text-white`}>
-                  {cancelAsk.whole ? m["res.cancelWhole"] : m["res.cancelThis"]}
-                </button>
-                <button type="button" onClick={() => setCancelAsk(null)} className={`${button} hover:bg-ink-5`}>
-                  {m["res.keepAsIs"]}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => askCancel(false)} className={`${button} hover:bg-ink-5`}>
-                {m["res.cancelThis"]}
-              </button>
-              {r.openInBooking > 1 ? (
-                <button type="button" onClick={() => askCancel(true)} className={`${button} hover:bg-ink-5`}>
-                  {m["res.cancelWhole"]}
+              {r.assignments.length && r.status !== "checked_in" ? (
+                <button type="button" onClick={() => startTransition(async () => done(await unassignAction(r.id)))} className={secondary}>
+                  {m["res.unassign"]}
                 </button>
               ) : null}
             </div>
-          )}
-        </section>
-      ) : null}
+            {rooms ? (
+              <>
+                <RoomPicker choices={rooms} selected={room} onSelect={setRoom} m={m} />
+                <button
+                  type="button"
+                  disabled={!room || pending}
+                  onClick={() => startTransition(async () => done(await assignRoomAction(r.id, room, r.assignments.length ? moveFrom : null)))}
+                  className={`${button} justify-self-start bg-accent text-white disabled:opacity-40`}
+                >
+                  {r.assignments.length ? m["res.move"] : m["res.assign"]}
+                </button>
+              </>
+            ) : null}
+          </section>
+        ) : null}
+
+        {r.status === "confirmed" ? (
+          <section aria-label={m["res.cancel"]} className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm">
+            <h2 className="font-medium">{m["res.cancel"]}</h2>
+            {cancelAsk ? (
+              <div role="alertdialog" aria-label={m["res.cancel"]} className="grid gap-2 rounded-xl border border-ink-10 bg-surface p-3">
+                <p>{cancelAsk.amount > 0 ? fill(m["res.feeDue"], { fee: money(cancelAsk.amount) }) : m["res.freeCancel"]}</p>
+                {cancelAsk.whole ? <p className="text-ink-60">{fill(m["res.cancelWholeNote"], { n: String(r.openInBooking) })}</p> : null}
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" disabled={pending} onClick={() => startTransition(async () => done(await cancelAction(r.id, cancelAsk.whole)))} className={`${button} bg-danger text-white`}>
+                    {cancelAsk.whole ? m["res.cancelWhole"] : m["res.cancelThis"]}
+                  </button>
+                  <button type="button" onClick={() => setCancelAsk(null)} className={secondary}>
+                    {m["res.keepAsIs"]}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => askCancel(false)} className={`${button} border border-danger/40 bg-surface text-danger hover:bg-danger/5`}>
+                  {m["res.cancelThis"]}
+                </button>
+                {r.openInBooking > 1 ? (
+                  <button type="button" onClick={() => askCancel(true)} className={`${button} border border-danger/40 bg-surface text-danger hover:bg-danger/5`}>
+                    {m["res.cancelWhole"]}
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        {r.canCancelCheckIn ? (
+          <section aria-label={m["res.cancelCheckIn"]} className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm">
+            <h2 className="font-medium">{m["res.cancelCheckIn"]}</h2>
+            <p className="text-xs text-ink-60">{m["res.cancelCheckInHelp"]}</p>
+            {cancelCheckInAsk ? (
+              <div role="alertdialog" aria-label={m["res.cancelCheckIn"]} className="flex flex-wrap gap-2">
+                <button type="button" disabled={pending} onClick={() => startTransition(async () => (setCancelCheckInAsk(false), done(await cancelCheckInAction(r.id))))} className={`${button} bg-danger text-white`}>
+                  {m["res.cancelCheckInConfirm"]}
+                </button>
+                <button type="button" onClick={() => setCancelCheckInAsk(false)} className={secondary}>
+                  {m["res.keepAsIs"]}
+                </button>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setCancelCheckInAsk(true)} className={`${button} justify-self-start border border-danger/40 bg-surface text-danger hover:bg-danger/5`}>
+                {m["res.cancelCheckIn"]}
+              </button>
+            )}
+          </section>
+        ) : null}
+      </div>
 
       {r.cancellationFeeStatus ? (
         <section aria-label={m["res.cancellationFee"]} className="grid gap-2 rounded-2xl bg-surface-2 p-5 text-sm">
@@ -270,7 +283,7 @@ export function ReservationActions({ reservation: r, roomTypes, currency, m }: P
               <button type="button" onClick={() => startTransition(async () => done(await feeAction(r.id, "confirmed")))} className={`${button} bg-accent text-white`}>
                 {m["res.feeConfirm"]}
               </button>
-              <button type="button" onClick={() => startTransition(async () => done(await feeAction(r.id, "waived")))} className={`${button} hover:bg-ink-5`}>
+              <button type="button" onClick={() => startTransition(async () => done(await feeAction(r.id, "waived")))} className={secondary}>
                 {m["res.feeWaive"]}
               </button>
             </div>

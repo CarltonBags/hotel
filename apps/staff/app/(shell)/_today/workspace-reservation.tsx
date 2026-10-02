@@ -88,7 +88,7 @@ export function WorkspaceReservation({ summary: s, rights, actionsProps, folioPr
       </header>
 
       <div role="toolbar" aria-label={m["ws.reservation"]} className="flex flex-wrap gap-2">
-        {s.canCheckIn ? <CheckInButton reservationId={s.id} label={m["res.checkIn"]} /> : null}
+        {s.canCheckIn ? <CheckInButton reservationId={s.id} needsRoom={s.room === null} m={m} /> : null}
         <span title={soon("27, 28")}>
           <button type="button" disabled className={`${pill} bg-surface-2 disabled:opacity-40`}>
             <CreditCard size={15} />

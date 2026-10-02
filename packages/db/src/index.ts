@@ -158,6 +158,8 @@ export {
   changeStayIntoRoom,
   listFreeRooms,
   listOverbooked,
+  listRoomChoices,
+  type RoomChoice,
   moveRoom,
   moveRoomInHouse,
   previewBookingCancellation,
@@ -197,6 +199,7 @@ export {
 export {
   addFixedCharge,
   addFolio,
+  cancelCheckIn,
   chargeHistory,
   listFixedCharges,
   removeFixedCharge,

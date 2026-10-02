@@ -79,7 +79,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         </p>
         {r.status === "confirmed" && rights.checkIn && r.arrival <= today && today < r.departure ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <CheckInButton reservationId={r.id} label={m["res.checkIn"]} />
+            <CheckInButton reservationId={r.id} needsRoom={!r.assignments.some((a) => a.from <= today && a.to > today)} m={m} />
             <span className="text-xs text-ink-60">{m["res.checkInHelp"]}</span>
           </div>
         ) : null}

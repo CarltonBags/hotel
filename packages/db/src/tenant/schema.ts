@@ -641,7 +641,7 @@ export const reservationChanges = pgTable(
   },
   (t) => [
     index("reservation_changes_reservation_idx").on(t.reservationId, t.at.desc()),
-    check("reservation_changes_action_check", sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in')`),
+    check("reservation_changes_action_check", sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in', 'cancel_check_in')`),
   ],
 );
 
@@ -721,7 +721,7 @@ export const charges = pgTable(
     check("charges_category_check", sql`${t.category} in ('accommodation', 'package', 'extras', 'city_tax')`),
     check("charges_origin_check", sql`${t.origin} in ('stay', 'catalogue', 'free_text', 'fee')`),
     check("charges_component_check", sql`(${t.origin} = 'stay') = (${t.component} is not null)`),
-    check("charges_auto_void_check", sql`${t.autoVoid} in ('early_departure', 'stay_changed')`),
+    check("charges_auto_void_check", sql`${t.autoVoid} in ('early_departure', 'stay_changed', 'check_in_cancelled')`),
     check("charges_void_check", sql`(${t.voidedAt} is null) = (${t.voidReason} is null) and (${t.voidedAt} is null) = (${t.voidedBy} is null) and (${t.autoVoid} is null or ${t.voidedAt} is not null)`),
   ],
 );

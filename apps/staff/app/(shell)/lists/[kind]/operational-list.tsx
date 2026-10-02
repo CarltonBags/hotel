@@ -141,7 +141,7 @@ export function OperationalList({
                   </td>
                 ))}
                 {checkIn ? (
-                  <td className="py-2 pr-3 print:hidden">{r.status === "confirmed" ? <CheckInButton reservationId={r.reservationId} label={m["res.checkIn"]} compact /> : null}</td>
+                  <td className="py-2 pr-3 print:hidden">{r.status === "confirmed" ? <CheckInButton reservationId={r.reservationId} needsRoom={r.room === null} compact m={m} /> : null}</td>
                 ) : null}
               </tr>
             ))}
