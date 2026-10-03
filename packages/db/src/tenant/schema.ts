@@ -49,8 +49,13 @@ export const properties = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     terminalLocationId: text("terminal_location_id"),
     refundLimit: numeric("refund_limit", { precision: 12, scale: 2 }).notNull().default("200"),
+    cityTaxPassOn: text("city_tax_pass_on").notNull().default("on_top"),
   },
-  (t) => [index("properties_legal_entity_idx").on(t.legalEntityId), check("properties_refund_limit_check", sql`${t.refundLimit} >= 0`)],
+  (t) => [
+    index("properties_legal_entity_idx").on(t.legalEntityId),
+    check("properties_refund_limit_check", sql`${t.refundLimit} >= 0`),
+    check("properties_city_tax_pass_on_check", sql`${t.cityTaxPassOn} in ('on_top', 'absorbed')`),
+  ],
 );
 
 export const roomTypes = pgTable(
@@ -594,6 +599,7 @@ export const reservations = pgTable(
     checkedInBy: text("checked_in_by"),
     checkedOutAt: timestamp("checked_out_at", { withTimezone: true }),
     checkedOutBy: text("checked_out_by"),
+    cityTaxPassOn: text("city_tax_pass_on"),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -604,6 +610,7 @@ export const reservations = pgTable(
     check("reservations_status_check", sql`${t.status} in ('confirmed', 'checked_in', 'checked_out', 'cancelled', 'no_show')`),
     check("reservations_fee_status_check", sql`${t.cancellationFeeStatus} in ('open', 'confirmed', 'waived')`),
     check("reservations_fee_pair_check", sql`(${t.cancellationFee} is null) = (${t.cancellationFeeStatus} is null)`),
+    check("reservations_city_tax_pass_on_check", sql`${t.cityTaxPassOn} in ('on_top', 'absorbed')`),
   ],
 );
 
@@ -955,6 +962,115 @@ export const reminders = pgTable(
   (t) => [unique("reminders_invoice_level_key").on(t.invoiceId, t.level), check("reminders_level_check", sql`${t.level} between 1 and 3`)],
 );
 
+export const cityTaxRules = pgTable(
+  "city_tax_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    name: text("name").notNull(),
+    preset: text("preset"),
+    taxCodeId: uuid("tax_code_id").notNull().references(() => taxCodes.id),
+    revenueAccount: text("revenue_account").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [unique("city_tax_rules_property_key").on(t.propertyId), check("city_tax_rules_preset_check", sql`${t.preset} in ('berlin', 'hamburg', 'wien')`)],
+);
+
+export const cityTaxRuleVersions = pgTable(
+  "city_tax_rule_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ruleId: uuid("rule_id").notNull().references(() => cityTaxRules.id),
+    validFrom: date("valid_from").notNull(),
+    bookedFrom: date("booked_from"),
+    kind: text("kind").notNull(),
+    percent: numeric("percent", { precision: 6, scale: 3 }),
+    nightCap: integer("night_cap"),
+    stepBasis: text("step_basis").notNull().default("per_person"),
+    steps: jsonb("steps").notNull().default([]),
+    beyondEvery: numeric("beyond_every", { precision: 12, scale: 2 }),
+    beyondAmount: numeric("beyond_amount", { precision: 12, scale: 2 }),
+    flat: jsonb("flat").notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    unique("city_tax_rule_versions_key").on(t.ruleId, t.validFrom, t.bookedFrom).nullsNotDistinct(),
+    check("city_tax_rule_versions_kind_check", sql`${t.kind} in ('percentage', 'step_table', 'flat')`),
+    check("city_tax_rule_versions_percent_check", sql`${t.percent} >= 0 and ${t.percent} <= 100`),
+    check("city_tax_rule_versions_night_cap_check", sql`${t.nightCap} > 0`),
+    check("city_tax_rule_versions_step_basis_check", sql`${t.stepBasis} in ('per_person', 'per_room')`),
+    check("city_tax_rule_versions_beyond_check", sql`${t.beyondEvery} > 0`),
+    check("city_tax_rule_versions_percent_needed", sql`${t.kind} <> 'percentage' or ${t.percent} is not null`),
+  ],
+);
+
+export const cityTaxBaseServices = pgTable(
+  "city_tax_base_services",
+  {
+    ruleId: uuid("rule_id").notNull().references(() => cityTaxRules.id),
+    serviceId: uuid("service_id").notNull().references(() => services.id),
+  },
+  (t) => [primaryKey({ columns: [t.ruleId, t.serviceId] })],
+);
+
+export const cityTaxExemptionReasons = pgTable(
+  "city_tax_exemption_reasons",
+  {
+    ruleId: uuid("rule_id").notNull().references(() => cityTaxRules.id),
+    reason: text("reason").notNull(),
+    evidence: text("evidence").notNull().default("none"),
+    param: integer("param"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.ruleId, t.reason] }),
+    check("city_tax_exemption_reasons_reason_check", sql`${t.reason} in ('age', 'business_travel', 'resident', 'disability', 'long_stay', 'student', 'other')`),
+    check("city_tax_exemption_reasons_evidence_check", sql`${t.evidence} in ('none', 'note', 'document')`),
+    check("city_tax_exemption_reasons_param_check", sql`${t.param} > 0`),
+  ],
+);
+
+export const reservationCityTaxExemptions = pgTable(
+  "reservation_city_tax_exemptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    person: integer("person").notNull(),
+    reason: text("reason").notNull(),
+    note: text("note").notNull().default(""),
+    document: bytea("document"),
+    documentName: text("document_name"),
+    documentType: text("document_type"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    unique("reservation_city_tax_exemptions_key").on(t.reservationId, t.person),
+    check("reservation_city_tax_exemptions_person_check", sql`${t.person} >= 0`),
+    check("reservation_city_tax_exemptions_reason_check", sql`${t.reason} in ('business_travel', 'resident', 'disability', 'student', 'other')`),
+  ],
+);
+
+export const cityTaxNights = pgTable(
+  "city_tax_nights",
+  {
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    date: date("date").notNull(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    ruleId: uuid("rule_id").notNull().references(() => cityTaxRules.id),
+    versionId: uuid("version_id").references(() => cityTaxRuleVersions.id),
+    persons: integer("persons").notNull(),
+    taxable: integer("taxable").notNull(),
+    base: numeric("base", { precision: 12, scale: 2 }).notNull(),
+    tax: numeric("tax", { precision: 12, scale: 2 }).notNull(),
+    exempt: jsonb("exempt").notNull().default({}),
+    absorbed: boolean("absorbed").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [primaryKey({ columns: [t.reservationId, t.date] }), index("city_tax_nights_property_date_idx").on(t.propertyId, t.date)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1002,4 +1118,10 @@ export const tenantSchema = {
   invoices,
   receivableMatches,
   reminders,
+  cityTaxRules,
+  cityTaxRuleVersions,
+  cityTaxBaseServices,
+  cityTaxExemptionReasons,
+  reservationCityTaxExemptions,
+  cityTaxNights,
 };

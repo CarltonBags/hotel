@@ -186,6 +186,7 @@ async function Workspace({ property, list, selected }: { property: Awaited<Retur
             }}
             guest={view.guest}
             registration={view.registration}
+            cityTax={view.cityTax}
             m={m}
           />
         ) : (

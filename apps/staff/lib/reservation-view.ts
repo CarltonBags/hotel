@@ -4,6 +4,8 @@ import {
   findGuest,
   findProperty,
   findReservation,
+  getCityTaxRule,
+  listCityTaxExemptions,
   listCardHolds,
   listFixedCharges,
   listInvoices,
@@ -59,6 +61,8 @@ export async function reservationView(id: string, options: { propertyId?: string
     issueInvoices: at("issue_invoices"),
     correctInvoices: at("correct_invoices"),
     overrideCheckOut: at("override_check_out"),
+    /** City Tax exemptions are set while the stay is open. */
+    exemptCityTax: at("check_in") && chargeable,
   };
   const [users, roomTypes, plans, folios, chargeLog, services, taxCodes, fixedCharges, guest] = await Promise.all([
     listTenantUsers(pool(), tenant.id),
@@ -71,6 +75,7 @@ export async function reservationView(id: string, options: { propertyId?: string
     rights.folio ? listFixedCharges(pool(), s, r.id) : Promise.resolve<FixedCharge[]>([]),
     rights.guests ? findGuest(pool(), s, r.primaryGuest.id) : Promise.resolve<Guest | null>(null),
   ]);
+  const [cityTaxRule, cityTaxExemptions] = await Promise.all([getCityTaxRule(pool(), s, r.propertyId), listCityTaxExemptions(pool(), s, r.id)]);
   const [readers, holds, invoices] = rights.folio
     ? await Promise.all([listTerminalReaders(pool(), s, r.propertyId), listCardHolds(pool(), s, r.id), listInvoices(pool(), s, r.id)])
     : [[], [], []];
@@ -109,6 +114,19 @@ export async function reservationView(id: string, options: { propertyId?: string
     openFolios: folios.folios
       .filter((f) => f.charges.some((c) => !c.voided && !c.invoiceId))
       .map((f) => ({ id: f.id, label: fill(m["folio.label"], { n: String(f.number), name: f.billToName }) })),
+    /** City Tax exemptions per person; null when the property has no City Tax Rule. */
+    cityTax: cityTaxRule.rule
+      ? {
+          reservationId: r.id,
+          persons: [
+            ...Array.from({ length: r.adults }, (_, i) => (i === 0 ? fill(m["ctax.primary"], { name: guestName }) : fill(m["ctax.adult"], { n: String(i + 1) }))),
+            ...r.childAges.map((age, i) => fill(m["ctax.child"], { n: String(i + 1), age: String(age) })),
+          ],
+          reasons: cityTaxRule.rule.reasons.filter((x) => x.reason !== "age" && x.reason !== "long_stay"),
+          exemptions: cityTaxExemptions,
+          canEdit: rights.exemptCityTax,
+        }
+      : null,
     /** A checked-in guest may be checked out here. */
     canCheckOut: r.status === "checked_in" && rights.checkIn,
     /** Payments and Card Holds: the panels' shared props. */

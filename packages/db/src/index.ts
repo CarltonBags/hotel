@@ -274,3 +274,22 @@ export {
   type RangeKind,
 } from "./tenant/invoices";
 export { issueReminder, keepReminderPdf, listReceivables, matchTransfer, reminderDocument, type ReceivableRow, type Receivables, type TransferMatch } from "./tenant/receivables";
+export {
+  EVIDENCE_MAX_BYTES,
+  EVIDENCE_TYPES,
+  addCityTaxVersion,
+  cityTaxEvidence,
+  cityTaxReport,
+  createCityTaxRule,
+  getCityTaxRule,
+  listCityTaxExemptions,
+  removeCityTaxExemption,
+  removeCityTaxVersion,
+  setCityTaxExemption,
+  setCityTaxPassOn,
+  updateCityTaxRule,
+  type CityTaxChange,
+  type CityTaxExemption,
+  type CityTaxReport,
+  type CityTaxRuleView,
+} from "./tenant/city-tax";

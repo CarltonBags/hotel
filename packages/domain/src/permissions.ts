@@ -110,6 +110,8 @@ export const PROPERTY_ACTIONS = {
   manage_receivables: ["property_manager", "accounting"],
   /** Check-out with balances open: a Manager's decision (Front Desk would need an Approval, ticket 31). */
   override_check_out: ["property_manager"],
+  /** Matrix "Financial reports, City Tax report". */
+  view_financial_reports: ["property_manager", "accounting"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */
   manage_payment_settings: ["property_manager"],
 } as const satisfies Record<string, readonly PropertyRole[]>;
