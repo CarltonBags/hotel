@@ -16,6 +16,7 @@ export function CompanyForm({ company, readOnly, m }: { company?: Company; readO
         <Field label={m["companies.name"]} name="name" defaultValue={company?.name} required {...ro} />
         <Field label={m["field.vatId"]} name="vatId" defaultValue={company?.vatId ?? undefined} {...ro} />
         <Field label={m["companies.contactPerson"]} name="contactPerson" defaultValue={company?.contactPerson} {...ro} />
+        <Field label={m["companies.buyerReference"]} name="buyerReference" defaultValue={company?.buyerReference} {...ro} />
         <Field label={m["field.addressLine1"]} name="addressLine1" defaultValue={company?.addressLine1} {...ro} />
         <Field label={m["field.addressLine2"]} name="addressLine2" defaultValue={company?.addressLine2} {...ro} />
         <div className="grid grid-cols-[1fr_2fr_1fr] gap-2">

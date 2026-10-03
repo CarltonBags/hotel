@@ -20,6 +20,7 @@ function companyData(formData: FormData): Partial<CompanyData> & { name: string 
     billingEmail: field(formData, "billingEmail") || null,
     phone: field(formData, "phone") || null,
     contactPerson: field(formData, "contactPerson"),
+    buyerReference: field(formData, "buyerReference"),
     paymentTermsDays: integerOrNull(formData, "paymentTermsDays") ?? 14,
     onAccount: flag(formData, "onAccount"),
     routing: ROUTING_CATEGORIES.filter((c) => flag(formData, `routing_${c}`)),

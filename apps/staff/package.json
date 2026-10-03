@@ -23,7 +23,8 @@
     "react-dom": "19.3.0",
     "@hoteloftware/domain": "workspace:*",
     "@hoteloftware/events": "workspace:*",
-    "@hoteloftware/payments": "workspace:*"
+    "@hoteloftware/payments": "workspace:*",
+    "@hoteloftware/invoices": "workspace:*"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

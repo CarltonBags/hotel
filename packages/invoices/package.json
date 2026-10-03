@@ -1,0 +1,26 @@
+{
+  "name": "@hoteloftware/invoices",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./labels": "./src/labels.ts",
+    "./document": "./src/document.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cantoo/pdf-lib": "^2.11.1",
+    "@e-invoice-eu/core": "^3.3.3",
+    "@hoteloftware/domain": "workspace:*",
+    "@pdf-lib/fontkit": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

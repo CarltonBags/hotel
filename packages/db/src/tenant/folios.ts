@@ -55,6 +55,8 @@ export interface Charge {
   voidReason: string | null;
   /** Set when the stay sync voided it (shortening or a changed night), null for a void by hand. */
   autoVoid: AutoVoid | null;
+  /** The invoice it is on; an invoiced Charge is closed. */
+  invoiceId: string | null;
 }
 
 export interface Folio {
@@ -192,6 +194,9 @@ export type AutoVoid = "early_departure" | "stay_changed" | "check_in_cancelled"
 const AUTO_VOID_REASON: Record<AutoVoid, string> = { early_departure: "Early departure", stay_changed: "Stay changed", check_in_cancelled: "Check-in cancelled" };
 
 async function voidIn(tx: PoolClient, chargeId: string, reason: string, userId: string, auto: AutoVoid | null = null): Promise<void> {
+  const inv = (await tx.query<{ invoice_id: string | null }>("select invoice_id from charges where id = $1", [chargeId])).rows[0];
+  // an invoiced Charge is corrected by a cancellation invoice (ticket 29), never voided
+  if (inv?.invoice_id) throw new Error("The Charge is invoiced and cannot be voided");
   const { rowCount } = await tx.query("update charges set voided_at = clock_timestamp(), voided_by = $2, void_reason = $3, auto_void = $4 where id = $1 and voided_at is null", [
     chargeId,
     userId,
@@ -519,8 +524,9 @@ export async function moveCharge(pool: Pool, schema: string, reservationId: stri
     const res = await chargeReservation(tx, reservationId, chargeId);
     const folio = await tx.query("select 1 from folios where id = $1 and reservation_id = $2", [folioId, res.id]);
     if (!folio.rows.length) throw new Error("Folio not found on this reservation");
-    const { rows } = await tx.query<{ folio_id: string }>("select folio_id from charges where id = $1 and voided_at is null", [chargeId]);
+    const { rows } = await tx.query<{ folio_id: string; invoice_id: string | null }>("select folio_id, invoice_id from charges where id = $1 and voided_at is null", [chargeId]);
     if (!rows[0]) throw new Error("A voided Charge cannot be moved");
+    if (rows[0].invoice_id) throw new Error("The Charge is invoiced and cannot be moved");
     if (rows[0].folio_id === folioId) return;
     await tx.query("update charges set folio_id = $2 where id = $1", [chargeId, folioId]);
     await tx.query("insert into charge_events (charge_id, user_id, action, detail) values ($1, $2, 'move', $3)", [chargeId, userId, JSON.stringify({ from: rows[0].folio_id, to: folioId })]);
@@ -597,6 +603,7 @@ interface ChargeRow {
   voided_by: string | null;
   void_reason: string | null;
   auto_void: AutoVoid | null;
+  invoice_id: string | null;
 }
 
 /** The reservation's folios with every Charge (voided ones too), totals per Tax Code, and its Routing Rules. */
@@ -612,7 +619,7 @@ export async function loadFolios(pool: Pool, schema: string, reservationId: stri
     );
     const charges = await tx.query<ChargeRow>(
       `select ch.id, ch.folio_id, ch.service_id, ch.description, to_char(ch.service_date, 'YYYY-MM-DD') as service_date, ch.quantity, ch.unit_price, ch.amount,
-         ch.tax_code_id, t.code as tax_code, ch.tax_rate, ch.revenue_account, ch.category, ch.origin, ch.posted_at, ch.posted_by, ch.voided_at, ch.voided_by, ch.void_reason, ch.auto_void
+         ch.tax_code_id, t.code as tax_code, ch.tax_rate, ch.revenue_account, ch.category, ch.origin, ch.posted_at, ch.posted_by, ch.voided_at, ch.voided_by, ch.void_reason, ch.auto_void, ch.invoice_id
        from charges ch join tax_codes t on t.id = ch.tax_code_id
        where ch.reservation_id = $1 order by ch.service_date, ch.posted_at`,
       [reservationId],
@@ -640,6 +647,7 @@ export async function loadFolios(pool: Pool, schema: string, reservationId: stri
       voidedBy: c.voided_by,
       voidReason: c.void_reason,
       autoVoid: c.auto_void,
+      invoiceId: c.invoice_id,
     }));
     const payments = await paymentsOf(tx, reservationId);
     return {

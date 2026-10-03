@@ -6,6 +6,7 @@ import {
   findReservation,
   listCardHolds,
   listFixedCharges,
+  listInvoices,
   listTerminalReaders,
   listRatePlans,
   listRoomTypes,
@@ -18,7 +19,7 @@ import {
   type Guest,
   type ReservationDetail,
 } from "@hoteloftware/db";
-import type { Messages } from "@/i18n/messages";
+import { fill, type Messages } from "@/i18n/messages";
 import { paymentProvider } from "@hoteloftware/payments";
 import { requireAllowed, requirePrincipal } from "./authorize";
 import { pool } from "./db";
@@ -55,6 +56,8 @@ export async function reservationView(id: string, options: { propertyId?: string
     editGuests: canAtAnyProperty(actor, "edit_guests"),
     takePayments: at("take_payments"),
     refunds: at("refund_payments"),
+    issueInvoices: at("issue_invoices"),
+    overrideCheckOut: at("override_check_out"),
   };
   const [users, roomTypes, plans, folios, chargeLog, services, taxCodes, fixedCharges, guest] = await Promise.all([
     listTenantUsers(pool(), tenant.id),
@@ -67,7 +70,9 @@ export async function reservationView(id: string, options: { propertyId?: string
     rights.folio ? listFixedCharges(pool(), s, r.id) : Promise.resolve<FixedCharge[]>([]),
     rights.guests ? findGuest(pool(), s, r.primaryGuest.id) : Promise.resolve<Guest | null>(null),
   ]);
-  const [readers, holds] = rights.folio ? await Promise.all([listTerminalReaders(pool(), s, r.propertyId), listCardHolds(pool(), s, r.id)]) : [[], []];
+  const [readers, holds, invoices] = rights.folio
+    ? await Promise.all([listTerminalReaders(pool(), s, r.propertyId), listCardHolds(pool(), s, r.id), listInvoices(pool(), s, r.id)])
+    : [[], [], []];
   const provider = paymentProvider();
   // TODO(Night Audit ticket): the property's Business Date
   const today = todayIn(property.timeZone);
@@ -98,6 +103,13 @@ export async function reservationView(id: string, options: { propertyId?: string
     actionsProps: actionsProps(r, r.status === "checked_in" && rights.checkIn && r.arrival === today, roomTypes.filter((t) => plan?.roomTypeIds.includes(t.id) ?? t.id === r.roomType.id).map((t) => ({ id: t.id, label: `${t.code} · ${t.name}` })), currency),
     folioProps: folioProps(r, m, guestName, folios, services, taxCodes, chargeLog, names, fmt, money, today, rights, currency),
     serviceOptions: services.filter((x) => x.active).map((x) => ({ id: x.id, label: `${x.code} · ${x.name}`, price: x.defaultPrice })),
+    invoices,
+    /** Folios with Charges not invoiced yet. */
+    openFolios: folios.folios
+      .filter((f) => f.charges.some((c) => !c.voided && !c.invoiceId))
+      .map((f) => ({ id: f.id, label: fill(m["folio.label"], { n: String(f.number), name: f.billToName }) })),
+    /** A checked-in guest may be checked out here. */
+    canCheckOut: r.status === "checked_in" && rights.checkIn,
     /** Payments and Card Holds: the panels' shared props. */
     payments: {
       reservationId: r.id,

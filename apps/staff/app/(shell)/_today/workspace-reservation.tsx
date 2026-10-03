@@ -15,8 +15,9 @@ import { FolioPanel } from "../reservations/[id]/folio-panel";
 import { GuestDetails } from "../reservations/[id]/guest-details";
 import { ReservationActions } from "../reservations/[id]/reservation-actions";
 import { CardHoldsPanel, PaymentsPanel } from "../reservations/[id]/payments-panel";
+import { CheckOutPanel, InvoicesPanel } from "../reservations/[id]/invoices-panel";
 
-type Tab = "stay" | "guest" | "folio" | "fixed" | "billing" | "notes";
+type Tab = "stay" | "guest" | "folio" | "fixed" | "billing" | "notes" | "settle";
 
 export interface WorkspaceReservationProps {
   summary: {
@@ -40,6 +41,9 @@ export interface WorkspaceReservationProps {
   fixedProps: Omit<React.ComponentProps<typeof FixedCharges>, "m">;
   paymentsProps: Omit<React.ComponentProps<typeof PaymentsPanel>, "m">;
   holdsProps: Omit<React.ComponentProps<typeof CardHoldsPanel>, "m">;
+  invoicesProps: Omit<React.ComponentProps<typeof InvoicesPanel>, "m">;
+  /** Present when the guest is in house and may be checked out here. */
+  checkOutProps: Omit<React.ComponentProps<typeof CheckOutPanel>, "m"> | null;
   guest: Guest | null;
   registration: { gaps: RegistrationField[]; fields: RegistrationField[] };
   m: Messages;
@@ -52,7 +56,7 @@ const pill = "inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm fon
  * actions always in the same place, and its parts in tabs, editable in place.
  * Actions whose feature is not built yet show disabled with their ticket.
  */
-export function WorkspaceReservation({ summary: s, rights, actionsProps, folioProps, fixedProps, paymentsProps, holdsProps, guest, registration, m }: WorkspaceReservationProps) {
+export function WorkspaceReservation({ summary: s, rights, actionsProps, folioProps, fixedProps, paymentsProps, holdsProps, invoicesProps, checkOutProps, guest, registration, m }: WorkspaceReservationProps) {
   const { openRecord } = useShell();
   const [tab, setTab] = useState<Tab>("stay");
   // "Move room" opens the stay and brings its room assignment into view
@@ -66,6 +70,7 @@ export function WorkspaceReservation({ summary: s, rights, actionsProps, folioPr
     ...(rights.folio ? (["folio", "fixed"] as const) : []),
     ...(rights.manageFolios ? (["billing"] as const) : []),
     ...(rights.contacts ? (["notes"] as const) : []),
+    ...(rights.folio ? (["settle"] as const) : []),
   ];
   const soon = (ticket: string) => fill(m["ws.comesWith"], { ticket });
   const action = (label: string, icon: React.ReactNode, onClick: () => void, enabled = true) => (
@@ -92,12 +97,7 @@ export function WorkspaceReservation({ summary: s, rights, actionsProps, folioPr
 
       <div role="toolbar" aria-label={m["ws.reservation"]} className="flex flex-wrap gap-2">
         {s.canCheckIn ? <CheckInButton reservationId={s.id} needsRoom={s.room === null} m={m} /> : null}
-        <span title={soon("27, 28")}>
-          <button type="button" disabled className={`${pill} bg-surface-2 disabled:opacity-40`}>
-            <CreditCard size={15} />
-            {m["ws.settle"]}
-          </button>
-        </span>
+        {rights.folio ? action(m["ws.settle"], <CreditCard size={15} />, () => setTab("settle")) : null}
         <span title={soon("68, 70–77")}>
           <button type="button" disabled className={`${pill} bg-surface-2 disabled:opacity-40`}>
             <KeyRound size={15} />
@@ -140,6 +140,14 @@ export function WorkspaceReservation({ summary: s, rights, actionsProps, folioPr
         ) : null}
         {tab === "fixed" ? <FixedCharges {...fixedProps} m={m} /> : null}
         {tab === "billing" ? <CompanyBilling reservationId={s.id} existing={s.companyFolios} canSearch={rights.companies} m={m} /> : null}
+        {tab === "settle" ? (
+          <div className="grid gap-4">
+            <PaymentsPanel {...paymentsProps} m={m} />
+            <CardHoldsPanel {...holdsProps} m={m} />
+            <InvoicesPanel {...invoicesProps} m={m} />
+            {checkOutProps ? <CheckOutPanel {...checkOutProps} m={m} /> : null}
+          </div>
+        ) : null}
         {tab === "notes" && rights.contacts ? <Notes reservationId={s.id} notes={s.notes} canEdit={rights.manage} m={m} /> : null}
       </div>
     </div>

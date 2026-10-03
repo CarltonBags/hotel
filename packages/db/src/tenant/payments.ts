@@ -17,6 +17,7 @@ import {
 import { ProviderError, type IntentState, type PaymentProvider } from "@hoteloftware/payments";
 import { isUuid } from "./catalogue-common";
 import { approvalFor } from "./approvals";
+import { assertDepositInvoiceable, depositIn } from "./invoices";
 import { openFolios } from "./folios";
 import { mapProviderAccount } from "../control/external-ids";
 import { withTenant } from "./with-tenant";
@@ -335,11 +336,15 @@ export async function takePayment(
     if (!folio) throw new Error("Folio not found on this reservation");
     const ctx = viaProvider ? await accountFor(tx, res.property_id) : { accountId: "", currency: (await tx.query<{ currency: string }>("select currency from properties where id = $1", [res.property_id])).rows[0]!.currency.trim(), propertyId: res.property_id };
     const reader = viaProvider ? await readerOf(tx, res.property_id, String(input.readerId ?? "")) : null;
+    // money before check-in must be taxable as a deposit before it is taken
+    await assertDepositInvoiceable(tx, res.id, tender);
     const { rows } = await tx.query<PaymentRow>(
       `insert into payments (folio_id, reservation_id, property_id, tender, amount, currency, status, provider, reader_id, reference, posted_by, settled_at)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning ${PAYMENT_COLUMNS}`,
       [folio.id, res.id, res.property_id, tender, amount, ctx.currency, viaProvider ? "pending" : "succeeded", viaProvider ? provider.name : null, reader, reference, userId, viaProvider ? null : new Date()],
     );
+    // money received now, before check-in: its Deposit Invoice in the same transaction
+    if (!viaProvider) await depositIn(tx, rows[0]!.id, userId);
     return { row: rows[0]!, ctx, reader };
   });
   if (!viaProvider) return toPayment(prepared.row);
@@ -377,6 +382,11 @@ export async function syncPayment(pool: Pool, schema: string, provider: PaymentP
 /** Only a pending payment changes: webhook and desk polling cannot settle it twice. */
 async function applyIntentToPayment(pool: Pool, schema: string, paymentId: string, state: IntentState): Promise<Payment> {
   const status: PaymentStatus | null = state.status === "succeeded" ? "succeeded" : state.status === "failed" || state.status === "cancelled" ? "failed" : null;
+  return settleIntent(pool, schema, paymentId, state, status);
+}
+
+/** Settle a pending payment; one received before check-in gets its Deposit Invoice in the same transaction. */
+async function settleIntent(pool: Pool, schema: string, paymentId: string, state: IntentState, status: PaymentStatus | null): Promise<Payment> {
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query<PaymentRow>(
       `update payments set status = coalesce($2, status), card_brand = coalesce($3, card_brand), card_last4 = coalesce($4, card_last4), error = $5,
@@ -384,6 +394,7 @@ async function applyIntentToPayment(pool: Pool, schema: string, paymentId: strin
        where id = $1 and status = 'pending' returning ${PAYMENT_COLUMNS}`,
       [paymentId, status, state.brand, state.last4, state.status === "cancelled" ? "Cancelled at the reader" : state.error],
     );
+    if (rows[0]?.status === "succeeded") await depositIn(tx, rows[0].id, rows[0].posted_by);
     return toPayment(rows[0] ?? (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [paymentId])).rows[0]!);
   });
 }

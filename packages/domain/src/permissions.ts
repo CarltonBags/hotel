@@ -102,6 +102,10 @@ export const PROPERTY_ACTIONS = {
   refund_payments: ["property_manager", "front_desk", "accounting"],
   /** Matrix "Refund" without limit. */
   refund_without_limit: ["property_manager", "accounting"],
+  /** Matrix "Issue invoice". */
+  issue_invoices: ["property_manager", "front_desk", "accounting"],
+  /** Check-out with balances open: a Manager's decision (Front Desk would need an Approval, ticket 31). */
+  override_check_out: ["property_manager"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */
   manage_payment_settings: ["property_manager"],
 } as const satisfies Record<string, readonly PropertyRole[]>;

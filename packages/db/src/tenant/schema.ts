@@ -1,11 +1,14 @@
 import { sql } from "drizzle-orm";
-import { bigserial, boolean, char, check, date, foreignKey, index, pgSequence, integer, jsonb, numeric, pgTable, primaryKey, text, time, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { bigserial, customType, boolean, char, check, date, foreignKey, index, pgSequence, integer, jsonb, numeric, pgTable, primaryKey, text, time, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 /**
  * Tenant tables are declared UNQUALIFIED (pgTable, no schema): the same
  * definition serves every tenant through the transaction's search path.
  * Never use pgSchema(...) here. Mirrors migrations/tenant/*.sql.
  */
+/** Binary columns (issued invoice files). */
+const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
+
 export const tenantSettings = pgTable("tenant_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
@@ -26,6 +29,9 @@ export const legalEntities = pgTable("legal_entities", {
   accountHolder: text("account_holder").notNull().default(""),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  taxNumber: text("tax_number").notNull().default(""),
+  invoiceEmail: text("invoice_email").notNull().default(""),
+  invoicePhone: text("invoice_phone").notNull().default(""),
 });
 
 export const properties = pgTable(
@@ -586,6 +592,8 @@ export const reservations = pgTable(
     cancellationFeeStatus: text("cancellation_fee_status"),
     checkedInAt: timestamp("checked_in_at", { withTimezone: true }),
     checkedInBy: text("checked_in_by"),
+    checkedOutAt: timestamp("checked_out_at", { withTimezone: true }),
+    checkedOutBy: text("checked_out_by"),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -643,7 +651,7 @@ export const reservationChanges = pgTable(
   },
   (t) => [
     index("reservation_changes_reservation_idx").on(t.reservationId, t.at.desc()),
-    check("reservation_changes_action_check", sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in', 'cancel_check_in')`),
+    check("reservation_changes_action_check", sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in', 'cancel_check_in', 'check_out')`),
   ],
 );
 
@@ -715,11 +723,13 @@ export const charges = pgTable(
     voidedBy: text("voided_by"),
     voidReason: text("void_reason"),
     autoVoid: text("auto_void"),
+    invoiceId: uuid("invoice_id").references((): AnyPgColumn => invoices.id),
   },
   (t) => [
     index("charges_folio_idx").on(t.folioId),
     index("charges_reservation_idx").on(t.reservationId, t.serviceDate),
     index("charges_property_date_idx").on(t.propertyId, t.serviceDate).where(sql`${t.voidedAt} is null`),
+    index("charges_uninvoiced_idx").on(t.folioId).where(sql`${t.invoiceId} is null and ${t.voidedAt} is null`),
     check("charges_category_check", sql`${t.category} in ('accommodation', 'package', 'extras', 'city_tax')`),
     check("charges_origin_check", sql`${t.origin} in ('stay', 'catalogue', 'free_text', 'fee')`),
     check("charges_component_check", sql`(${t.origin} = 'stay') = (${t.component} is not null)`),
@@ -810,6 +820,7 @@ export const payments = pgTable(
     reference: text("reference").notNull().default(""),
     error: text("error"),
     providerAttempts: integer("provider_attempts").notNull().default(0),
+    invoiceId: uuid("invoice_id").references((): AnyPgColumn => invoices.id),
     approvedBy: text("approved_by"),
     postedAt: timestamp("posted_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     postedBy: text("posted_by").notNull(),
@@ -864,6 +875,54 @@ export const cardHolds = pgTable(
   ],
 );
 
+export const invoiceNumberRanges = pgTable(
+  "invoice_number_ranges",
+  {
+    legalEntityId: uuid("legal_entity_id").notNull().references(() => legalEntities.id),
+    kind: text("kind").notNull(),
+    format: text("format").notNull(),
+    nextValue: integer("next_value").notNull().default(1),
+    counterYear: integer("counter_year"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.legalEntityId, t.kind] }),
+    check("invoice_number_ranges_kind_check", sql`${t.kind} in ('final', 'deposit', 'cancellation')`),
+    check("invoice_number_ranges_next_check", sql`${t.nextValue} >= 1`),
+  ],
+);
+
+export const invoices = pgTable(
+  "invoices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    legalEntityId: uuid("legal_entity_id").notNull().references(() => legalEntities.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    folioId: uuid("folio_id").notNull().references(() => folios.id),
+    kind: text("kind").notNull(),
+    number: text("number").notNull(),
+    issueDate: date("issue_date").notNull(),
+    dueDate: date("due_date"),
+    currency: char("currency", { length: 3 }).notNull(),
+    gross: numeric("gross", { precision: 12, scale: 2 }).notNull(),
+    due: numeric("due", { precision: 12, scale: 2 }).notNull(),
+    receivable: boolean("receivable").notNull().default(false),
+    document: jsonb("document").notNull(),
+    paymentId: uuid("payment_id").references(() => payments.id),
+    nettedBy: uuid("netted_by").references((): AnyPgColumn => invoices.id),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    issuedBy: text("issued_by").notNull(),
+    pdf: bytea("pdf"),
+    xml: text("xml"),
+  },
+  (t) => [
+    unique("invoices_number_key").on(t.legalEntityId, t.number),
+    index("invoices_reservation_idx").on(t.reservationId),
+    index("invoices_folio_idx").on(t.folioId),
+    check("invoices_kind_check", sql`${t.kind} in ('final', 'deposit')`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -907,4 +966,6 @@ export const tenantSchema = {
   terminalReaders,
   payments,
   cardHolds,
+  invoiceNumberRanges,
+  invoices,
 };
