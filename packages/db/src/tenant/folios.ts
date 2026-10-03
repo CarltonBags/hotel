@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import {
   ROUTING_CATEGORIES,
   earlyDepartureFee,
+  folioBalance,
   fixedChargeNights,
   folioTotals,
   isOneOf,
@@ -15,6 +16,7 @@ import {
 } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
+import { paymentsOf, type Payment } from "./payments";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -63,6 +65,10 @@ export interface Folio {
   billToName: string;
   charges: Charge[];
   totals: { byTaxCode: TaxCodeTotal[]; gross: number };
+  /** Payments and refunds on the folio, oldest first. */
+  payments: Payment[];
+  /** Gross Charges less succeeded payments. */
+  balance: number;
 }
 
 export interface FolioView {
@@ -635,9 +641,12 @@ export async function loadFolios(pool: Pool, schema: string, reservationId: stri
       voidReason: c.void_reason,
       autoVoid: c.auto_void,
     }));
+    const payments = await paymentsOf(tx, reservationId);
     return {
       folios: folios.rows.map((f) => {
         const own = all.filter((c) => c.folioId === f.id);
+        const paid = payments.filter((p) => p.folioId === f.id);
+        const totals = folioTotals(own);
         return {
           id: f.id,
           number: f.number,
@@ -645,7 +654,9 @@ export async function loadFolios(pool: Pool, schema: string, reservationId: stri
           billToId: (f.company_id ?? f.guest_id)!,
           billToName: f.name,
           charges: own,
-          totals: folioTotals(own),
+          totals,
+          payments: paid,
+          balance: folioBalance(totals.gross, paid),
         };
       }),
       routing: routing.rows.map((r) => ({ category: r.category, folioId: r.folio_id })),

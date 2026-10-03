@@ -63,6 +63,9 @@ importers:
       '@hoteloftware/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@hoteloftware/payments':
+        specifier: workspace:*
+        version: link:../../packages/payments
       '@hoteloftware/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -124,6 +127,9 @@ importers:
       '@hoteloftware/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@hoteloftware/payments':
+        specifier: workspace:*
+        version: link:../../packages/payments
       pg:
         specifier: ^8.23.0
         version: 8.23.0
@@ -192,6 +198,9 @@ importers:
       '@hoteloftware/domain':
         specifier: workspace:*
         version: link:../domain
+      '@hoteloftware/payments':
+        specifier: workspace:*
+        version: link:../payments
       drizzle-orm:
         specifier: ^0.45.3
         version: 0.45.3(@types/pg@8.23.1)(kysely@0.29.6)(pg@8.23.0)
@@ -251,6 +260,25 @@ importers:
       dotenv:
         specifier: ^18.0.4
         version: 18.0.4
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)
+
+  packages/payments:
+    dependencies:
+      '@hoteloftware/domain':
+        specifier: workspace:*
+        version: link:../domain
+      stripe:
+        specifier: ^23.0.0
+        version: 23.0.0(@types/node@20.19.43)
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -1993,6 +2021,15 @@ packages:
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
 
+  stripe@23.0.0:
+    resolution: {integrity: sha512-MDE2A5ZVVluYURORaZEVghSmnLJc3w6aHAlZSxDQMsOjOb3V0O6ro/CiaeFlJS4N7uIVmsg98ocRsPmUK6YfyA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@types/node': '>=20'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
+
   styled-jsx@5.1.6:
     resolution: {integrity: sha512-qSVyDTeMotdvQYoHWLNGwRFJHC+i+ZvdBRYosOFgC+Wg1vx4frN2/RG/NA7SYqqvKNLf39P2LSRA2pu6n0XYZA==}
     engines: {node: '>= 12.0.0'}
@@ -3401,6 +3438,10 @@ snapshots:
   strip-literal@3.1.0:
     dependencies:
       js-tokens: 9.0.1
+
+  stripe@23.0.0(@types/node@20.19.43):
+    optionalDependencies:
+      '@types/node': 20.19.43
 
   styled-jsx@5.1.6(react@19.3.0):
     dependencies:

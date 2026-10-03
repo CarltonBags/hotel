@@ -41,8 +41,10 @@ export const properties = pgTable(
     currency: char("currency", { length: 3 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    terminalLocationId: text("terminal_location_id"),
+    refundLimit: numeric("refund_limit", { precision: 12, scale: 2 }).notNull().default("200"),
   },
-  (t) => [index("properties_legal_entity_idx").on(t.legalEntityId)],
+  (t) => [index("properties_legal_entity_idx").on(t.legalEntityId), check("properties_refund_limit_check", sql`${t.refundLimit} >= 0`)],
 );
 
 export const roomTypes = pgTable(
@@ -760,6 +762,108 @@ export const fixedCharges = pgTable(
   ],
 );
 
+export const paymentAccounts = pgTable("payment_accounts", {
+  legalEntityId: uuid("legal_entity_id").primaryKey().references(() => legalEntities.id),
+  provider: text("provider").notNull(),
+  accountId: text("account_id").notNull().unique(),
+  chargesEnabled: boolean("charges_enabled").notNull().default(false),
+  detailsSubmitted: boolean("details_submitted").notNull().default(false),
+  payoutsEnabled: boolean("payouts_enabled").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdBy: text("created_by").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const terminalReaders = pgTable(
+  "terminal_readers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    provider: text("provider").notNull(),
+    readerId: text("reader_id").notNull().unique(),
+    label: text("label").notNull(),
+    deviceType: text("device_type").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [index("terminal_readers_property_idx").on(t.propertyId)],
+);
+
+export const payments = pgTable(
+  "payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    folioId: uuid("folio_id").notNull().references(() => folios.id),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    tender: text("tender").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).notNull(),
+    status: text("status").notNull(),
+    refundOf: uuid("refund_of").references((): AnyPgColumn => payments.id),
+    provider: text("provider"),
+    providerIntentId: text("provider_intent_id"),
+    providerRefundId: text("provider_refund_id"),
+    readerId: text("reader_id"),
+    cardBrand: text("card_brand"),
+    cardLast4: char("card_last4", { length: 4 }),
+    reference: text("reference").notNull().default(""),
+    error: text("error"),
+    providerAttempts: integer("provider_attempts").notNull().default(0),
+    approvedBy: text("approved_by"),
+    postedAt: timestamp("posted_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    postedBy: text("posted_by").notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("payments_folio_idx").on(t.folioId),
+    index("payments_reservation_idx").on(t.reservationId),
+    index("payments_intent_idx").on(t.providerIntentId).where(sql`${t.providerIntentId} is not null`),
+    check("payments_tender_check", sql`${t.tender} in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect')`),
+    check("payments_amount_check", sql`${t.amount} <> 0`),
+    check("payments_status_check", sql`${t.status} in ('pending', 'succeeded', 'failed', 'refund_pending_balance')`),
+    check("payments_refund_check", sql`(${t.refundOf} is null) = (${t.amount} > 0)`),
+  ],
+);
+
+export const cardHolds = pgTable(
+  "card_holds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    provider: text("provider").notNull(),
+    providerIntentId: text("provider_intent_id").notNull().unique(),
+    readerId: text("reader_id"),
+    channel: text("channel").notNull(),
+    providerCustomerId: text("provider_customer_id"),
+    paymentMethodId: text("payment_method_id"),
+    cardBrand: text("card_brand"),
+    cardLast4: char("card_last4", { length: 4 }),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).notNull(),
+    increments: integer("increments").notNull().default(0),
+    extended: boolean("extended").notNull().default(false),
+    status: text("status").notNull(),
+    authorisedAt: timestamp("authorised_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    warnedAt: timestamp("warned_at", { withTimezone: true }),
+    renewedFrom: uuid("renewed_from").references((): AnyPgColumn => cardHolds.id),
+    capturedAmount: numeric("captured_amount", { precision: 12, scale: 2 }),
+    capturePaymentId: uuid("capture_payment_id").references(() => payments.id),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    index("card_holds_reservation_idx").on(t.reservationId),
+    index("card_holds_expiry_idx").on(t.expiresAt).where(sql`${t.status} = 'active'`),
+    check("card_holds_channel_check", sql`${t.channel} in ('terminal', 'online', 'moto')`),
+    check("card_holds_amount_check", sql`${t.amount} > 0`),
+    check("card_holds_status_check", sql`${t.status} in ('pending', 'active', 'captured', 'released', 'expired', 'failed')`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -799,4 +903,8 @@ export const tenantSchema = {
   charges,
   chargeEvents,
   fixedCharges,
+  paymentAccounts,
+  terminalReaders,
+  payments,
+  cardHolds,
 };

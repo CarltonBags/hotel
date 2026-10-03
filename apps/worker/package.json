@@ -14,7 +14,8 @@
     "pg": "^8.23.0",
     "pg-boss": "^10.4.2",
     "@hoteloftware/events": "workspace:*",
-    "@hoteloftware/domain": "workspace:*"
+    "@hoteloftware/domain": "workspace:*",
+    "@hoteloftware/payments": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20",

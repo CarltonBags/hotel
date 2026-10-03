@@ -60,7 +60,7 @@ export const MODULES: ModuleDef[] = [
   soon("cash_book", "cash_billing", "module.cash_book", "Wallet", "#1fa971", 50),
   soon("open_folios", "cash_billing", "module.open_folios", "Receipt", "#0071e3", 26),
   soon("invoices", "cash_billing", "module.invoices", "FileText", "#4f5bd5", 28),
-  soon("payments", "cash_billing", "module.payments", "CreditCard", "#e0457b", 27),
+  { id: "payments", group: "cash_billing", label: "module.payments", icon: "CreditCard", hue: "#e0457b", href: "/payments", requiresProperty: "take_payments" },
   soon("night_audit", "cash_billing", "module.night_audit", "MoonStar", "#7c5cff", 32),
   { id: "rates", group: "rates", label: "module.rates", icon: "Tag", hue: "#e0457b", href: "/rates", requiresProperty: "manage_rates" },
   soon("availability", "rates", "module.availability", "Grid3x3", "#0aa5a5", 24),
@@ -82,6 +82,7 @@ export const MODULES: ModuleDef[] = [
   { id: "settings_services", group: "settings", label: "module.settings_services", icon: "Tag", hue: "#e0457b", href: "/settings/services", requiresProperty: "view_property" },
   { id: "settings_rate_plans", group: "settings", label: "module.settings_rate_plans", icon: "Tag", hue: "#e0457b", href: "/settings/rate-plans", requiresProperty: "manage_rates" },
   soon("settings_devices", "settings", "module.settings_devices", "TabletSmartphone", "#6b7280", 14),
+  { id: "settings_payments", group: "settings", label: "module.settings_payments", icon: "CreditCard", hue: "#635bff", href: "/settings/payments", requiresProperty: "manage_payment_settings" },
   { id: "settings_rooms", group: "settings", label: "module.settings_rooms", icon: "BedDouble", hue: "#0aa5a5", href: "/settings/rooms", requiresProperty: "manage_property_settings" },
   { id: "settings_account", group: "settings", label: "module.settings_account", icon: "UserCog", hue: "#6b7280", href: "/settings/account" },
 ];

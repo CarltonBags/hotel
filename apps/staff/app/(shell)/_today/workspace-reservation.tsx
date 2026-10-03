@@ -14,6 +14,7 @@ import { FixedCharges } from "../reservations/[id]/fixed-charges";
 import { FolioPanel } from "../reservations/[id]/folio-panel";
 import { GuestDetails } from "../reservations/[id]/guest-details";
 import { ReservationActions } from "../reservations/[id]/reservation-actions";
+import { CardHoldsPanel, PaymentsPanel } from "../reservations/[id]/payments-panel";
 
 type Tab = "stay" | "guest" | "folio" | "fixed" | "billing" | "notes";
 
@@ -37,6 +38,8 @@ export interface WorkspaceReservationProps {
   actionsProps: Omit<React.ComponentProps<typeof ReservationActions>, "m">;
   folioProps: Omit<React.ComponentProps<typeof FolioPanel>, "m">;
   fixedProps: Omit<React.ComponentProps<typeof FixedCharges>, "m">;
+  paymentsProps: Omit<React.ComponentProps<typeof PaymentsPanel>, "m">;
+  holdsProps: Omit<React.ComponentProps<typeof CardHoldsPanel>, "m">;
   guest: Guest | null;
   registration: { gaps: RegistrationField[]; fields: RegistrationField[] };
   m: Messages;
@@ -49,7 +52,7 @@ const pill = "inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm fon
  * actions always in the same place, and its parts in tabs, editable in place.
  * Actions whose feature is not built yet show disabled with their ticket.
  */
-export function WorkspaceReservation({ summary: s, rights, actionsProps, folioProps, fixedProps, guest, registration, m }: WorkspaceReservationProps) {
+export function WorkspaceReservation({ summary: s, rights, actionsProps, folioProps, fixedProps, paymentsProps, holdsProps, guest, registration, m }: WorkspaceReservationProps) {
   const { openRecord } = useShell();
   const [tab, setTab] = useState<Tab>("stay");
   // "Move room" opens the stay and brings its room assignment into view
@@ -128,7 +131,13 @@ export function WorkspaceReservation({ summary: s, rights, actionsProps, folioPr
         {tab === "guest" && guest ? (
           <GuestDetails guest={guest} gaps={registration.gaps} marked={registration.fields} canEdit={rights.editGuests} contacts={rights.contacts} compact m={m} />
         ) : null}
-        {tab === "folio" ? <FolioPanel {...folioProps} m={m} /> : null}
+        {tab === "folio" ? (
+          <div className="grid gap-4">
+            <FolioPanel {...folioProps} m={m} />
+            <PaymentsPanel {...paymentsProps} m={m} />
+            <CardHoldsPanel {...holdsProps} m={m} />
+          </div>
+        ) : null}
         {tab === "fixed" ? <FixedCharges {...fixedProps} m={m} /> : null}
         {tab === "billing" ? <CompanyBilling reservationId={s.id} existing={s.companyFolios} canSearch={rights.companies} m={m} /> : null}
         {tab === "notes" && rights.contacts ? <Notes reservationId={s.id} notes={s.notes} canEdit={rights.manage} m={m} /> : null}

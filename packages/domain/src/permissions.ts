@@ -96,6 +96,14 @@ export const PROPERTY_ACTIONS = {
   /** Matrix "Operational lists (house, arrivals, departures, breakfast)"; housekeeping lists come with their tickets. */
   view_operational_lists: ["property_manager", "front_desk"],
   edit_companies: ["property_manager", "front_desk", "accounting"],
+  /** Matrix "Take Payment"; Card Holds go with it (not in the matrix: assumption, ticket 27). */
+  take_payments: ["property_manager", "front_desk", "accounting"],
+  /** Matrix "Refund": Front Desk up to the property limit, above it with Approval. */
+  refund_payments: ["property_manager", "front_desk", "accounting"],
+  /** Matrix "Refund" without limit. */
+  refund_without_limit: ["property_manager", "accounting"],
+  /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */
+  manage_payment_settings: ["property_manager"],
 } as const satisfies Record<string, readonly PropertyRole[]>;
 export type PropertyAction = keyof typeof PROPERTY_ACTIONS;
 

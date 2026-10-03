@@ -14,6 +14,8 @@ export interface Property extends PropertyInput {
   id: string;
   legalEntityName: string;
   createdAt: Date;
+  /** Front Desk refunds up to this amount; above it Approval is needed (ticket 27). */
+  refundLimit: number;
 }
 
 interface Row {
@@ -25,9 +27,10 @@ interface Row {
   time_zone: string;
   currency: string;
   created_at: Date;
+  refund_limit: string;
 }
 
-const SELECT = `select p.id, p.name, p.legal_entity_id, l.name as legal_entity_name, p.country, p.time_zone, p.currency, p.created_at
+const SELECT = `select p.id, p.name, p.legal_entity_id, l.name as legal_entity_name, p.country, p.time_zone, p.currency, p.created_at, p.refund_limit
                 from properties p join legal_entities l on l.id = p.legal_entity_id`;
 
 function toProperty(r: Row): Property {
@@ -40,6 +43,7 @@ function toProperty(r: Row): Property {
     timeZone: r.time_zone,
     currency: r.currency,
     createdAt: r.created_at,
+    refundLimit: Number(r.refund_limit),
   };
 }
 

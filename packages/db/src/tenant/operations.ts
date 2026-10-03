@@ -211,14 +211,18 @@ export async function workspaceList(pool: Pool, schema: string, propertyId: stri
       departure: string;
       vip: boolean;
       balance: string;
+      card_hold: string | null;
     }>(
       `select r.id, b.confirmation_number, g.first_name, g.last_name, g.vip,
          (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = r.id and a.from_date <= $3::date and a.to_date > $3::date limit 1) as room,
          t.code as type_code, p.name as plan_name, coalesce(c.name, trim(bg.first_name || ' ' || bg.last_name)) as booker,
          to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
-         -- TODO(ticket 27): less payments received
+         -- the guest's own folios: Charges less payments received (refunds count back)
          (select coalesce(sum(ch.amount), 0) from charges ch join folios f on f.id = ch.folio_id
-           where ch.reservation_id = r.id and ch.voided_at is null and f.bill_to_guest_id is not null) as balance
+           where ch.reservation_id = r.id and ch.voided_at is null and f.bill_to_guest_id is not null)
+         - (select coalesce(sum(pa.amount), 0) from payments pa join folios f on f.id = pa.folio_id
+           where pa.reservation_id = r.id and pa.status = 'succeeded' and f.bill_to_guest_id is not null) as balance,
+         (select sum(h.amount) from card_holds h where h.reservation_id = r.id and h.status = 'active') as card_hold
        from reservations r
        join bookings b on b.id = r.booking_id
        join guests g on g.id = r.primary_guest_id
@@ -242,8 +246,7 @@ export async function workspaceList(pool: Pool, schema: string, propertyId: stri
       departure: r.departure,
       vip: r.vip,
       balance: Number(r.balance),
-      // TODO(ticket 27): the Card Hold amount
-      cardHold: null,
+      cardHold: r.card_hold === null ? null : Number(r.card_hold),
     }));
   });
 }
