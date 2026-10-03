@@ -16,6 +16,8 @@ import {
 } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
+import { rateOn } from "./tax-rate";
+import { cityTaxOfStay, dropCityTaxNights, fixCityTaxPassOn, recordCityTaxNights, type StayCityTax } from "./city-tax";
 import { paymentsOf, type Payment } from "./payments";
 import { withTenant } from "./with-tenant";
 
@@ -153,12 +155,6 @@ async function ensureFolios(tx: PoolClient, res: ResRow, userId: string): Promis
   );
 }
 
-async function rateOn(tx: PoolClient, taxCodeId: string, date: string): Promise<number> {
-  const { rows } = await tx.query<{ rate: string }>("select rate from tax_code_rates where tax_code_id = $1 and valid_from <= $2 order by valid_from desc limit 1", [taxCodeId, date]);
-  if (!rows[0]) throw new Error(`The Tax Code has no rate in force on ${date}`);
-  return Number(rows[0].rate);
-}
-
 interface NewCharge {
   serviceId: string | null;
   description: string;
@@ -208,9 +204,11 @@ async function voidIn(tx: PoolClient, chargeId: string, reason: string, userId: 
 }
 
 interface WantedLine extends WantedStayCharge {
-  serviceId: string;
+  /** null for the City Tax ("ctax"), which is no Service: its rule names description, Tax Code and account. */
+  serviceId: string | null;
   quantity: number;
   unitPrice: number;
+  cityTax?: { description: string; taxCodeId: string; revenueAccount: string };
 }
 
 /** The stay Charges the stored nights call for: the room part as the Rate Plan's accommodation Service, included Services per person. */
@@ -225,7 +223,8 @@ async function accommodationServiceOf(tx: PoolClient, res: ResRow): Promise<stri
   return id;
 }
 
-async function wantedStay(tx: PoolClient, res: ResRow): Promise<WantedLine[]> {
+/** The stay's lines and its City Tax per night (the "ctax" lines only when charged on top). */
+async function wantedStay(tx: PoolClient, res: ResRow): Promise<{ lines: WantedLine[]; cityTax: StayCityTax | null }> {
   const roomService = await accommodationServiceOf(tx, res);
   const { rows } = await tx.query<{ date: string; kind: "room" | "service"; service_id: string | null; persons: number | null; unit_price: string; amount: string }>(
     "select to_char(date, 'YYYY-MM-DD') as date, kind, service_id, persons, unit_price, amount from reservation_night_components where reservation_id = $1 order by date, kind, service_id",
@@ -242,12 +241,33 @@ async function wantedStay(tx: PoolClient, res: ResRow): Promise<WantedLine[]> {
       lines.push({ serviceDate: date, component: `fix:${f.id}`, amount: roundMoney(Number(f.quantity) * Number(f.unit_price)), serviceId: f.service_id, quantity: Number(f.quantity), unitPrice: Number(f.unit_price) });
     }
   }
-  return lines;
+  const cityTax = await cityTaxOfStay(tx, res.id, res.property_id, lines);
+  if (cityTax?.passOn === "on_top") {
+    const { name, taxCodeId, revenueAccount } = cityTax.rule;
+    for (const n of cityTax.nights.filter((x) => x.tax > 0)) {
+      // per taxable person when it divides evenly, else one line for the night: quantity times price is always the amount
+      const unit = roundMoney(n.tax / n.taxable);
+      const perPerson = roundMoney(unit * n.taxable) === n.tax;
+      lines.push({
+        serviceDate: n.date,
+        // the Tax Code is part of the component, so a change of the rule's Tax Code reposts the uninvoiced nights
+        component: `ctax:${taxCodeId}`,
+        amount: n.tax,
+        serviceId: null,
+        quantity: perPerson ? n.taxable : 1,
+        unitPrice: perPerson ? unit : n.tax,
+        cityTax: { description: name, taxCodeId, revenueAccount },
+      });
+    }
+  }
+  return { lines, cityTax };
 }
 
-/** Stay components: the room part, included Services ("svc:") and Fixed Charges ("fix:"). */
+/** Stay components: the room part, included Services ("svc:"), Fixed Charges ("fix:") and the City Tax ("ctax:<Tax Code>"). */
 const isNightPrice = (component: string) => component === "room" || component.startsWith("svc:");
-const categoryOf = (component: string): RoutingCategory => (component === "room" ? "accommodation" : component.startsWith("svc:") ? "package" : "extras");
+const isCityTax = (component: string) => component.startsWith("ctax:");
+const categoryOf = (component: string): RoutingCategory =>
+  component === "room" ? "accommodation" : component.startsWith("svc:") ? "package" : isCityTax(component) ? "city_tax" : "extras";
 
 interface FixedRow {
   id: string;
@@ -281,9 +301,25 @@ async function serviceRows(tx: PoolClient, propertyId: string, ids: string[]): P
 }
 
 async function postStay(tx: PoolClient, res: ResRow, userId: string, lines: WantedLine[]): Promise<void> {
-  const services = await serviceRows(tx, res.property_id, lines.map((l) => l.serviceId));
+  const services = await serviceRows(tx, res.property_id, lines.flatMap((l) => (l.serviceId ? [l.serviceId] : [])));
   for (const l of lines) {
-    const s = services.get(l.serviceId);
+    if (l.cityTax) {
+      await insertCharge(tx, res, userId, {
+        serviceId: null,
+        description: l.cityTax.description,
+        serviceDate: l.serviceDate,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        amount: l.amount,
+        taxCodeId: l.cityTax.taxCodeId,
+        revenueAccount: l.cityTax.revenueAccount,
+        category: "city_tax",
+        origin: "stay",
+        component: l.component,
+      });
+      continue;
+    }
+    const s = l.serviceId ? services.get(l.serviceId) : undefined;
     if (!s) throw new Error("A Service of the stay is not found at this property");
     await insertCharge(tx, res, userId, {
       serviceId: s.id,
@@ -313,9 +349,12 @@ export async function checkIn(pool: Pool, schema: string, id: string, userId: st
     if (res.departure <= res.today) throw new Error("The stay has ended; it cannot be checked in");
     const room = await tx.query("select 1 from room_assignments where reservation_id = $1 and from_date <= $2 and to_date > $2", [res.id, res.today]);
     if (!room.rows.length) throw new Error("Assign a room for tonight before check-in");
-    const lines = await wantedStay(tx, res);
+    await fixCityTaxPassOn(tx, res.id, true);
+    const { lines, cityTax } = await wantedStay(tx, res);
     await ensureFolios(tx, res, userId);
     await postStay(tx, res, userId, lines);
+    // every night of the stay is posted, so every night is recorded (a late check-in included)
+    await recordCityTaxNights(tx, res.id, res.property_id, res.arrival, cityTax);
     await tx.query("update reservations set status = 'checked_in', checked_in_at = now(), checked_in_by = $2 where id = $1", [res.id, userId]);
     await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'check_in', $3, $4)", [
       res.id,
@@ -338,6 +377,8 @@ export async function cancelCheckIn(pool: Pool, schema: string, id: string, user
     if (res.today !== res.arrival) throw new Error("A guest who has slept a night here checks out instead");
     const { rows } = await tx.query<{ id: string }>("select id from charges where reservation_id = $1 and origin = 'stay' and voided_at is null", [res.id]);
     for (const c of rows) await voidIn(tx, c.id, AUTO_VOID_REASON.check_in_cancelled, userId, "check_in_cancelled");
+    await dropCityTaxNights(tx, res.id);
+    await fixCityTaxPassOn(tx, res.id, false);
     await tx.query("update reservations set status = 'confirmed', checked_in_at = null, checked_in_by = null where id = $1", [res.id]);
     await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'cancel_check_in', $3, $4)", [
       res.id,
@@ -357,24 +398,30 @@ export async function cancelCheckIn(pool: Pool, schema: string, id: string, user
 export async function syncStayCharges(tx: PoolClient, reservationId: string, userId: string, confirmShortening: boolean): Promise<void> {
   const res = await loadReservation(tx, reservationId);
   if (res.status !== "checked_in") return;
-  const posted = await tx.query<{ id: string; service_date: string; component: string; amount: string; description: string; live: boolean }>(
-    `select id, to_char(service_date, 'YYYY-MM-DD') as service_date, component, amount, description, voided_at is null as live from charges
+  const posted = await tx.query<{ id: string; service_date: string; component: string; amount: string; description: string; live: boolean; invoiced: boolean }>(
+    `select id, to_char(service_date, 'YYYY-MM-DD') as service_date, component, amount, description, voided_at is null as live, invoice_id is not null as invoiced from charges
      where reservation_id = $1 and origin = 'stay' and auto_void is null order by service_date, posted_at`,
     [res.id],
   );
-  const rows = posted.rows.map((p) => ({ id: p.id, serviceDate: p.service_date, component: p.component, amount: Number(p.amount), description: p.description, live: p.live }));
-  const have = rows.filter((h) => h.live);
+  const rows = posted.rows.map((p) => ({ id: p.id, serviceDate: p.service_date, component: p.component, amount: Number(p.amount), description: p.description, live: p.live, invoiced: p.invoiced }));
   const nightKey = (c: { serviceDate: string; component: string }) => `${c.serviceDate}|${c.component}`;
+  // an invoiced night's component is closed: never voided nor posted again (a correction goes by Cancellation Invoice)
+  // an invoiced night's component is closed: its amount stays as invoiced (a correction goes by Cancellation Invoice); a night given up with it is refused
+  const invoicedAmount = new Map(rows.filter((h) => h.live && h.invoiced).map((h) => [nightKey(h), h.amount]));
+  const have = rows.filter((h) => h.live);
   // a night's component voided by hand (say, a night given for free) is settled: not posted again, whatever its price now
-  const settled = new Set(rows.filter((h) => !h.live && !have.some((x) => nightKey(x) === nightKey(h))).map(nightKey));
-  const wanted = (await wantedStay(tx, res)).filter((w) => !settled.has(nightKey(w)));
+  const settled = new Set(rows.filter((h) => !h.live && !rows.some((x) => x.live && nightKey(x) === nightKey(h))).map(nightKey));
+  const stay = await wantedStay(tx, res);
+  await recordCityTaxNights(tx, res.id, res.property_id, res.today, stay.cityTax);
+  const wanted = stay.lines.filter((w) => !settled.has(nightKey(w))).map((w) => (invoicedAmount.has(nightKey(w)) ? { ...w, amount: invoicedAmount.get(nightKey(w))! } : w));
   const sync = staySync(have, wanted);
   // nights already slept keep their Charges: a change voids only from today on
   const plan = {
     ...sync,
     voids: sync.voids.filter((v) => have.find((h) => h.id === v)!.serviceDate >= res.today),
     // a night already slept is posted only when it has nothing yet (a Fixed Charge added late), never a second time
-    posts: sync.posts.filter((p) => p.serviceDate >= res.today || !have.some((h) => h.serviceDate === p.serviceDate && h.component === p.component)),
+    // City Tax only from today on: nights slept are recorded and filed as they were
+    posts: sync.posts.filter((p) => p.serviceDate >= res.today || (!isCityTax(p.component) && !have.some((h) => h.serviceDate === p.serviceDate && h.component === p.component))),
   };
   if (plan.voids.length === 0 && plan.posts.length === 0) return;
   const removed = new Set(plan.removedDates);

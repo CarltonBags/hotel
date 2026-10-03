@@ -73,7 +73,7 @@ export const MODULES: ModuleDef[] = [
   soon("maintenance", "housekeeping", "module.maintenance", "Wrench", "#6b7280", 36),
   soon("lost_found", "housekeeping", "module.lost_found", "PackageSearch", "#b98900", 35),
   soon("reports", "reports", "module.reports", "ChartColumn", "#4f5bd5", 82),
-  soon("city_tax_report", "reports", "module.city_tax_report", "Landmark", "#6b7280", 30),
+  { id: "city_tax_report", group: "reports", label: "module.city_tax_report", icon: "Landmark", hue: "#6b7280", href: "/city-tax-report", requiresProperty: "view_financial_reports" },
   soon("outlets", "front_desk", "module.outlets", "UtensilsCrossed", "#e2552b", 60),
   { id: "settings_tenant", group: "settings", label: "module.settings_tenant", icon: "Palette", hue: "#0071e3", href: "/settings/tenant", requires: "manage_tenant_settings" },
   { id: "settings_legal_entities", group: "settings", label: "module.settings_legal_entities", icon: "Landmark", hue: "#4f5bd5", href: "/settings/legal-entities", requires: "manage_legal_entities" },
@@ -83,6 +83,7 @@ export const MODULES: ModuleDef[] = [
   { id: "settings_rate_plans", group: "settings", label: "module.settings_rate_plans", icon: "Tag", hue: "#e0457b", href: "/settings/rate-plans", requiresProperty: "manage_rates" },
   soon("settings_devices", "settings", "module.settings_devices", "TabletSmartphone", "#6b7280", 14),
   { id: "settings_payments", group: "settings", label: "module.settings_payments", icon: "CreditCard", hue: "#635bff", href: "/settings/payments", requiresProperty: "manage_payment_settings" },
+  { id: "settings_city_tax", group: "settings", label: "module.settings_city_tax", icon: "Landmark", hue: "#b98900", href: "/settings/city-tax", requiresProperty: "manage_property_settings" },
   { id: "settings_rooms", group: "settings", label: "module.settings_rooms", icon: "BedDouble", hue: "#0aa5a5", href: "/settings/rooms", requiresProperty: "manage_property_settings" },
   { id: "settings_account", group: "settings", label: "module.settings_account", icon: "UserCog", hue: "#6b7280", href: "/settings/account" },
 ];

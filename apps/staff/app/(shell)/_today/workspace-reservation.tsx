@@ -16,6 +16,7 @@ import { GuestDetails } from "../reservations/[id]/guest-details";
 import { ReservationActions } from "../reservations/[id]/reservation-actions";
 import { CardHoldsPanel, PaymentsPanel } from "../reservations/[id]/payments-panel";
 import { CheckOutPanel, InvoicesPanel } from "../reservations/[id]/invoices-panel";
+import { CityTaxPanel } from "../reservations/[id]/city-tax-panel";
 
 type Tab = "stay" | "guest" | "folio" | "fixed" | "billing" | "notes" | "settle";
 
@@ -46,6 +47,8 @@ export interface WorkspaceReservationProps {
   checkOutProps: Omit<React.ComponentProps<typeof CheckOutPanel>, "m"> | null;
   guest: Guest | null;
   registration: { gaps: RegistrationField[]; fields: RegistrationField[] };
+  /** City Tax exemptions; null without a City Tax Rule. */
+  cityTax: Omit<React.ComponentProps<typeof CityTaxPanel>, "m"> | null;
   m: Messages;
 }
 
@@ -56,7 +59,7 @@ const pill = "inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm fon
  * actions always in the same place, and its parts in tabs, editable in place.
  * Actions whose feature is not built yet show disabled with their ticket.
  */
-export function WorkspaceReservation({ summary: s, rights, actionsProps, folioProps, fixedProps, paymentsProps, holdsProps, invoicesProps, checkOutProps, guest, registration, m }: WorkspaceReservationProps) {
+export function WorkspaceReservation({ summary: s, rights, actionsProps, folioProps, fixedProps, paymentsProps, holdsProps, invoicesProps, checkOutProps, guest, registration, cityTax, m }: WorkspaceReservationProps) {
   const { openRecord } = useShell();
   const [tab, setTab] = useState<Tab>("stay");
   // "Move room" opens the stay and brings its room assignment into view
@@ -130,6 +133,11 @@ export function WorkspaceReservation({ summary: s, rights, actionsProps, folioPr
         {tab === "stay" ? rights.manage ? <ReservationActions {...actionsProps} m={m} /> : <p className="text-sm text-ink-60">{s.stay}</p> : null}
         {tab === "guest" && guest ? (
           <GuestDetails guest={guest} gaps={registration.gaps} marked={registration.fields} canEdit={rights.editGuests} contacts={rights.contacts} compact m={m} />
+        ) : null}
+        {tab === "guest" && cityTax ? (
+          <div className="mt-4">
+            <CityTaxPanel {...cityTax} m={m} />
+          </div>
         ) : null}
         {tab === "folio" ? (
           <div className="grid gap-4">

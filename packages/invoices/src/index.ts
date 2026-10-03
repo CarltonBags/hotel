@@ -15,3 +15,4 @@ export async function invoicePdf(doc: InvoiceDocument): Promise<Uint8Array> {
 export function invoiceXml(doc: InvoiceDocument): Promise<string> {
   return xrechnung(doc);
 }
+export { cityTaxReportCsv, renderCityTaxReportPdf, type CityTaxReportDocument } from "./city-tax-report";

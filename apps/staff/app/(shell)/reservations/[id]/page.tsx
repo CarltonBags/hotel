@@ -11,6 +11,7 @@ import { CheckInButton } from "../check-in-button";
 import { FixedCharges } from "./fixed-charges";
 import { CardHoldsPanel, PaymentsPanel } from "./payments-panel";
 import { CheckOutPanel, InvoicesPanel } from "./invoices-panel";
+import { CityTaxPanel } from "./city-tax-panel";
 import { FolioPanel } from "./folio-panel";
 import { RegistrationStatus } from "./guest-details";
 import { GuestDrawerButton } from "./guest-drawer-button";
@@ -210,6 +211,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
           {v.canCheckOut ? <CheckOutPanel reservationId={r.id} canOverride={rights.overrideCheckOut} currency={v.currency} m={m} /> : null}
         </div>
       ) : null}
+      {v.cityTax ? <CityTaxPanel {...v.cityTax} m={m} /> : null}
       {folio ? (
         <details open={v.fixedCharges.length > 0} className="rounded-2xl bg-surface-2 p-5 text-sm">
           <summary className="cursor-pointer font-medium">{m["fixed.title"]}</summary>
