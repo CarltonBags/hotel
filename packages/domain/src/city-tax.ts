@@ -177,6 +177,7 @@ export const CITY_TAX_PRESETS: Record<CityTaxPreset, CityTaxRuleSpec & { name: s
     versions: [
       version({
         validFrom: "2025-01-01",
+        bookedFrom: "2025-01-01",
         kind: "step_table",
         stepBasis: "per_person",
         steps: [

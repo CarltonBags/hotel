@@ -18,21 +18,21 @@ export interface CityTaxReportDocument {
   to: string;
   totals: { nights: number; personNights: number; taxedPersonNights: number; base: number; tax: number; charged: number; absorbed: number };
   exempt: Record<string, number | undefined>;
-  exemptions: { confirmationNumber: string; guestName: string; person: number; reason: string; note: string; documentName: string | null; nights: number }[];
-  stays: { confirmationNumber: string; guestName: string; arrival: string; departure: string; nights: number; persons: number; base: number; tax: number; absorbed: boolean }[];
+  exemptions: { reservationId: string; confirmationNumber: string; guestName: string; person: number; reason: string; note: string; documentName: string | null; nights: number }[];
+  stays: { reservationId: string; confirmationNumber: string; guestName: string; arrival: string; departure: string; nights: number; persons: number; base: number; tax: number; absorbed: boolean }[];
 }
 
 const L = {
   de: {
-    title: "Übernachtungsteuer: Meldung",
+    title: "Beherbergungsabgabe: Meldung",
     period: "Zeitraum",
     rule: "Regel",
     noRule: "keine Regel",
     nights: "Übernachtungen (Zimmernächte)",
     personNights: "Personennächte",
-    taxedPersonNights: "davon steuerpflichtig",
+    taxedPersonNights: "davon abgabepflichtig",
     base: "Bemessungsgrundlage (netto)",
-    tax: "Steuer",
+    tax: "Abgabe",
     charged: "davon an Gäste berechnet",
     absorbed: "davon vom Betrieb getragen",
     exemptTitle: "Befreite Personennächte nach Grund",
@@ -206,11 +206,11 @@ export function cityTaxReportCsv(r: CityTaxReportDocument): string {
     const s = String(v);
     // a leading formula character is neutralised so spreadsheets never run it
     const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
-    return /[;"\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
+    return /[;"\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
   };
   const lines = [["booking", "guest", "arrival", "departure", "nights", "persons", "base", "tax", "absorbed", "exemptions"].join(";")];
   for (const s of r.stays) {
-    const ex = r.exemptions.filter((e) => e.confirmationNumber === s.confirmationNumber).map((e) => `${e.person + 1}:${e.reason}`).join(" ");
+    const ex = r.exemptions.filter((e) => e.reservationId === s.reservationId).map((e) => `${e.person + 1}:${e.reason}`).join(" ");
     lines.push([s.confirmationNumber, s.guestName, s.arrival, s.departure, s.nights, s.persons, s.base.toFixed(2), s.tax.toFixed(2), s.absorbed ? "yes" : "no", ex].map(q).join(";"));
   }
   return `${lines.join("\r\n")}\r\n`;

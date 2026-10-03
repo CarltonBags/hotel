@@ -245,16 +245,29 @@ async function wantedStay(tx: PoolClient, res: ResRow): Promise<{ lines: WantedL
   if (cityTax?.passOn === "on_top") {
     const { name, taxCodeId, revenueAccount } = cityTax.rule;
     for (const n of cityTax.nights.filter((x) => x.tax > 0)) {
-      lines.push({ serviceDate: n.date, component: "ctax", amount: n.tax, serviceId: null, quantity: n.taxable, unitPrice: roundMoney(n.tax / n.taxable), cityTax: { description: name, taxCodeId, revenueAccount } });
+      // per taxable person when it divides evenly, else one line for the night: quantity times price is always the amount
+      const unit = roundMoney(n.tax / n.taxable);
+      const perPerson = roundMoney(unit * n.taxable) === n.tax;
+      lines.push({
+        serviceDate: n.date,
+        // the Tax Code is part of the component, so a change of the rule's Tax Code reposts the uninvoiced nights
+        component: `ctax:${taxCodeId}`,
+        amount: n.tax,
+        serviceId: null,
+        quantity: perPerson ? n.taxable : 1,
+        unitPrice: perPerson ? unit : n.tax,
+        cityTax: { description: name, taxCodeId, revenueAccount },
+      });
     }
   }
   return { lines, cityTax };
 }
 
-/** Stay components: the room part, included Services ("svc:"), Fixed Charges ("fix:") and the City Tax ("ctax"). */
+/** Stay components: the room part, included Services ("svc:"), Fixed Charges ("fix:") and the City Tax ("ctax:<Tax Code>"). */
 const isNightPrice = (component: string) => component === "room" || component.startsWith("svc:");
+const isCityTax = (component: string) => component.startsWith("ctax:");
 const categoryOf = (component: string): RoutingCategory =>
-  component === "room" ? "accommodation" : component.startsWith("svc:") ? "package" : component === "ctax" ? "city_tax" : "extras";
+  component === "room" ? "accommodation" : component.startsWith("svc:") ? "package" : isCityTax(component) ? "city_tax" : "extras";
 
 interface FixedRow {
   id: string;
@@ -393,20 +406,22 @@ export async function syncStayCharges(tx: PoolClient, reservationId: string, use
   const rows = posted.rows.map((p) => ({ id: p.id, serviceDate: p.service_date, component: p.component, amount: Number(p.amount), description: p.description, live: p.live, invoiced: p.invoiced }));
   const nightKey = (c: { serviceDate: string; component: string }) => `${c.serviceDate}|${c.component}`;
   // an invoiced night's component is closed: never voided nor posted again (a correction goes by Cancellation Invoice)
-  const closed = new Set(rows.filter((h) => h.live && h.invoiced).map(nightKey));
-  const have = rows.filter((h) => h.live && !h.invoiced);
+  // an invoiced night's component is closed: its amount stays as invoiced (a correction goes by Cancellation Invoice); a night given up with it is refused
+  const invoicedAmount = new Map(rows.filter((h) => h.live && h.invoiced).map((h) => [nightKey(h), h.amount]));
+  const have = rows.filter((h) => h.live);
   // a night's component voided by hand (say, a night given for free) is settled: not posted again, whatever its price now
   const settled = new Set(rows.filter((h) => !h.live && !rows.some((x) => x.live && nightKey(x) === nightKey(h))).map(nightKey));
   const stay = await wantedStay(tx, res);
   await recordCityTaxNights(tx, res.id, res.property_id, res.today, stay.cityTax);
-  const wanted = stay.lines.filter((w) => !settled.has(nightKey(w)) && !closed.has(nightKey(w)));
+  const wanted = stay.lines.filter((w) => !settled.has(nightKey(w))).map((w) => (invoicedAmount.has(nightKey(w)) ? { ...w, amount: invoicedAmount.get(nightKey(w))! } : w));
   const sync = staySync(have, wanted);
   // nights already slept keep their Charges: a change voids only from today on
   const plan = {
     ...sync,
     voids: sync.voids.filter((v) => have.find((h) => h.id === v)!.serviceDate >= res.today),
     // a night already slept is posted only when it has nothing yet (a Fixed Charge added late), never a second time
-    posts: sync.posts.filter((p) => p.serviceDate >= res.today || !have.some((h) => h.serviceDate === p.serviceDate && h.component === p.component)),
+    // City Tax only from today on: nights slept are recorded and filed as they were
+    posts: sync.posts.filter((p) => p.serviceDate >= res.today || (!isCityTax(p.component) && !have.some((h) => h.serviceDate === p.serviceDate && h.component === p.component))),
   };
   if (plan.voids.length === 0 && plan.posts.length === 0) return;
   const removed = new Set(plan.removedDates);

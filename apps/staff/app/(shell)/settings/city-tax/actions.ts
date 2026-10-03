@@ -31,8 +31,11 @@ async function scope(formData: FormData) {
 /** The stays in house whose City Tax changed, for the confirmation. */
 function changed(c: CityTaxChange): FormState {
   revalidatePath(PATH);
-  if (!c.changed.length) return { ok: true, message: "Saved. No stay in house changed." };
-  return { ok: true, message: `Saved. Recalculated: ${c.changed.map((x) => `${x.confirmationNumber} ${x.guestName} ${x.before.toFixed(2)} → ${x.after.toFixed(2)}`).join("; ")}` };
+  const parts = [
+    c.changed.length ? `Recalculated: ${c.changed.map((x) => `${x.confirmationNumber} ${x.guestName} ${x.before.toFixed(2)} → ${x.after.toFixed(2)}`).join("; ")}.` : "No stay in house changed.",
+    c.skipped.length ? `Not recalculated (check these stays): ${c.skipped.map((x) => `${x.confirmationNumber} ${x.guestName}: ${x.reason}`).join("; ")}.` : "",
+  ];
+  return { ok: true, message: `Saved. ${parts.filter(Boolean).join(" ")}` };
 }
 
 export async function passOnAction(_prev: FormState, formData: FormData): Promise<FormState> {

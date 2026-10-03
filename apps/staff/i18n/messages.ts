@@ -319,7 +319,7 @@ const catalog = {
     en: "One rule per property, with dated versions. The base is the room price without VAT and without included Services, plus the Services you mark. A change recalculates the uninvoiced nights of stays in house.",
     de: "Eine Regel je Betrieb mit datierten Versionen. Bemessungsgrundlage ist der Zimmerpreis ohne USt. und ohne inkludierte Leistungen, zuzüglich der markierten Leistungen. Eine Änderung berechnet die nicht abgerechneten Nächte der Gäste im Haus neu.",
   },
-  "ctax.passOn": { en: "The tax is", de: "Die Steuer wird" },
+  "ctax.passOn": { en: "The tax is", de: "Die Abgabe wird" },
   "ctax.passOn.on_top": { en: "charged to the guest on top (a line per night)", de: "dem Gast zusätzlich berechnet (eine Zeile je Nacht)" },
   "ctax.passOnHelp": { en: "Applies to guests checked in from now on; stays in house keep theirs.", de: "Gilt für Gäste, die ab jetzt einchecken; Aufenthalte im Haus behalten ihre Einstellung." },
   "ctax.passOn.absorbed": { en: "absorbed by the hotel (no line, still filed)", de: "vom Betrieb getragen (keine Zeile, wird trotzdem gemeldet)" },

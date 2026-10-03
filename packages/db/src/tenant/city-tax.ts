@@ -42,6 +42,8 @@ export interface CityTaxRuleView {
 /** Reservations whose City Tax changed after a change to the rule: the total of their recalculated nights before and after. */
 export interface CityTaxChange {
   changed: { reservationId: string; confirmationNumber: string; guestName: string; before: number; after: number }[];
+  /** Stays that could not be recalculated (they keep their City Tax as it was), with the reason. */
+  skipped: { reservationId: string; confirmationNumber: string; guestName: string; reason: string }[];
 }
 
 interface VersionRow {
@@ -158,18 +160,21 @@ export async function cityTaxOfStay(tx: PoolClient, reservationId: string, prope
  * already slept or invoiced stay as they were.
  */
 export async function recordCityTaxNights(tx: PoolClient, reservationId: string, propertyId: string, today: string, tax: StayCityTax | null): Promise<void> {
-  const invoiced = new Set(
-    (await tx.query<{ date: string }>("select to_char(service_date, 'YYYY-MM-DD') as date from charges where reservation_id = $1 and component = 'ctax' and invoice_id is not null and voided_at is null", [reservationId])).rows.map(
-      (x) => x.date,
-    ),
-  );
+  const ctax = (await tx.query<{ date: string; invoiced: boolean; live: boolean; by_hand: boolean }>(
+    `select to_char(service_date, 'YYYY-MM-DD') as date, invoice_id is not null as invoiced, voided_at is null as live, (voided_at is not null and auto_void is null) as by_hand
+     from charges where reservation_id = $1 and component like 'ctax:%'`,
+    [reservationId],
+  )).rows;
+  const invoiced = new Set(ctax.filter((c) => c.live && c.invoiced).map((c) => c.date));
+  // a City Tax Charge voided by hand is waived: the hotel bears it, so the night is filed as absorbed
+  const waived = new Set(ctax.filter((c) => c.by_hand && !ctax.some((x) => x.live && x.date === c.date)).map((c) => c.date));
   const keep = (tax?.nights ?? []).filter((n) => n.date >= today && !invoiced.has(n.date));
   await tx.query("delete from city_tax_nights where reservation_id = $1 and date >= $2 and not (date = any($3::date[]))", [reservationId, today, [...invoiced]]);
   for (const n of keep) {
     await tx.query(
       `insert into city_tax_nights (reservation_id, date, property_id, rule_id, version_id, persons, taxable, base, tax, exempt, absorbed)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-      [reservationId, n.date, propertyId, tax!.rule.id, n.versionId, n.persons, n.taxable, n.base, n.tax, JSON.stringify(n.exempt), tax!.passOn === "absorbed"],
+      [reservationId, n.date, propertyId, tax!.rule.id, n.versionId, n.persons, n.taxable, n.base, n.tax, JSON.stringify(n.exempt), tax!.passOn === "absorbed" || waived.has(n.date)],
     );
   }
 }
@@ -181,8 +186,8 @@ export async function dropCityTaxNights(tx: PoolClient, reservationId: string): 
 
 // ── rule changes ──
 
-/** Recalculate a checked-in stay: its City Tax Charges and record follow the rule (nights given up are not involved, so no confirmation is needed). */
-const resyncStay = (tx: PoolClient, reservationId: string, userId: string) => syncStayCharges(tx, reservationId, userId, true);
+/** Recalculate a checked-in stay: its City Tax Charges and record follow the rule. Never confirms giving up nights: that is not a City Tax change. */
+const resyncStay = (tx: PoolClient, reservationId: string, userId: string) => syncStayCharges(tx, reservationId, userId, false);
 
 /** After any change to the rule: every checked-in stay of the property is recalculated; those whose tax changed are listed. */
 async function recalculate(tx: PoolClient, propertyId: string, userId: string): Promise<CityTaxChange> {
@@ -194,12 +199,22 @@ async function recalculate(tx: PoolClient, propertyId: string, userId: string): 
     [propertyId],
   )).rows;
   const changed: CityTaxChange["changed"] = [];
+  const skipped: CityTaxChange["skipped"] = [];
   for (const st of stays) {
-    await resyncStay(tx, st.id, userId);
+    // each stay on its own: one that cannot be recalculated keeps its tax and does not block the rule
+    await tx.query("savepoint city_tax_stay");
+    try {
+      await resyncStay(tx, st.id, userId);
+      await tx.query("release savepoint city_tax_stay");
+    } catch (err) {
+      await tx.query("rollback to savepoint city_tax_stay");
+      skipped.push({ reservationId: st.id, confirmationNumber: st.confirmation_number, guestName: st.guest, reason: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
     const after = Number((await tx.query<{ total: string }>("select coalesce(sum(tax), 0) as total from city_tax_nights where reservation_id = $1", [st.id])).rows[0]!.total);
     if (after !== Number(st.total)) changed.push({ reservationId: st.id, confirmationNumber: st.confirmation_number, guestName: st.guest, before: Number(st.total), after });
   }
-  return { changed };
+  return { changed, skipped };
 }
 
 async function changeRule(pool: Pool, schema: string, propertyId: string, userId: string, fn: (tx: PoolClient, rule: CityTaxRuleView | null) => Promise<void>): Promise<CityTaxChange> {
@@ -330,7 +345,7 @@ export async function removeCityTaxVersion(pool: Pool, schema: string, propertyI
   return changeRule(pool, schema, propertyId, userId, async (tx, rule) => {
     if (!rule || !isUuid(versionId) || !rule.versions.some((v) => v.id === versionId)) throw new Error("Version not found");
     // nights in house are recalculated afterwards; nights already slept or invoiced keep the version they were taxed by
-    const used = (await tx.query("select 1 from city_tax_nights n where n.version_id = $1 and (n.date < (select (now() at time zone time_zone)::date from properties where id = $2) or exists (select 1 from charges c where c.reservation_id = n.reservation_id and c.service_date = n.date and c.component = 'ctax' and c.invoice_id is not null)) limit 1", [versionId, propertyId])).rows.length;
+    const used = (await tx.query("select 1 from city_tax_nights n where n.version_id = $1 and (n.date < (select (now() at time zone time_zone)::date from properties where id = $2) or exists (select 1 from charges c where c.reservation_id = n.reservation_id and c.service_date = n.date and c.component like 'ctax:%' and c.invoice_id is not null)) limit 1", [versionId, propertyId])).rows.length;
     if (used) throw new Error("Nights have been taxed by this version; add a new version instead");
     await tx.query("update city_tax_nights set version_id = null where version_id = $1", [versionId]);
     await tx.query("delete from city_tax_rule_versions where id = $1", [versionId]);
@@ -455,7 +470,7 @@ export interface CityTaxReport {
   totals: { nights: number; personNights: number; taxedPersonNights: number; base: number; tax: number; charged: number; absorbed: number };
   /** Person-nights not taxed, by reason. */
   exempt: Partial<Record<CityTaxExemptKey, number>>;
-  /** Exemptions set on reservations with nights in the period. */
+  /** Exemptions set on reservations that exempted nights in the period, with the number of those nights. */
   exemptions: { reservationId: string; confirmationNumber: string; guestName: string; person: number; reason: CityTaxExemptionReason; note: string; documentName: string | null; exemptionId: string; nights: number }[];
   /** Every stay with nights in the period: the guest list with length of stay. */
   stays: { reservationId: string; confirmationNumber: string; guestName: string; arrival: string; departure: string; nights: number; persons: number; base: number; tax: number; absorbed: boolean }[];
@@ -471,8 +486,8 @@ export async function cityTaxReport(pool: Pool, schema: string, propertyId: stri
     const p = (await tx.query<{ name: string; currency: string }>("select name, currency from properties where id = $1", [propertyId])).rows[0];
     if (!p) throw new Error("Property not found");
     const rule = await ruleIn(tx, propertyId);
-    const nights = (await tx.query<{ reservation_id: string; persons: number; taxable: number; base: string; tax: string; exempt: Partial<Record<CityTaxExemptKey, number>>; absorbed: boolean }>(
-      "select reservation_id, persons, taxable, base, tax, exempt, absorbed from city_tax_nights where property_id = $1 and date between $2 and $3",
+    const nights = (await tx.query<{ reservation_id: string; date: string; persons: number; taxable: number; base: string; tax: string; exempt: Partial<Record<CityTaxExemptKey, number>>; absorbed: boolean }>(
+      "select reservation_id, to_char(date, 'YYYY-MM-DD') as date, persons, taxable, base, tax, exempt, absorbed from city_tax_nights where property_id = $1 and date between $2 and $3",
       [propertyId, period.from, period.to],
     )).rows;
     const exempt: CityTaxReport["exempt"] = {};
@@ -503,17 +518,20 @@ export async function cityTaxReport(pool: Pool, schema: string, propertyId: stri
     const exemptions = (await tx.query<{ id: string; reservation_id: string; person: number; reason: CityTaxExemptionReason; note: string; document_name: string | null }>(
       "select id, reservation_id, person, reason, note, document_name from reservation_city_tax_exemptions where reservation_id = any($1::uuid[]) order by reservation_id, person",
       [ids],
-    )).rows.map((e) => ({
-      reservationId: e.reservation_id,
-      confirmationNumber: info.get(e.reservation_id)!.confirmation_number,
-      guestName: info.get(e.reservation_id)!.guest,
-      person: e.person,
-      reason: e.reason,
-      note: e.note,
-      documentName: e.document_name,
-      exemptionId: e.id,
-      nights: perStay.get(e.reservation_id)!.nights,
-    }));
+    ))
+      .rows.map((e) => ({
+        reservationId: e.reservation_id,
+        confirmationNumber: info.get(e.reservation_id)!.confirmation_number,
+        guestName: info.get(e.reservation_id)!.guest,
+        person: e.person,
+        reason: e.reason,
+        note: e.note,
+        documentName: e.document_name,
+        exemptionId: e.id,
+        // the nights its reason actually exempted someone (a reason disabled since, or a night under the cap, does not count)
+        nights: nights.filter((n) => n.reservation_id === e.reservation_id && (n.exempt[e.reason] ?? 0) > 0).length,
+      }))
+      .filter((e) => e.nights > 0);
     return { property: { name: p.name, currency: p.currency.trim() }, rule: rule ? { name: rule.name, preset: rule.preset } : null, from: period.from, to: period.to, totals, exempt, exemptions, stays };
   });
 }

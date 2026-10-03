@@ -43,6 +43,7 @@ describe("city tax", () => {
   let plan: RatePlan;
   let guest: string;
   let zero: string;
+  let std: string;
   let nextRoom = 0;
   const pm = "user_paula";
   const today = todayIn("Europe/Berlin");
@@ -69,6 +70,7 @@ describe("city tax", () => {
     const codes = await listTaxCodes(pool, s(), le);
     const id = (c: string) => codes.find((x) => x.code === c)!.id;
     zero = id("ZERO");
+    std = id("STD");
     const room = await createService(pool, s(), { propertyId: berlin, code: "ROOM", name: "Übernachtung", defaultPrice: 0, taxCodeId: id("ACC"), revenueAccount: "8300", postingRhythm: "per_night", bookableOnline: false });
     const pay = await createPaymentPolicy(pool, s(), { propertyId: berlin, name: "Card", kind: "card_guarantee" });
     const cxl = await createCancellationPolicy(pool, s(), { propertyId: berlin, name: "Flex", freeUntilDays: 1, feeKind: "first_night", noShowFeeKind: "first_night" });
@@ -146,5 +148,34 @@ describe("city tax", () => {
     expect(change.changed.some((c) => c.reservationId === invoiced)).toBe(false);
     expect((await cityTaxCharges(res)).map((c) => c.amount)).toEqual([10, 10, 10]);
     expect((await cityTaxCharges(invoiced)).map((c) => c.amount)).toEqual([7.5]);
+  });
+
+  it("a new Tax Code on the rule reposts the uninvoiced City Tax Charges with it", async () => {
+    const res = await stay(2);
+    await checkIn(pool, s(), res, pm);
+    await updateCityTaxRule(pool, s(), berlin, { taxCodeId: std }, pm);
+    const live = await cityTaxCharges(res);
+    expect(live).toHaveLength(2);
+    const { rows } = await pool.query(`select distinct tax_code_id from ${s()}.charges where reservation_id = $1 and category = 'city_tax' and voided_at is null`, [res]);
+    expect(rows.map((r) => r.tax_code_id)).toEqual([std]);
+    await updateCityTaxRule(pool, s(), berlin, { taxCodeId: zero }, pm);
+  });
+
+  it("quantity times price is always the City Tax Charge's amount", async () => {
+    // 10 % (the version added above) of 100 net for three persons: 10.00 does not split into cents, so one line for the night
+    const res = await stay(1, 3);
+    await checkIn(pool, s(), res, pm);
+    const [c] = await cityTaxCharges(res);
+    expect(c).toMatchObject({ amount: 10, quantity: 1, unitPrice: 10 });
+  });
+
+  it("the report lists an exemption only for the nights its reason exempted", async () => {
+    const res = await stay(1);
+    await setCityTaxExemption(pool, s(), res, { person: 0, reason: "disability", note: "", document: { name: "a.pdf", type: "application/pdf", bytes: new TextEncoder().encode("%PDF") } }, pm);
+    // the reason is disabled again before check-in: the exemption no longer applies
+    await updateCityTaxRule(pool, s(), berlin, { reasons: [] }, pm);
+    await checkIn(pool, s(), res, pm);
+    const report = await cityTaxReport(pool, s(), berlin, { from: today, to: today });
+    expect(report.exemptions.some((e) => e.reservationId === res)).toBe(false);
   });
 });

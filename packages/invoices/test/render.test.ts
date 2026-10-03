@@ -40,10 +40,11 @@ describe("invoice rendering", () => {
       to: "2026-12-31",
       totals: { nights: 3, personNights: 5, taxedPersonNights: 4, base: 300, tax: 18.75, charged: 11.25, absorbed: 7.5 },
       exempt: { disability: 1 },
-      exemptions: [{ confirmationNumber: "100031", guestName: "Aiko Tanaka", person: 1, reason: "disability", note: "GdB 80", documentName: "ausweis.pdf", nights: 1 }],
+      exemptions: [{ reservationId: "r1", confirmationNumber: "100031", guestName: "Aiko Tanaka", person: 1, reason: "disability", note: "GdB 80", documentName: "ausweis.pdf", nights: 1 }],
       stays: [
-        { confirmationNumber: "100031", guestName: "Aiko Tanaka", arrival: "2026-10-01", departure: "2026-10-02", nights: 1, persons: 2, base: 100, tax: 3.75, absorbed: false },
-        { confirmationNumber: "100032", guestName: "=HYPERLINK(1)", arrival: "2026-10-01", departure: "2026-10-03", nights: 2, persons: 2, base: 200, tax: 15, absorbed: true },
+        { reservationId: "r1", confirmationNumber: "100031", guestName: "Aiko Tanaka", arrival: "2026-10-01", departure: "2026-10-02", nights: 1, persons: 2, base: 100, tax: 3.75, absorbed: false },
+        // same booking, another room: its row lists only its own exemptions
+        { reservationId: "r2", confirmationNumber: "100031", guestName: "=HYPERLINK(1)", arrival: "2026-10-01", departure: "2026-10-03", nights: 2, persons: 2, base: 200, tax: 15, absorbed: true },
       ],
     };
     const pdf = Buffer.from(await renderCityTaxReportPdf(report, "de"));
@@ -52,5 +53,6 @@ describe("invoice rendering", () => {
     expect(csv.split("\r\n")[1]).toBe("100031;Aiko Tanaka;2026-10-01;2026-10-02;1;2;100.00;3.75;no;2:disability");
     // a guest name is never a formula in a spreadsheet
     expect(csv).toContain(";'=HYPERLINK(1);");
+    expect(csv.split("\r\n")[2]!.endsWith(";yes;")).toBe(true);
   });
 });
