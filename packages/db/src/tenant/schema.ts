@@ -910,6 +910,8 @@ export const invoices = pgTable(
     document: jsonb("document").notNull(),
     paymentId: uuid("payment_id").references(() => payments.id),
     nettedBy: uuid("netted_by").references((): AnyPgColumn => invoices.id),
+    cancels: uuid("cancels").references((): AnyPgColumn => invoices.id),
+    cancelledBy: uuid("cancelled_by").references((): AnyPgColumn => invoices.id),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     issuedBy: text("issued_by").notNull(),
     pdf: bytea("pdf"),
@@ -919,8 +921,38 @@ export const invoices = pgTable(
     unique("invoices_number_key").on(t.legalEntityId, t.number),
     index("invoices_reservation_idx").on(t.reservationId),
     index("invoices_folio_idx").on(t.folioId),
-    check("invoices_kind_check", sql`${t.kind} in ('final', 'deposit')`),
+    unique("invoices_cancels_key").on(t.cancels),
+    check("invoices_kind_check", sql`${t.kind} in ('final', 'deposit', 'cancellation')`),
+    check("invoices_cancels_check", sql`(${t.kind} = 'cancellation') = (${t.cancels} is not null)`),
   ],
+);
+
+export const receivableMatches = pgTable(
+  "receivable_matches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id").notNull().references(() => invoices.id),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    receivedOn: date("received_on").notNull(),
+    reference: text("reference").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [index("receivable_matches_invoice_idx").on(t.invoiceId), check("receivable_matches_amount_check", sql`${t.amount} > 0`)],
+);
+
+export const reminders = pgTable(
+  "reminders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id").notNull().references(() => invoices.id),
+    level: integer("level").notNull(),
+    document: jsonb("document").notNull(),
+    pdf: bytea("pdf"),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    issuedBy: text("issued_by").notNull(),
+  },
+  (t) => [unique("reminders_invoice_level_key").on(t.invoiceId, t.level), check("reminders_level_check", sql`${t.level} between 1 and 3`)],
 );
 
 export const tenantSchema = {
@@ -968,4 +1000,6 @@ export const tenantSchema = {
   cardHolds,
   invoiceNumberRanges,
   invoices,
+  receivableMatches,
+  reminders,
 };

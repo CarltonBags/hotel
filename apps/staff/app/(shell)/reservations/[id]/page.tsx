@@ -206,7 +206,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
       ) : null}
       {folio ? (
         <div className="grid items-start gap-4 lg:grid-cols-2">
-          <InvoicesPanel reservationId={r.id} invoices={v.invoices} openFolios={v.openFolios} canIssue={rights.issueInvoices} currency={v.currency} m={m} />
+          <InvoicesPanel reservationId={r.id} invoices={v.invoices} openFolios={v.openFolios} canIssue={rights.issueInvoices} canCorrect={rights.correctInvoices} currency={v.currency} m={m} />
           {v.canCheckOut ? <CheckOutPanel reservationId={r.id} canOverride={rights.overrideCheckOut} currency={v.currency} m={m} /> : null}
         </div>
       ) : null}

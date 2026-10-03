@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { can } from "@hoteloftware/domain";
-import { CheckOutBlocked, checkOut, issueInvoice, loadFolios } from "@hoteloftware/db";
+import { CheckOutBlocked, cancelInvoice, checkOut, issueInvoice, listInvoices, loadFolios } from "@hoteloftware/db";
 import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
 import { pool } from "@/lib/db";
@@ -18,6 +18,19 @@ export async function issueInvoiceAction(reservationId: string, folioId: string)
     revalidatePath(`/reservations/${reservation.id}`);
     await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: `Invoice ${inv.number} issued.` };
+  });
+}
+
+/** Correct an issued invoice: a Cancellation Invoice; its Charges are free to be moved and invoiced again. */
+export async function cancelInvoiceAction(reservationId: string, invoiceId: string, reason: string): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "correct_invoices");
+    if (!(await listInvoices(pool(), schema, reservation.id)).some((i) => i.id === String(invoiceId))) throw new Error("Invoice not found on this reservation");
+    const cxl = await cancelInvoice(pool(), schema, String(invoiceId), String(reason), userId);
+    revalidatePath(`/reservations/${reservation.id}`);
+    revalidatePath("/receivables");
+    await announceReservations(tenantId, reservation.propertyId);
+    return { ok: true, message: `Cancellation Invoice ${cxl.number} issued. Correct the folio and issue the invoice again.` };
   });
 }
 

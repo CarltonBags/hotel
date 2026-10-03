@@ -104,6 +104,10 @@ export const PROPERTY_ACTIONS = {
   refund_without_limit: ["property_manager", "accounting"],
   /** Matrix "Issue invoice". */
   issue_invoices: ["property_manager", "front_desk", "accounting"],
+  /** Correct an issued invoice by a Cancellation Invoice and a new one (matrix "Cancellation invoice"). */
+  correct_invoices: ["property_manager", "front_desk", "accounting"],
+  /** Matrix "Receivables (matching payments, reminders)". */
+  manage_receivables: ["property_manager", "accounting"],
   /** Check-out with balances open: a Manager's decision (Front Desk would need an Approval, ticket 31). */
   override_check_out: ["property_manager"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */

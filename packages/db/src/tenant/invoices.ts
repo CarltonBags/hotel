@@ -25,6 +25,9 @@ import { withTenant } from "./with-tenant";
  * (UStG §13(1) Nr. 1a), netted on the final invoice with its VAT (§14(5)).
  * Check-out issues the open folios and needs every guest folio settled, an
  * on-account Company's folio becoming a Receivable, or a Manager override.
+ * An issued invoice never changes (a database trigger refuses it); it is
+ * corrected by a Cancellation Invoice that mirrors it and frees its Charges,
+ * payments and deposits for a new invoice (ticket 29).
  */
 
 export type RangeKind = "final" | "deposit" | "cancellation";
@@ -133,7 +136,7 @@ async function contextOf(tx: PoolClient, reservationId: string): Promise<Context
   };
 }
 
-async function sellerOf(tx: PoolClient, legalEntityId: string): Promise<InvoiceDocument["seller"]> {
+export async function sellerOf(tx: PoolClient, legalEntityId: string): Promise<InvoiceDocument["seller"]> {
   const l = (await tx.query<{ name: string; address_line1: string; address_line2: string; postal_code: string; city: string; country: string; vat_id: string | null; tax_number: string; invoice_email: string; invoice_phone: string; iban: string | null; bic: string | null; account_holder: string | null }>(
     "select name, address_line1, address_line2, postal_code, city, country, vat_id, tax_number, invoice_email, invoice_phone, iban, bic, account_holder from legal_entities where id = $1",
     [legalEntityId],
@@ -205,7 +208,7 @@ async function billToOf(tx: PoolClient, folioId: string, propertyCountry: string
 
 export interface IssuedInvoice {
   id: string;
-  kind: "final" | "deposit";
+  kind: InvoiceDocument["kind"];
   number: string;
   folioId: string;
   issueDate: string;
@@ -213,15 +216,23 @@ export interface IssuedInvoice {
   due: number;
   receivable: boolean;
   billToName: string;
+  /** The Cancellation Invoice that cancelled this one. */
+  cancelledBy: string | null;
 }
 
-async function storeInvoice(tx: PoolClient, ctx: Context, folioId: string, doc: InvoiceDocument, extra: { receivable: boolean; paymentId: string | null }, userId: string): Promise<IssuedInvoice> {
+type Stored = Pick<Context, "legalEntityId" | "propertyId" | "reservationId" | "currency">;
+
+async function storeInvoice(tx: PoolClient, ctx: Stored, folioId: string, doc: InvoiceDocument, extra: { receivable: boolean; paymentId: string | null; cancels?: string }, userId: string): Promise<IssuedInvoice> {
+  // the document shows a Cancellation Invoice's totals as on the original; the books count them negative
+  const sign = doc.kind === "cancellation" ? -1 : 1;
+  const gross = sign * doc.totals.gross;
+  const due = sign * doc.totals.due;
   const { rows } = await tx.query<{ id: string }>(
-    `insert into invoices (legal_entity_id, property_id, reservation_id, folio_id, kind, number, issue_date, due_date, currency, gross, due, receivable, document, payment_id, issued_by)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) returning id`,
-    [ctx.legalEntityId, ctx.propertyId, ctx.reservationId, folioId, doc.kind, doc.number, doc.issueDate, doc.dueDate, ctx.currency, doc.totals.gross, doc.totals.due, extra.receivable, JSON.stringify(doc), extra.paymentId, userId],
+    `insert into invoices (legal_entity_id, property_id, reservation_id, folio_id, kind, number, issue_date, due_date, currency, gross, due, receivable, document, payment_id, cancels, issued_by)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning id`,
+    [ctx.legalEntityId, ctx.propertyId, ctx.reservationId, folioId, doc.kind, doc.number, doc.issueDate, doc.dueDate, ctx.currency, gross, due, extra.receivable, JSON.stringify(doc), extra.paymentId, extra.cancels ?? null, userId],
   );
-  return { id: rows[0]!.id, kind: doc.kind, number: doc.number, folioId, issueDate: doc.issueDate, gross: doc.totals.gross, due: doc.totals.due, receivable: extra.receivable, billToName: doc.buyer.name };
+  return { id: rows[0]!.id, kind: doc.kind, number: doc.number, folioId, issueDate: doc.issueDate, gross, due, receivable: extra.receivable, billToName: doc.buyer.name, cancelledBy: null };
 }
 
 /**
@@ -253,7 +264,7 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
   const deposits = (await tx.query<{ id: string; number: string; issue_date: string; document: InvoiceDocument; payment_id: string; refunded: string }>(
     `select i.id, i.number, to_char(i.issue_date, 'YYYY-MM-DD') as issue_date, i.document, i.payment_id,
        (select coalesce(sum(r.amount), 0) from payments r where r.refund_of = i.payment_id and r.status = 'succeeded') as refunded
-     from invoices i where i.folio_id = $1 and i.kind = 'deposit' and i.netted_by is null order by i.issued_at`,
+     from invoices i where i.folio_id = $1 and i.kind = 'deposit' and i.netted_by is null and i.cancelled_by is null order by i.issued_at`,
     [folioId],
   )).rows;
   // refunds of a deposit belong to its deposit, not to the payments of the stay
@@ -268,7 +279,7 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
   const onAccount = payments.some((p) => p.tender === "on_account" && !p.refund_of);
   const paid = roundMoney(payments.filter((p) => p.tender !== "on_account" && !depositPayments.includes(p.refund_of ?? "")).reduce((s, p) => s + Number(p.amount), 0));
   // a deposit partly refunded is netted for what was kept, with the VAT of that part
-  // TODO(ticket 29): the refunded part gets its own correcting document
+  // TODO: the refunded part could get its own correcting document; a fully refunded deposit can be cancelled
   const depositParts = deposits
     .map((d) => {
       const kept = roundMoney(Number(d.document.totals.gross) + Number(d.refunded));
@@ -406,11 +417,22 @@ export async function depositIn(tx: PoolClient, paymentId: string, userId: strin
 export async function listInvoices(pool: Pool, schema: string, reservationId: string): Promise<IssuedInvoice[]> {
   if (!isUuid(reservationId)) return [];
   return withTenant(pool, schema, async (tx) =>
-    (await tx.query<{ id: string; kind: "final" | "deposit"; number: string; folio_id: string; issue_date: string; gross: string; due: string; receivable: boolean; buyer: string }>(
-      `select id, kind, number, folio_id, to_char(issue_date, 'YYYY-MM-DD') as issue_date, gross, due, receivable, document -> 'buyer' ->> 'name' as buyer
+    (await tx.query<{ id: string; kind: IssuedInvoice["kind"]; number: string; folio_id: string; issue_date: string; gross: string; due: string; receivable: boolean; buyer: string; cancelled_by: string | null }>(
+      `select id, kind, number, folio_id, to_char(issue_date, 'YYYY-MM-DD') as issue_date, gross, due, receivable, document -> 'buyer' ->> 'name' as buyer, cancelled_by
        from invoices where reservation_id = $1 order by issued_at`,
       [reservationId],
-    )).rows.map((r) => ({ id: r.id, kind: r.kind, number: r.number, folioId: r.folio_id, issueDate: r.issue_date, gross: Number(r.gross), due: Number(r.due), receivable: r.receivable, billToName: r.buyer })),
+    )).rows.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      number: r.number,
+      folioId: r.folio_id,
+      issueDate: r.issue_date,
+      gross: Number(r.gross),
+      due: Number(r.due),
+      receivable: r.receivable,
+      billToName: r.buyer,
+      cancelledBy: r.cancelled_by,
+    })),
   );
 }
 
@@ -422,6 +444,100 @@ export async function invoiceDocument(pool: Pool, schema: string, invoiceId: str
     if (!r) throw new Error("Invoice not found");
     return { ...r.document, reservationId: r.reservation_id, propertyId: r.property_id };
   });
+}
+
+// ── correction ──
+
+/**
+ * Cancel an issued invoice by a Cancellation Invoice: a new number from the
+ * cancellation range, the original's document mirrored and referenced, its
+ * totals reversed in the books. The original's Charges, payments and netted
+ * deposits are free again, so the folio can be corrected (moved to another
+ * Bill-to for a recipient change) and invoiced anew. Refused once money is
+ * matched to it, and for a deposit already netted on a final invoice. A
+ * Deposit Invoice cancelled before check-in is issued anew at once for its
+ * payment (to the folio's Bill-to as it is now); after check-in the payment
+ * counts as paid on the final invoice.
+ */
+export async function cancelInvoice(pool: Pool, schema: string, invoiceId: string, reason: string, userId: string): Promise<IssuedInvoice> {
+  if (!isUuid(invoiceId)) throw new Error("Invoice not found");
+  const why = reason.trim();
+  if (!why) throw new Error("Give a reason for the Cancellation Invoice");
+  return withTenant(pool, schema, async (tx) => {
+    const pre = (await tx.query<{ property_id: string }>("select property_id from invoices where id = $1", [invoiceId])).rows[0];
+    if (!pre) throw new Error("Invoice not found");
+    await lockProperty(tx, pre.property_id);
+    await tx.query("select 1 from invoices where id = $1 for update", [invoiceId]);
+    // read after the lock, in its own statement: a transfer matched meanwhile is seen
+    const inv = (await tx.query<{ id: string; kind: IssuedInvoice["kind"]; reservation_id: string; folio_id: string; document: InvoiceDocument; cancelled_by: string | null; netted_by: string | null; payment_id: string | null; matched: boolean }>(
+      `select i.id, i.kind, i.reservation_id, i.folio_id, i.document, i.cancelled_by, i.netted_by, i.payment_id,
+         exists (select 1 from receivable_matches m where m.invoice_id = i.id) as matched
+       from invoices i where i.id = $1`,
+      [invoiceId],
+    )).rows[0]!;
+    if (inv.kind === "cancellation") throw new Error("A Cancellation Invoice cannot be cancelled; issue a new invoice instead");
+    if (inv.cancelled_by) throw new Error("This invoice is already cancelled");
+    if (inv.netted_by) throw new Error("This Deposit Invoice is netted on a final invoice; cancel that one first");
+    if (inv.matched) throw new Error("Money is matched to this invoice; it cannot be cancelled");
+    const ctx = await contextOf(tx, inv.reservation_id);
+    const original = inv.document;
+    const doc: InvoiceDocument = {
+      ...original,
+      kind: "cancellation",
+      number: await nextNumber(tx, ctx.legalEntityId, "cancellation", ctx.today),
+      issueDate: ctx.today,
+      dueDate: null,
+      cancels: { number: original.number, issueDate: original.issueDate },
+      // the reason first: the cancellation list shows it
+      notes: [why, ...original.notes],
+    };
+    const cancellation = await storeInvoice(tx, ctx, inv.folio_id, doc, { receivable: false, paymentId: null, cancels: inv.id }, userId);
+    await tx.query("update invoices set cancelled_by = $2, receivable = false where id = $1", [inv.id, cancellation.id]);
+    // free for a new invoice: what it billed, what it counted as paid, the deposits it netted
+    await tx.query("update charges set invoice_id = null where invoice_id = $1", [inv.id]);
+    await tx.query("update payments set invoice_id = null where invoice_id = $1", [inv.id]);
+    await tx.query("update invoices set netted_by = null where netted_by = $1", [inv.id]);
+    if (inv.kind === "deposit" && inv.payment_id) await depositIn(tx, inv.payment_id, userId);
+    return cancellation;
+  });
+}
+
+export interface CancellationListRow {
+  id: string;
+  number: string;
+  issueDate: string;
+  cancelsId: string;
+  cancelsNumber: string;
+  reservationId: string;
+  billToName: string;
+  gross: number;
+  reason: string;
+  issuedBy: string;
+}
+
+/** The Cancellation Invoices of a property, newest first: part of the money audit trail. */
+export async function listCancellationInvoices(pool: Pool, schema: string, propertyId: string): Promise<CancellationListRow[]> {
+  if (!isUuid(propertyId)) return [];
+  return withTenant(pool, schema, async (tx) =>
+    (await tx.query<{ id: string; number: string; issue_date: string; cancels: string; cancels_number: string; reservation_id: string; buyer: string; gross: string; reason: string | null; issued_by: string }>(
+      `select c.id, c.number, to_char(c.issue_date, 'YYYY-MM-DD') as issue_date, c.cancels, o.number as cancels_number, c.reservation_id,
+         c.document -> 'buyer' ->> 'name' as buyer, c.gross, c.document -> 'notes' ->> 0 as reason, c.issued_by
+       from invoices c join invoices o on o.id = c.cancels
+       where c.property_id = $1 and c.kind = 'cancellation' order by c.issued_at desc limit 500`,
+      [propertyId],
+    )).rows.map((r) => ({
+      id: r.id,
+      number: r.number,
+      issueDate: r.issue_date,
+      cancelsId: r.cancels,
+      cancelsNumber: r.cancels_number,
+      reservationId: r.reservation_id,
+      billToName: r.buyer,
+      gross: Number(r.gross),
+      reason: r.reason ?? "",
+      issuedBy: r.issued_by,
+    })),
+  );
 }
 
 // ── check-out ──

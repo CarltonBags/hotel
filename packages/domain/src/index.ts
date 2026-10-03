@@ -158,3 +158,13 @@ export {
   type PrecedingDeposit,
   type TaxPart,
 } from "./invoices";
+export {
+  AGEING_BUCKETS,
+  REMINDER_LEVELS,
+  ageing,
+  bucketOf,
+  daysOverdue,
+  nextReminderLevel,
+  type AgeingBucket,
+  type ReminderLevel,
+} from "./receivables";

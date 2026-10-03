@@ -57,6 +57,7 @@ export async function reservationView(id: string, options: { propertyId?: string
     takePayments: at("take_payments"),
     refunds: at("refund_payments"),
     issueInvoices: at("issue_invoices"),
+    correctInvoices: at("correct_invoices"),
     overrideCheckOut: at("override_check_out"),
   };
   const [users, roomTypes, plans, folios, chargeLog, services, taxCodes, fixedCharges, guest] = await Promise.all([

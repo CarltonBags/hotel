@@ -77,13 +77,16 @@ export function toEn16931(doc: InvoiceDocument): Invoice {
       "cbc:ID": doc.number,
       "cbc:IssueDate": doc.issueDate,
       ...(doc.dueDate && t.due > 0 ? { "cbc:DueDate": doc.dueDate } : {}),
-      "cbc:InvoiceTypeCode": doc.kind === "deposit" ? "386" : "380",
+      // 386 prepayment invoice; 381 credit note for a Cancellation Invoice (amounts as on the original)
+      "cbc:InvoiceTypeCode": doc.kind === "deposit" ? "386" : doc.kind === "cancellation" ? "381" : "380",
       ...(doc.notes.length ? { "cbc:Note": doc.notes } : {}),
       "cbc:DocumentCurrencyCode": cur,
       "cbc:BuyerReference": doc.reference,
       "cac:InvoicePeriod": { "cbc:StartDate": doc.periodStart, "cbc:EndDate": doc.periodEnd },
-      ...(doc.deposits.length
-        ? { "cac:BillingReference": doc.deposits.map((d) => ({ "cac:InvoiceDocumentReference": { "cbc:ID": d.number, "cbc:IssueDate": d.issueDate } })) }
+      ...(doc.deposits.length || doc.cancels
+        ? {
+            "cac:BillingReference": [...(doc.cancels ? [doc.cancels] : []), ...doc.deposits].map((d) => ({ "cac:InvoiceDocumentReference": { "cbc:ID": d.number, "cbc:IssueDate": d.issueDate } })),
+          }
         : {}),
       "cac:AccountingSupplierParty": seller(doc.seller),
       "cac:AccountingCustomerParty": buyer(doc.buyer),
