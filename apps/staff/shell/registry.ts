@@ -59,7 +59,7 @@ export const MODULES: ModuleDef[] = [
   soon("downtime_reports", "lists", "module.downtime_reports", "Printer", "#6b7280", 86),
   soon("cash_book", "cash_billing", "module.cash_book", "Wallet", "#1fa971", 50),
   soon("open_folios", "cash_billing", "module.open_folios", "Receipt", "#0071e3", 26),
-  soon("invoices", "cash_billing", "module.invoices", "FileText", "#4f5bd5", 28),
+  { id: "receivables", group: "cash_billing", label: "module.receivables", icon: "FileText", hue: "#4f5bd5", href: "/receivables", requiresProperty: "manage_receivables" },
   { id: "payments", group: "cash_billing", label: "module.payments", icon: "CreditCard", hue: "#e0457b", href: "/payments", requiresProperty: "take_payments" },
   soon("night_audit", "cash_billing", "module.night_audit", "MoonStar", "#7c5cff", 32),
   { id: "rates", group: "rates", label: "module.rates", icon: "Tag", hue: "#e0457b", href: "/rates", requiresProperty: "manage_rates" },

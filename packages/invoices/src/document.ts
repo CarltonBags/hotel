@@ -18,8 +18,10 @@ export interface Party {
   phone?: string | null;
 }
 
+export type InvoiceKind = "final" | "deposit" | "cancellation";
+
 export interface InvoiceDocument {
-  kind: "final" | "deposit";
+  kind: InvoiceKind;
   number: string;
   issueDate: string;
   dueDate: string | null;
@@ -36,5 +38,19 @@ export interface InvoiceDocument {
   deposits: { number: string; issueDate: string; byTax: TaxPart[] }[];
   /** A deposit invoice: received on this date. */
   receivedOn?: string | null;
+  /** A Cancellation Invoice: the invoice it cancels (its totals are mirrored, shown negative). */
+  cancels?: { number: string; issueDate: string } | null;
   notes: string[];
+}
+
+/** A reminder letter about overdue invoices of one Bill-to, frozen when issued. */
+export interface ReminderDocument {
+  level: 1 | 2 | 3;
+  issueDate: string;
+  payBy: string;
+  currency: string;
+  language: "de" | "en";
+  seller: InvoiceDocument["seller"];
+  buyer: Party;
+  invoices: { number: string; issueDate: string; dueDate: string; open: number }[];
 }

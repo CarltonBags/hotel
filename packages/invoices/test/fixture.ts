@@ -1,5 +1,5 @@
 import { allocateDeposit, invoiceLines, invoiceTotals } from "@hoteloftware/domain";
-import type { InvoiceDocument } from "../src/index";
+import type { InvoiceDocument, ReminderDocument } from "../src/index";
 
 const charges = [
   { description: "Übernachtung", serviceDate: "2026-10-02", amount: 96, unitPrice: 96, quantity: 1, taxCode: "ACC", taxRate: 7 },
@@ -43,4 +43,25 @@ export const finalInvoice: InvoiceDocument = {
   totals: invoiceTotals(invoiceLines(charges), { deposits: [{ number: "AZ-2026-00007", byTax: deposit }], paid: 50 }),
   deposits: [{ number: "AZ-2026-00007", issueDate: "2026-09-20", byTax: deposit }],
   notes: [],
+};
+
+export const cancellationInvoice: InvoiceDocument = {
+  ...finalInvoice,
+  kind: "cancellation",
+  number: "ST-2026-0001",
+  issueDate: "2026-10-05",
+  dueDate: null,
+  cancels: { number: finalInvoice.number, issueDate: finalInvoice.issueDate },
+  notes: ["Wrong recipient"],
+};
+
+export const reminder: ReminderDocument = {
+  level: 2,
+  issueDate: "2026-11-20",
+  payBy: "2026-11-30",
+  currency: "EUR",
+  language: "de",
+  seller: finalInvoice.seller,
+  buyer: finalInvoice.buyer,
+  invoices: [{ number: finalInvoice.number, issueDate: finalInvoice.issueDate, dueDate: finalInvoice.dueDate!, open: 99.5 }],
 };

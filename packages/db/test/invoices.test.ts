@@ -17,9 +17,10 @@ import { createGuest } from "../src/tenant/guests";
 import { createCompany } from "../src/tenant/companies";
 import { createBooking } from "../src/tenant/reservations";
 import { assignRoom } from "../src/tenant/reservation-changes";
-import { checkIn, loadFolios, postServiceCharge, voidCharge } from "../src/tenant/folios";
+import { checkIn, loadFolios, moveCharge, postServiceCharge, voidCharge } from "../src/tenant/folios";
 import { takePayment } from "../src/tenant/payments";
-import { CheckOutBlocked, checkOut, invoiceDocument, issueInvoice, listInvoices, setInvoiceNumberRange } from "../src/tenant/invoices";
+import { CheckOutBlocked, cancelInvoice, checkOut, invoiceDocument, issueInvoice, listCancellationInvoices, listInvoices, setInvoiceNumberRange } from "../src/tenant/invoices";
+import { issueReminder, listReceivables, matchTransfer, reminderDocument } from "../src/tenant/receivables";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -165,5 +166,106 @@ describe("invoices and check-out", () => {
     const issued = await Promise.all(reservations.map(async (r) => issueInvoice(pool, s(), (await loadFolios(pool, s(), r)).folios[0]!.id, fd)));
     const counters = issued.map((i) => Number(i.number.split("-").pop())).sort((a, b) => a - b);
     expect(counters).toEqual(Array.from({ length: 8 }, (_, i) => before + i));
+  });
+
+  // ── ticket 29: correction by Cancellation Invoice, Receivables, reminders ──
+
+  let nextRoom = 10;
+  const checkedIn = async (res: string) => {
+    await assignRoom(pool, s(), res, fd, rooms[nextRoom++]!.id);
+    await checkIn(pool, s(), res, fd);
+    return res;
+  };
+  /** A stay billed on account to a new Company and invoiced: a Receivable. */
+  const receivable = async (name: string, nights = 1) => {
+    const company = (await createCompany(pool, s(), { name, routing: ["accommodation", "package"], onAccount: true, paymentTermsDays: 14, vatId: "DE111111111" }, { userId: fd })).id;
+    const res = await checkedIn(await book(today, day(nights), { companyId: company }));
+    await postServiceCharge(pool, s(), res, { serviceId: minibar, quantity: 1 }, fd);
+    // the minibar goes to the company too, so the guest folio is empty
+    const { folios } = await loadFolios(pool, s(), res);
+    for (const c of folios[0]!.charges) await moveCharge(pool, s(), res, c.id, folios[1]!.id, fd);
+    const inv = await issueInvoice(pool, s(), folios[1]!.id, fd);
+    return { res, inv, company };
+  };
+  /** Move an invoice's due date into the past (an issued invoice cannot be changed otherwise). */
+  const backdate = async (invoiceId: string, days: number) => {
+    await pool.query(`alter table ${s()}.invoices disable trigger invoices_immutable`);
+    await pool.query(`update ${s()}.invoices set due_date = due_date - $2::int where id = $1`, [invoiceId, days]);
+    await pool.query(`alter table ${s()}.invoices enable trigger invoices_immutable`);
+  };
+
+  it("an issued invoice cannot be changed or deleted, not even in SQL", async () => {
+    const { inv } = await receivable("Immutable GmbH");
+    await expect(pool.query(`update ${s()}.invoices set gross = 1 where id = $1`, [inv.id])).rejects.toThrow(/Cancellation Invoice/);
+    await expect(pool.query(`update ${s()}.invoices set document = '{}' where id = $1`, [inv.id])).rejects.toThrow(/cannot be changed/);
+    await expect(pool.query(`delete from ${s()}.invoices where id = $1`, [inv.id])).rejects.toThrow(/cannot be deleted/);
+  });
+
+  it("a Cancellation Invoice carries the original number and reverses its totals; the folio is invoiced again", async () => {
+    await setInvoiceNumberRange(pool, s(), le, "cancellation", "ST-{YYYY}-{NNNN}");
+    const { res, inv } = await receivable("Storno AG");
+    const cxl = await cancelInvoice(pool, s(), inv.id, "wrong recipient", fd);
+    expect(cxl).toMatchObject({ kind: "cancellation", number: `ST-${today.slice(0, 4)}-0001`, gross: -inv.gross, due: -inv.due, receivable: false });
+    const doc = await invoiceDocument(pool, s(), cxl.id);
+    expect(doc.cancels).toEqual({ number: inv.number, issueDate: inv.issueDate });
+    expect(doc.totals.gross).toBe(inv.gross);
+    expect(doc.notes).toContain("wrong recipient");
+    // the original is cancelled and no longer open
+    const listed = await listInvoices(pool, s(), res);
+    expect(listed.find((i) => i.id === inv.id)).toMatchObject({ cancelledBy: cxl.id, receivable: false });
+    await expect(cancelInvoice(pool, s(), inv.id, "again", fd)).rejects.toThrow(/already cancelled/);
+    await expect(cancelInvoice(pool, s(), cxl.id, "undo", fd)).rejects.toThrow(/Cancellation Invoice cannot be cancelled/);
+    // recipient change: the Charges are free again, move them to the guest and invoice anew
+    const { folios } = await loadFolios(pool, s(), res);
+    for (const c of folios[1]!.charges) await moveCharge(pool, s(), res, c.id, folios[0]!.id, fd);
+    const again = await issueInvoice(pool, s(), folios[0]!.id, fd);
+    expect(again.gross).toBe(inv.gross);
+    expect(again.billToName).toBe("Aiko Tanaka");
+    expect((await listCancellationInvoices(pool, s(), berlin)).map((c) => [c.number, c.cancelsNumber, c.reason])).toContainEqual([cxl.number, inv.number, "wrong recipient"]);
+  });
+
+  it("cancelling a final invoice frees its netted deposit for the new invoice", async () => {
+    const res = await book(today, day(1));
+    await takePayment(pool, s(), provider, { reservationId: res, tender: "bank_transfer", amount: 50, reference: "deposit" }, fd);
+    await checkedIn(res);
+    const folio = (await loadFolios(pool, s(), res)).folios[0]!;
+    const first = await issueInvoice(pool, s(), folio.id, fd);
+    await cancelInvoice(pool, s(), first.id, "typo in address", fd);
+    const second = await issueInvoice(pool, s(), folio.id, fd);
+    expect((await invoiceDocument(pool, s(), second.id)).totals).toMatchObject({ gross: 120, depositsGross: 50, due: 70 });
+  });
+
+  it("the ageing buckets add up to the open total; a transfer matched by hand lowers what is open", async () => {
+    const a = await receivable("Ageing A");
+    const b = await receivable("Ageing B", 2);
+    await backdate(b.inv.id, 45);
+    const before = await listReceivables(pool, s(), berlin);
+    const sum = Object.values({ ...before.ageing, total: 0 }).reduce((x, y) => x + y, 0);
+    expect(Math.round(sum * 100) / 100).toBe(before.ageing.total);
+    expect(before.rows.find((r) => r.invoiceId === b.inv.id)).toMatchObject({ open: b.inv.due, bucket: "31_60", daysOverdue: 31 });
+    expect(before.rows.find((r) => r.invoiceId === a.inv.id)).toMatchObject({ bucket: "current" });
+    // one transfer pays A in full and part of B
+    await matchTransfer(pool, s(), { receivedOn: today, reference: "SEPA 4711", allocations: [{ invoiceId: a.inv.id, amount: a.inv.due }, { invoiceId: b.inv.id, amount: 100 }] }, fd);
+    const after = await listReceivables(pool, s(), berlin);
+    expect(after.rows.find((r) => r.invoiceId === a.inv.id)).toBeUndefined();
+    expect(after.rows.find((r) => r.invoiceId === b.inv.id)).toMatchObject({ open: b.inv.due - 100 });
+    expect(after.ageing.total).toBe(Math.round((before.ageing.total - a.inv.due - 100) * 100) / 100);
+    await expect(matchTransfer(pool, s(), { receivedOn: today, reference: "x", allocations: [{ invoiceId: b.inv.id, amount: b.inv.due }] }, fd)).rejects.toThrow(/more than is open/);
+  });
+
+  it("reminder letters go out at levels 1 to 3, only for overdue Receivables", async () => {
+    const { inv } = await receivable("Reminder GmbH");
+    await expect(issueReminder(pool, s(), inv.id, fd)).rejects.toThrow(/not overdue/);
+    await backdate(inv.id, 20);
+    const levels = [];
+    for (let i = 0; i < 3; i++) levels.push((await issueReminder(pool, s(), inv.id, fd)).level);
+    expect(levels).toEqual([1, 2, 3]);
+    await expect(issueReminder(pool, s(), inv.id, fd)).rejects.toThrow(/last reminder/);
+    const row = (await listReceivables(pool, s(), berlin)).rows.find((r) => r.invoiceId === inv.id)!;
+    expect(row.reminders.map((r) => r.level)).toEqual([1, 2, 3]);
+    const third = row.reminders[2]!;
+    const { document } = await reminderDocument(pool, s(), third.id);
+    expect(document).toMatchObject({ level: 3, invoices: [{ number: inv.number, open: inv.due }] });
+    expect(document.seller.taxNumber).toBe("27/123/45678");
   });
 });

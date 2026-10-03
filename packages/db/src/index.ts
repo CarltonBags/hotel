@@ -257,7 +257,10 @@ export { mapProviderAccount } from "./control/external-ids";
 export {
   CheckOutBlocked,
   DEFAULT_FORMATS,
+  cancelInvoice,
   checkOut,
+  listCancellationInvoices,
+  type CancellationListRow,
   invoiceDocument,
   invoiceFiles,
   keepInvoiceFile,
@@ -270,3 +273,4 @@ export {
   type NumberRange,
   type RangeKind,
 } from "./tenant/invoices";
+export { issueReminder, keepReminderPdf, listReceivables, matchTransfer, reminderDocument, type ReceivableRow, type Receivables, type TransferMatch } from "./tenant/receivables";

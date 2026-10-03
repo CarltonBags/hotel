@@ -24,7 +24,7 @@ const rule = rgb(0.85, 0.85, 0.87);
 export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array> {
   const L = LABELS[doc.language];
   const locale = doc.language === "de" ? "de-DE" : "en-GB";
-  const money = (n: number) => new Intl.NumberFormat(locale, { style: "currency", currency: doc.currency }).format(n);
+  const moneyOf = (n: number) => new Intl.NumberFormat(locale, { style: "currency", currency: doc.currency }).format(n);
   const num = (n: number) => new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(n);
   const day = (d: string) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${d}T12:00:00Z`));
   const fill = (t: string, v: Record<string, string>) => Object.entries(v).reduce((s, [k, x]) => s.replaceAll(`{${k}}`, x), t);
@@ -33,7 +33,13 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
   pdf.registerFontkit(fontkit);
   const font = await pdf.embedFont(FONT, { subset: false });
   const bold = await pdf.embedFont(BOLD, { subset: false });
-  pdf.setTitle(`${doc.kind === "deposit" ? L.deposit : L.final} ${doc.number}`);
+  const title = L[doc.kind === "final" ? "final" : doc.kind];
+  // a Cancellation Invoice mirrors the cancelled one, shown negative
+  const sign = doc.kind === "cancellation" ? -1 : 1;
+  const money = (n: number) => moneyOf(n * sign);
+  // deposits and payments are deducted on an invoice, added back on its cancellation
+  const deduction = (n: number) => `${sign > 0 ? "-" : "+"} ${moneyOf(n)}`;
+  pdf.setTitle(`${title} ${doc.number}`);
   pdf.setAuthor(doc.seller.name);
   pdf.setLanguage(doc.language === "de" ? "de-DE" : "en-GB");
   // fixed dates: the same invoice renders to the same document
@@ -86,13 +92,14 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
 
   // title and facts
   y = A4.h - M - 210;
-  text(doc.kind === "deposit" ? L.deposit : L.final, M, 16, ink, bold);
+  text(title, M, 16, ink, bold);
   y -= 24;
   const facts: [string, string][] = [
     [L.number, doc.number],
     [L.date, day(doc.issueDate)],
     doc.kind === "deposit" && doc.receivedOn ? [L.received, day(doc.receivedOn)] : [L.period, `${day(doc.periodStart)} – ${day(doc.periodEnd)}`],
     [L.reference, doc.reference],
+    ...(doc.cancels ? ([["", fill(L.cancels, { number: doc.cancels.number, date: day(doc.cancels.issueDate) })]] as [string, string][]) : []),
   ];
   for (const [k, v] of facts) {
     text(k, M, 9, grey);
@@ -167,14 +174,14 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
     const gross = d.byTax.reduce((s, x) => s + x.gross, 0);
     const vat = d.byTax.reduce((s, x) => s + x.vat, 0);
     text(fill(L.lessDeposit, { number: d.number, date: day(d.issueDate) }), col.item);
-    right(`- ${money(gross)}`, col.amount);
+    right(deduction(gross), col.amount);
     y -= 11;
-    text(`${L.ofWhichVat} ${d.byTax.map((x) => `${x.taxCode} ${num(x.rate)} %: ${money(x.vat)}`).join(", ")} (${money(vat)})`, col.item, 7.5, grey);
+    text(`${L.ofWhichVat} ${d.byTax.map((x) => `${x.taxCode} ${num(x.rate)} %: ${moneyOf(x.vat)}`).join(", ")} (${moneyOf(vat)})`, col.item, 7.5, grey);
     y -= 14;
   }
   if (doc.totals.paid) {
     text(L.paid, col.item);
-    right(`- ${money(doc.totals.paid)}`, col.amount);
+    right(deduction(doc.totals.paid), col.amount);
     y -= 14;
   }
   line();
@@ -182,8 +189,11 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
   text(L.due, col.item, 11, ink, bold);
   right(money(doc.totals.due), col.amount, 11, ink, bold);
   y -= 18;
-  text(doc.totals.due > 0 && doc.dueDate ? fill(L.dueBy, { date: day(doc.dueDate) }) : L.settled, col.item, 9, grey);
-  y -= 16;
+  // a Cancellation Invoice asks for no payment
+  if (doc.kind !== "cancellation") {
+    text(doc.totals.due > 0 && doc.dueDate ? fill(L.dueBy, { date: day(doc.dueDate) }) : L.settled, col.item, 9, grey);
+    y -= 16;
+  }
   for (const n of doc.notes) {
     newPageIfNeeded(14);
     text(n, col.item, 8, grey);
