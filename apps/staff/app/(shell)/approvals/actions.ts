@@ -19,8 +19,8 @@ export async function decideApprovalAction(approvalId: string, approve: boolean,
       tenantId: tenant.id,
       userId: decided.requestedBy,
       kind: decided.status === "approved" ? "approval.approved" : "approval.rejected",
-      title: `${session.user.name} ${decided.status === "approved" ? "approved" : "rejected"}: ${decided.summary}${decided.status === "approved" ? ". Do it again now (within 24 hours)." : ""}`,
-      ...(decided.recordId && decided.kind !== "refund_over_limit" ? { href: `/reservations/${decided.recordId}` } : {}),
+      title: `${session.user.name} ${decided.status === "approved" ? "approved" : "rejected"}: ${decided.summary}${decided.status === "approved" ? ". Do it again now, within 24 hours of your request." : ""}`,
+      ...(decided.recordId ? { href: `/reservations/${decided.recordId}` } : {}),
     }).catch((err) => console.error("notification not sent", err));
     revalidatePath("/approvals");
     return { ok: true, message: decided.status === "approved" ? "Approved." : "Rejected." };

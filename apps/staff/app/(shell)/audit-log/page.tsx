@@ -8,9 +8,14 @@ import { isDate } from "@/lib/periods";
 import { fill, type MessageKey } from "@/i18n/messages";
 
 const AREAS: AuditArea[] = ["reservation", "money", "rates", "approval"];
+/** Actions to filter by, with their label: money first (what Accounting sees), then the rest. */
+const MONEY_ACTIONS = ["charge_post", "charge_void", "charge_move", "payment", "refund", "invoice_issued", "cancellation_issued", "transfer_matched"] as const;
+const OTHER_ACTIONS = ["edit", "cancel", "check_in", "cancel_check_in", "check_out", "assign_room", "move_room", "unassign_room", "fee_confirmed", "fee_waived", "price_override", "rate_change", "approval_requested", "approval_approved", "approval_rejected", "approval_granted"] as const;
+const labelKey = (action: string): MessageKey =>
+  ((MONEY_ACTIONS as readonly string[]).includes(action) || action === "rate_change" || action.startsWith("approval_") ? `audit.action.${action}` : `res.action.${action}`) as MessageKey;
 
 /** The property-wide audit log (ticket 31): Property Manager everything, Accounting the money entries; filters by user, record and area. */
-export default async function AuditLogPage({ searchParams }: { searchParams: Promise<{ from?: string; to?: string; user?: string; record?: string; area?: string }> }) {
+export default async function AuditLogPage({ searchParams }: { searchParams: Promise<{ from?: string; to?: string; user?: string; record?: string; area?: string; action?: string }> }) {
   const shell = await loadShell();
   const { messages: m, language } = shell;
   const property = shell.properties.find((p) => p.id === shell.scope);
@@ -29,14 +34,16 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
   const from = isDate(q.from) ? q.from : today;
   const to = isDate(q.to) && q.to >= from ? q.to : from > today ? from : today;
   const area = AREAS.includes(q.area as AuditArea) ? (q.area as AuditArea) : null;
+  const actions: readonly string[] = moneyOnly ? MONEY_ACTIONS : [...MONEY_ACTIONS, ...OTHER_ACTIONS];
+  const action = q.action && actions.includes(q.action) ? q.action : null;
   const [entries, users] = await Promise.all([
-    auditLog(pool(), tenant.schemaName, property.id, { from, to, userId: q.user || null, record: q.record || null, area }, { moneyOnly }),
+    auditLog(pool(), tenant.schemaName, property.id, { from, to, userId: q.user || null, record: q.record || null, area, action }, { moneyOnly }),
     listTenantUsers(pool(), tenant.id),
   ]);
   const name = (id: string | null) => (id ? (users.find((u) => u.id === id)?.name ?? id) : "");
   const when = new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "short", timeStyle: "medium", timeZone: property.timeZone });
   const money = (v: number) => formatCurrency(v, property.currency, language, property.country);
-  const label = (action: string) => m[(action.startsWith("charge_") || ["payment", "refund", "invoice_issued", "cancellation_issued", "transfer_matched", "rate_change"].includes(action) || action.startsWith("approval_") ? `audit.action.${action}` : `res.action.${action}`) as MessageKey] ?? action;
+  const label = (a: string) => m[labelKey(a)] ?? a;
   const field = "h-9 rounded-xl border border-ink-10 bg-surface px-3 text-sm";
   return (
     <div className="mx-auto grid max-w-6xl gap-4 p-6">
@@ -85,6 +92,17 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
             </select>
           </label>
         )}
+        <label className="grid gap-1 text-xs text-ink-60">
+          {m["audit.what"]}
+          <select name="action" defaultValue={action ?? ""} className={field}>
+            <option value="">{m["audit.area.all"]}</option>
+            {actions.map((a) => (
+              <option key={a} value={a}>
+                {label(a)}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="submit" className="h-9 rounded-full bg-accent px-4 text-sm font-medium text-white">
           {m["ctaxr.show"]}
         </button>

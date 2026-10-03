@@ -117,6 +117,12 @@ function normaliseEmail(email: unknown): string {
     .toLowerCase();
 }
 
+/** The email behind what a user typed: their Username at the tenant, or an email. */
+async function emailFor(pool: Pool, tenantId: string, typed: string): Promise<string | null> {
+  const value = typed.trim();
+  return value.includes("@") ? normaliseEmail(value) : emailForUsername(pool, tenantId, value);
+}
+
 export type SignInResult = { ok: true; response: Response } | { ok: false; error: "invalid_credentials" };
 
 /**
@@ -130,8 +136,7 @@ export async function signInToTenant(
   input: { tenantId: string; login: string; password: string; headers: Headers },
 ): Promise<SignInResult> {
   const { password } = await auth.$context;
-  const login = input.login.trim();
-  const email = login.includes("@") ? normaliseEmail(login) : await emailForUsername(pool, input.tenantId, login);
+  const email = await emailFor(pool, input.tenantId, input.login);
   if (!email) {
     await password.hash("burn the same time a real check takes").catch(() => undefined);
     return { ok: false, error: "invalid_credentials" };
@@ -157,10 +162,9 @@ export async function signInToTenant(
  * Property Manager approving on another user's screen. Returns the user's id,
  * or null for wrong credentials or a user of another tenant (in the same time).
  */
-export async function verifyTenantCredentials(auth: Auth, pool: Pool, input: { tenantId: string; login: string; password: string }): Promise<string | null> {
+export async function verifyTenantCredentials(auth: Auth, pool: Pool, input: { tenantId: string; username: string; password: string }): Promise<string | null> {
   const ctx = await auth.$context;
-  const login = input.login.trim();
-  const email = login.includes("@") ? normaliseEmail(login) : await emailForUsername(pool, input.tenantId, login);
+  const email = await emailFor(pool, input.tenantId, input.username);
   const row = email
     ? (
         await pool.query<{ id: string; password: string | null }>(

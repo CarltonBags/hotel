@@ -210,7 +210,7 @@ export function PaymentsPanel({
                         summary={approval}
                         pending={pending}
                         onRequest={() => refund(p.id, { mode: "request" })}
-                        onCredentials={(login, password) => refund(p.id, { mode: "credentials", login, password })}
+                        onCredentials={(username, password) => refund(p.id, { mode: "credentials", username, password })}
                         m={m}
                       />
                     ) : null}

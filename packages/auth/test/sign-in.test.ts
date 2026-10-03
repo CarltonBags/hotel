@@ -172,12 +172,12 @@ describe("tenant-scoped sign-in", () => {
 
   it("verifies a user's credentials at their tenant without creating a session (a manager approving on another user's screen)", async () => {
     const before = await pool.query<{ n: number }>("select count(*)::int as n from control.session");
-    const bob = await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, login: "bob", password: "correct horse battery" });
+    const bob = await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, username: "bob", password: "correct horse battery" });
     expect(bob).toMatch(/.+/);
-    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, login: "bob", password: "wrong password here" })).toBeNull();
+    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, username: "bob", password: "wrong password here" })).toBeNull();
     // another tenant's user is unknown here
-    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, login: "carol", password: "another good password" })).toBeNull();
-    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, login: "carol@example.com", password: "another good password" })).toBeNull();
+    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, username: "carol", password: "another good password" })).toBeNull();
+    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, username: "carol@example.com", password: "another good password" })).toBeNull();
     const after = await pool.query<{ n: number }>("select count(*)::int as n from control.session");
     expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
   });

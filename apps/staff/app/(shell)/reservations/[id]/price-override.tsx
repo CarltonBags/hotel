@@ -76,7 +76,7 @@ export function PriceOverride({
           </button>
         </div>
         {approval ? (
-          <ApprovalPrompt summary={approval} pending={pending} onRequest={() => save({ mode: "request" })} onCredentials={(login, password) => save({ mode: "credentials", login, password })} m={m} />
+          <ApprovalPrompt summary={approval} pending={pending} onRequest={() => save({ mode: "request" })} onCredentials={(username, password) => save({ mode: "credentials", username, password })} m={m} />
         ) : null}
       </div>
     </details>

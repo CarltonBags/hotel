@@ -19,7 +19,7 @@ export interface ApprovalSubject {
   propertyId: string;
   key: string;
   summary: string;
-  /** The record it concerns (payment, reservation), for the audit log. */
+  /** The reservation it concerns: the requester's notification links to it. */
   recordId: string | null;
 }
 
@@ -128,9 +128,10 @@ export async function requestApproval(pool: Pool, schema: string, subject: Appro
 export async function decideApproval(pool: Pool, schema: string, approvalId: string, decision: { approve: boolean; note: string }, approverId: string): Promise<Approval> {
   if (!isUuid(approvalId)) throw new Error("Approval request not found");
   return withTenant(pool, schema, async (tx) => {
-    const r = (await tx.query<Row>(`select ${COLUMNS} from approvals where id = $1 for update`, [approvalId])).rows[0];
+    const r = (await tx.query<Row & { now: Date }>(`select ${COLUMNS}, clock_timestamp() as now from approvals where id = $1 for update`, [approvalId])).rows[0];
     if (!r) throw new Error("Approval request not found");
-    const status = approvalStatus(r.status, r.expires_at, new Date());
+    // the database's clock, as useApproval reads it
+    const status = approvalStatus(r.status, r.expires_at, r.now);
     if (status === "expired") throw new Error("The request has expired; the user asks again");
     if (status !== "pending") throw new Error("The request is already decided");
     if (r.requested_by === approverId) throw new Error("An Approval comes from another user");

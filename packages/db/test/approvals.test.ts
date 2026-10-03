@@ -158,6 +158,10 @@ describe("approvals, Price Override and the audit log", () => {
     await overrideNightPrices(pool, s(), res, { nights: [{ date: day(1), price: 104 }], reason: "upgrade refused" }, { userId: fd, canApprove: false });
     const charges = (await loadFolios(pool, s(), res)).folios.flatMap((f) => f.charges).filter((c) => !c.voidedAt && c.serviceDate === day(1));
     expect(charges.reduce((sum, c) => sum + c.amount, 0)).toBe(104);
+    // a night already slept keeps its Charges, so its price is not changed either
+    await pool.query(`update ${s()}.reservations set arrival = arrival - 1 where id = $1`, [res]);
+    await pool.query(`insert into ${s()}.reservation_nights (reservation_id, date, total) values ($1, $2, 120)`, [res, day(-1)]);
+    await expect(overrideNightPrices(pool, s(), res, { nights: [{ date: day(-1), price: 100 }], reason: "late" }, { userId: fd, canApprove: false })).rejects.toThrow(/slept/);
   });
 
   it("the audit log lists reservation edits, voids, overrides and approvals; Accounting sees money entries only", async () => {
@@ -179,6 +183,13 @@ describe("approvals, Price Override and the audit log", () => {
     expect((await auditLog(pool, s(), berlin, { from: today, to: today, userId: pm }, { moneyOnly: false })).every((e) => e.userId === pm)).toBe(true);
     const conf = override.recordLabel;
     expect((await auditLog(pool, s(), berlin, { from: today, to: today, record: conf }, { moneyOnly: false })).every((e) => e.recordLabel.includes(conf))).toBe(true);
+    const voids = await auditLog(pool, s(), berlin, { from: today, to: today, action: "charge_void" }, { moneyOnly: false });
+    expect(voids.length).toBeGreaterThan(0);
+    expect(voids.every((e) => e.action === "charge_void")).toBe(true);
+    // the record text is searched as typed: "%" is no wildcard
+    expect(await auditLog(pool, s(), berlin, { from: today, to: today, record: "%" }, { moneyOnly: false })).toEqual([]);
+    // another day shows nothing of today
+    expect(await auditLog(pool, s(), berlin, { from: day(1), to: day(1) }, { moneyOnly: false })).toEqual([]);
     const money = await auditLog(pool, s(), berlin, { from: today, to: today }, { moneyOnly: true });
     expect(money.length).toBeGreaterThan(0);
     expect(money.every((e) => e.area === "money")).toBe(true);

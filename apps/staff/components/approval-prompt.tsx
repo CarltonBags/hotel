@@ -21,11 +21,11 @@ export function ApprovalPrompt({
   summary: string;
   pending: boolean;
   onRequest: () => void;
-  onCredentials: (login: string, password: string) => void;
+  onCredentials: (username: string, password: string) => void;
   m: Messages;
 }) {
   const [here, setHere] = useState(false);
-  const [login, setLogin] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   return (
     <div role="group" aria-label={m["appr.needed"]} className="grid w-full gap-2 rounded-xl border border-warning/50 bg-warning/10 p-3 text-sm">
@@ -45,19 +45,19 @@ export function ApprovalPrompt({
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            onCredentials(login, password);
+            onCredentials(username, password);
             setPassword("");
           }}
         >
           <label className="grid gap-1 text-xs text-ink-60">
-            {m["appr.managerLogin"]}
-            <input name="approver" autoComplete="off" value={login} onChange={(e) => setLogin(e.target.value)} className={input} />
+            {m["appr.managerUsername"]}
+            <input name="approver" autoComplete="off" value={username} onChange={(e) => setUsername(e.target.value)} className={input} />
           </label>
           <label className="grid gap-1 text-xs text-ink-60">
             {m["appr.managerPassword"]}
             <input name="approverPassword" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} className={input} />
           </label>
-          <button type="submit" disabled={pending || !login || !password} className={`${button} bg-accent text-white disabled:opacity-60`}>
+          <button type="submit" disabled={pending || !username || !password} className={`${button} bg-accent text-white disabled:opacity-60`}>
             {m["appr.approveHere"]}
           </button>
         </form>

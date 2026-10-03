@@ -108,11 +108,10 @@ export async function simulateCardAction(reservationId: string, target: { paymen
 
 /** A refund; above the Front Desk limit it needs an Approval (asked for remotely, or a manager's credentials here). */
 export async function refundAction(reservationId: string, paymentId: string, amount: number, reason: string, approval?: ApprovalMode): Promise<ApprovalState> {
-  let state: ApprovalState = {};
-  const outer = await formAction(async () => {
-    const { schema, tenantId, reservation, userId, userName, actor } = await reservationScope(reservationId, "refund_payments");
+  return formAction(async () => {
+    const { schema, tenantId, reservation, userId, actor, approvalContext } = await reservationScope(reservationId, "refund_payments");
     await ownPayment(schema, reservation.id, paymentId);
-    state = await withApproval({ tenantId, schema, propertyId: reservation.propertyId, userId, userName }, approval, async (approverId) => {
+    return withApproval(approvalContext, approval, async (approverId) => {
       const r = await refundPayment(
         pool(),
         schema,
@@ -122,9 +121,7 @@ export async function refundAction(reservationId: string, paymentId: string, amo
       );
       return done(tenantId, reservation, r.status === "refund_pending_balance" ? "Refund waiting: the hotel's balance at the provider cannot cover it yet." : "Refunded.");
     });
-    return state;
   });
-  return outer.error ? outer : state;
 }
 
 export async function placeHoldAction(reservationId: string, amount: number, readerId: string): Promise<FormState & { holdId?: string }> {

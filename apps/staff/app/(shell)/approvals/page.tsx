@@ -5,11 +5,15 @@ import { loadShell } from "@/lib/shell";
 import { fill } from "@/i18n/messages";
 import { DecideButtons } from "./decide-buttons";
 
-/** Approval requests of the property selected in the navbar (ticket 31): open ones first, then the last 30 days. */
-export default async function ApprovalsPage() {
+/**
+ * Approval requests of a property (ticket 31): the one a notification links
+ * to, else the one selected in the navbar; open ones first, then the last 30 days.
+ */
+export default async function ApprovalsPage({ searchParams }: { searchParams: Promise<{ property?: string }> }) {
   const shell = await loadShell();
   const { messages: m, language } = shell;
-  const property = shell.properties.find((p) => p.id === shell.scope);
+  const linked = (await searchParams).property;
+  const property = shell.properties.find((p) => p.id === linked) ?? shell.properties.find((p) => p.id === shell.scope);
   if (!property) {
     return (
       <div className="mx-auto max-w-3xl p-6">

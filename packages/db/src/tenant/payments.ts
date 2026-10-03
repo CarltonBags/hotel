@@ -470,7 +470,7 @@ export async function refundPayment(
           // the Approval is for this refund of this payment, at this amount
           key: `${orig.id}:${amount.toFixed(2)}`,
           summary: `Refund of ${amount.toFixed(2)} ${orig.currency.trim()} (above the limit of ${limit.toFixed(2)})`,
-          recordId: orig.id,
+          recordId: orig.reservation_id,
         },
         actor,
       );

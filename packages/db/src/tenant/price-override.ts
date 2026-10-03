@@ -27,22 +27,26 @@ export async function overrideNightPrices(
   if (input.nights.length === 0) throw new Error("Change at least one night");
   const nights = input.nights.map((n) => {
     checkDate(n.date);
-    if (!Number.isFinite(n.price) || n.price < 0 || roundMoney(n.price) !== n.price) throw new Error("Prices are amounts in cents, not negative");
+    if (!Number.isFinite(n.price) || n.price < 0 || roundMoney(n.price) !== n.price) throw new Error("A price is an amount with at most two decimals, not negative");
     return n;
   });
   if (new Set(nights.map((n) => n.date)).size !== nights.length) throw new Error("Each night once");
   await withTenant(pool, schema, async (tx) => {
-    const pre = (await tx.query<{ property_id: string }>("select property_id from reservations where id = $1", [reservationId])).rows[0];
-    if (!pre) throw new Error("Reservation not found");
-    await lockProperty(tx, pre.property_id);
-    const r = (await tx.query<{ id: string; property_id: string; status: string; arrival: string; departure: string; confirmation_number: string; price_floor: string | null; currency: string }>(
-      `select r.id, r.property_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, b.confirmation_number, t.price_floor, p.currency
+    const owner = (await tx.query<{ property_id: string }>("select property_id from reservations where id = $1", [reservationId])).rows[0];
+    if (!owner) throw new Error("Reservation not found");
+    await lockProperty(tx, owner.property_id);
+    const r = (await tx.query<{ id: string; property_id: string; status: string; arrival: string; departure: string; confirmation_number: string; price_floor: string | null; currency: string; today: string }>(
+      `select r.id, r.property_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, b.confirmation_number, t.price_floor, p.currency,
+         to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today
        from reservations r join bookings b on b.id = r.booking_id join room_types t on t.id = r.room_type_id join properties p on p.id = r.property_id
        where r.id = $1 for update of r`,
       [reservationId],
     )).rows[0]!;
     if (r.status !== "confirmed" && r.status !== "checked_in") throw new Error(`The reservation is ${r.status.replace("_", " ")}; its prices cannot change`);
     if (nights.some((n) => n.date < r.arrival || n.date >= r.departure)) throw new Error("A night is not part of the stay");
+    // TODO(Night Audit ticket): the Business Date
+    // a checked-in guest's slept nights keep their Charges (corrected by voiding or posting), so their price stays as posted
+    if (r.status === "checked_in" && nights.some((n) => n.date < r.today)) throw new Error("A night already slept keeps its price; correct its Charges on the folio instead");
     const invoiced = (await tx.query<{ date: string }>(
       "select distinct to_char(service_date, 'YYYY-MM-DD') as date from charges where reservation_id = $1 and origin = 'stay' and invoice_id is not null and voided_at is null and service_date = any($2::date[])",
       [r.id, nights.map((n) => n.date)],
@@ -77,8 +81,9 @@ export async function overrideNightPrices(
     }
 
     for (const n of nights) {
-      const mine = components.filter((c) => c.date === n.date);
-      const services = roundMoney(mine.filter((c) => c.kind === "service").reduce((s, c) => s + Number(c.amount), 0));
+      const nightComponents = components.filter((c) => c.date === n.date);
+      const services = roundMoney(nightComponents.filter((c) => c.kind === "service").reduce((s, c) => s + Number(c.amount), 0));
+      if (n.price > 0 && !nightComponents.some((c) => c.kind === "room")) throw new Error(`The night of ${n.date} has no room price to change`);
       if (n.price > 0 && n.price < services) throw new Error(`The night of ${n.date} includes Services worth ${services.toFixed(2)}; its price cannot be lower (or make it complimentary)`);
       if (n.price === 0) {
         await tx.query("update reservation_night_components set amount = 0, unit_price = 0 where reservation_id = $1 and date = $2", [r.id, n.date]);
