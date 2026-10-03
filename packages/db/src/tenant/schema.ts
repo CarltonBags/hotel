@@ -923,6 +923,7 @@ export const invoices = pgTable(
     index("invoices_folio_idx").on(t.folioId),
     unique("invoices_cancels_key").on(t.cancels),
     check("invoices_kind_check", sql`${t.kind} in ('final', 'deposit', 'cancellation')`),
+    check("invoices_cancels_check", sql`(${t.kind} = 'cancellation') = (${t.cancels} is not null)`),
   ],
 );
 

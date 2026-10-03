@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { issueReminder, listReceivables, matchTransfer } from "@hoteloftware/db";
+import { issueReminder, listReceivables, matchTransfer, type TransferMatch } from "@hoteloftware/db";
 import { authorize, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
@@ -15,7 +15,7 @@ async function scope(propertyId: string) {
   return { schema: tenant.schemaName, userId: session.user.id, open };
 }
 
-export async function matchTransferAction(propertyId: string, input: { receivedOn: string; reference: string; allocations: { invoiceId: string; amount: number }[] }): Promise<FormState> {
+export async function matchTransferAction(propertyId: string, input: TransferMatch): Promise<FormState> {
   return formAction(async () => {
     const { schema, userId, open } = await scope(propertyId);
     const ids = new Set(open.rows.map((r) => r.invoiceId));

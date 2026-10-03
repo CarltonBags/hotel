@@ -199,6 +199,20 @@ describe("invoices and check-out", () => {
     await expect(pool.query(`update ${s()}.invoices set gross = 1 where id = $1`, [inv.id])).rejects.toThrow(/Cancellation Invoice/);
     await expect(pool.query(`update ${s()}.invoices set document = '{}' where id = $1`, [inv.id])).rejects.toThrow(/cannot be changed/);
     await expect(pool.query(`delete from ${s()}.invoices where id = $1`, [inv.id])).rejects.toThrow(/cannot be deleted/);
+    await expect(pool.query(`update ${s()}.invoices set due_date = due_date + 30 where id = $1`, [inv.id])).rejects.toThrow(/cannot be changed/);
+  });
+
+  it("a Deposit Invoice cancelled before check-in is issued anew for its payment", async () => {
+    const res = await book(day(3), day(4));
+    await takePayment(pool, s(), provider, { reservationId: res, tender: "bank_transfer", amount: 40, reference: "deposit" }, fd);
+    const [dep] = await listInvoices(pool, s(), res);
+    await cancelInvoice(pool, s(), dep!.id, "wrong name", fd);
+    const after = await listInvoices(pool, s(), res);
+    expect(after.map((i) => [i.kind, i.gross, Boolean(i.cancelledBy)])).toEqual([
+      ["deposit", 40, true],
+      ["cancellation", -40, false],
+      ["deposit", 40, false],
+    ]);
   });
 
   it("a Cancellation Invoice carries the original number and reverses its totals; the folio is invoiced again", async () => {
@@ -267,5 +281,7 @@ describe("invoices and check-out", () => {
     const { document } = await reminderDocument(pool, s(), third.id);
     expect(document).toMatchObject({ level: 3, invoices: [{ number: inv.number, open: inv.due }] });
     expect(document.seller.taxNumber).toBe("27/123/45678");
+    // a reminder letter is frozen
+    await expect(pool.query(`update ${s()}.reminders set level = 1 where id = $1`, [third.id])).rejects.toThrow(/cannot be changed/);
   });
 });

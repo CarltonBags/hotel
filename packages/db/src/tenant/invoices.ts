@@ -136,7 +136,7 @@ async function contextOf(tx: PoolClient, reservationId: string): Promise<Context
   };
 }
 
-async function sellerOf(tx: PoolClient, legalEntityId: string): Promise<InvoiceDocument["seller"]> {
+export async function sellerOf(tx: PoolClient, legalEntityId: string): Promise<InvoiceDocument["seller"]> {
   const l = (await tx.query<{ name: string; address_line1: string; address_line2: string; postal_code: string; city: string; country: string; vat_id: string | null; tax_number: string; invoice_email: string; invoice_phone: string; iban: string | null; bic: string | null; account_holder: string | null }>(
     "select name, address_line1, address_line2, postal_code, city, country, vat_id, tax_number, invoice_email, invoice_phone, iban, bic, account_holder from legal_entities where id = $1",
     [legalEntityId],
@@ -454,7 +454,10 @@ export async function invoiceDocument(pool: Pool, schema: string, invoiceId: str
  * totals reversed in the books. The original's Charges, payments and netted
  * deposits are free again, so the folio can be corrected (moved to another
  * Bill-to for a recipient change) and invoiced anew. Refused once money is
- * matched to it, and for a deposit already netted on a final invoice.
+ * matched to it, and for a deposit already netted on a final invoice. A
+ * Deposit Invoice cancelled before check-in is issued anew at once for its
+ * payment (to the folio's Bill-to as it is now); after check-in the payment
+ * counts as paid on the final invoice.
  */
 export async function cancelInvoice(pool: Pool, schema: string, invoiceId: string, reason: string, userId: string): Promise<IssuedInvoice> {
   if (!isUuid(invoiceId)) throw new Error("Invoice not found");
@@ -464,10 +467,12 @@ export async function cancelInvoice(pool: Pool, schema: string, invoiceId: strin
     const pre = (await tx.query<{ property_id: string }>("select property_id from invoices where id = $1", [invoiceId])).rows[0];
     if (!pre) throw new Error("Invoice not found");
     await lockProperty(tx, pre.property_id);
-    const inv = (await tx.query<{ id: string; kind: IssuedInvoice["kind"]; reservation_id: string; folio_id: string; document: InvoiceDocument; cancelled_by: string | null; netted_by: string | null; matched: boolean }>(
-      `select i.id, i.kind, i.reservation_id, i.folio_id, i.document, i.cancelled_by, i.netted_by,
+    await tx.query("select 1 from invoices where id = $1 for update", [invoiceId]);
+    // read after the lock, in its own statement: a transfer matched meanwhile is seen
+    const inv = (await tx.query<{ id: string; kind: IssuedInvoice["kind"]; reservation_id: string; folio_id: string; document: InvoiceDocument; cancelled_by: string | null; netted_by: string | null; payment_id: string | null; matched: boolean }>(
+      `select i.id, i.kind, i.reservation_id, i.folio_id, i.document, i.cancelled_by, i.netted_by, i.payment_id,
          exists (select 1 from receivable_matches m where m.invoice_id = i.id) as matched
-       from invoices i where i.id = $1 for update`,
+       from invoices i where i.id = $1`,
       [invoiceId],
     )).rows[0]!;
     if (inv.kind === "cancellation") throw new Error("A Cancellation Invoice cannot be cancelled; issue a new invoice instead");
@@ -483,7 +488,8 @@ export async function cancelInvoice(pool: Pool, schema: string, invoiceId: strin
       issueDate: ctx.today,
       dueDate: null,
       cancels: { number: original.number, issueDate: original.issueDate },
-      notes: [why],
+      // the reason first: the cancellation list shows it
+      notes: [why, ...original.notes],
     };
     const cancellation = await storeInvoice(tx, ctx, inv.folio_id, doc, { receivable: false, paymentId: null, cancels: inv.id }, userId);
     await tx.query("update invoices set cancelled_by = $2, receivable = false where id = $1", [inv.id, cancellation.id]);
@@ -491,6 +497,7 @@ export async function cancelInvoice(pool: Pool, schema: string, invoiceId: strin
     await tx.query("update charges set invoice_id = null where invoice_id = $1", [inv.id]);
     await tx.query("update payments set invoice_id = null where invoice_id = $1", [inv.id]);
     await tx.query("update invoices set netted_by = null where netted_by = $1", [inv.id]);
+    if (inv.kind === "deposit" && inv.payment_id) await depositIn(tx, inv.payment_id, userId);
     return cancellation;
   });
 }

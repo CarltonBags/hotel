@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { AGEING_BUCKETS, formatCurrency } from "@hoteloftware/domain";
-import { listCancellationInvoices, listReceivables } from "@hoteloftware/db";
+import { listCancellationInvoices, listReceivables, listTenantUsers } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
@@ -21,7 +21,12 @@ export default async function ReceivablesPage() {
     );
   }
   const { tenant } = await requireAllowed("manage_receivables", property.id);
-  const [open, cancellations] = await Promise.all([listReceivables(pool(), tenant.schemaName, property.id), listCancellationInvoices(pool(), tenant.schemaName, property.id)]);
+  const [open, cancellations, users] = await Promise.all([
+    listReceivables(pool(), tenant.schemaName, property.id),
+    listCancellationInvoices(pool(), tenant.schemaName, property.id),
+    listTenantUsers(pool(), tenant.id),
+  ]);
+  const userName = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const currency = { code: property.currency, language, country: property.country };
   const money = (v: number) => formatCurrency(v, currency.code, language, currency.country);
   const day = (d: string) => new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${d}T12:00:00Z`));
@@ -56,7 +61,7 @@ export default async function ReceivablesPage() {
                 <a href={`/invoices/${c.id}/pdf`} target="_blank" rel="noreferrer" className="font-medium underline">
                   {c.number}
                 </a>{" "}
-                · {fill(m["rcv.cxlCancels"], { number: c.cancelsNumber })} · {c.billToName} · {day(c.issueDate)} · <span className="text-ink-60">{c.reason}</span>
+                · {fill(m["rcv.cxlCancels"], { number: c.cancelsNumber })} · {c.billToName} · {day(c.issueDate)} · {userName(c.issuedBy)} · <span className="text-ink-60">{c.reason}</span>
               </span>
               <Link href={`/reservations/${c.reservationId}`} className="text-ink-60 underline">
                 {m["res.confirmationShort"]}

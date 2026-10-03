@@ -34,7 +34,8 @@ export function ReceivablesTable({
   const parse = (v: string | undefined) => Number((v ?? "").replace(",", ".")) || 0;
   const allocations = rows.map((r) => ({ invoiceId: r.invoiceId, amount: roundMoney(parse(amounts[r.invoiceId])) })).filter((a) => a.amount > 0);
   const total = roundMoney(allocations.reduce((s, a) => s + a.amount, 0));
-  const groups = [...new Set(rows.map((r) => r.billToName))].sort((a, b) => a.localeCompare(b));
+  // one group per Bill-to, even when two share a name
+  const groups = [...new Map(rows.map((r) => [r.billToId, r.billToName])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   return (
     <form
       className="grid gap-4"
@@ -63,13 +64,13 @@ export function ReceivablesTable({
             <th className="py-2 font-normal">{m["rcv.col.match"]}</th>
           </tr>
         </thead>
-        {groups.map((g) => {
-          const mine = rows.filter((r) => r.billToName === g);
+        {groups.map(([id, name]) => {
+          const mine = rows.filter((r) => r.billToId === id);
           return (
-            <tbody key={g} data-bill-to={g}>
+            <tbody key={id} data-bill-to={name}>
               <tr>
                 <th colSpan={4} className="pt-4 pb-1 text-left font-medium">
-                  {g}
+                  {name}
                 </th>
                 <td className="pt-4 pb-1 pr-3 text-right font-medium tabular-nums">{money(roundMoney(mine.reduce((s, r) => s + r.open, 0)))}</td>
                 <td colSpan={2} />

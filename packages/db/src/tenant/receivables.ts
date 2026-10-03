@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { addDays, ageing, bucketOf, daysOverdue, nextReminderLevel, roundMoney, type AgeingBucket, type ReminderLevel } from "@hoteloftware/domain";
 import type { InvoiceDocument, ReminderDocument } from "@hoteloftware/invoices/document";
 import { isUuid } from "./catalogue-common";
+import { sellerOf } from "./invoices";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -17,10 +18,26 @@ const PAY_WITHIN_DAYS = 10;
 const OPEN = `i.kind = 'final' and i.receivable and i.cancelled_by is null`;
 const MATCHED = `(select coalesce(sum(m.amount), 0) from receivable_matches m where m.invoice_id = i.id)`;
 
+/**
+ * Lock an invoice, then read what is open on it: in a statement of its own,
+ * so matches committed while waiting for the lock are counted.
+ */
+async function lockOpen(tx: PoolClient, invoiceId: string): Promise<{ propertyId: string; legalEntityId: string; number: string; document: InvoiceDocument; dueDate: string; open: number; isOpen: boolean } | null> {
+  const locked = (await tx.query("select 1 from invoices where id = $1 for update", [invoiceId])).rows.length;
+  if (!locked) return null;
+  const r = (await tx.query<{ property_id: string; legal_entity_id: string; number: string; document: InvoiceDocument; due_date: string; open: string; is_open: boolean }>(
+    `select i.property_id, i.legal_entity_id, i.number, i.document, to_char(i.due_date, 'YYYY-MM-DD') as due_date, i.due - ${MATCHED} as open, (${OPEN}) as is_open from invoices i where i.id = $1`,
+    [invoiceId],
+  )).rows[0]!;
+  return { propertyId: r.property_id, legalEntityId: r.legal_entity_id, number: r.number, document: r.document, dueDate: r.due_date, open: Number(r.open), isOpen: r.is_open };
+}
+
 export interface ReceivableRow {
   invoiceId: string;
   reservationId: string;
   number: string;
+  /** The Company (or guest) billed: rows group by it, not by the name. */
+  billToId: string;
   billToName: string;
   issueDate: string;
   dueDate: string;
@@ -53,10 +70,10 @@ export async function listReceivables(pool: Pool, schema: string, propertyId: st
   if (!isUuid(propertyId)) throw new Error("Property not found");
   return withTenant(pool, schema, async (tx) => {
     const { today, currency } = await propertyToday(tx, propertyId);
-    const rows = (await tx.query<{ id: string; reservation_id: string; number: string; buyer: string; issue_date: string; due_date: string; due: string; open: string }>(
-      `select i.id, i.reservation_id, i.number, i.document -> 'buyer' ->> 'name' as buyer, to_char(i.issue_date, 'YYYY-MM-DD') as issue_date,
+    const rows = (await tx.query<{ id: string; reservation_id: string; number: string; bill_to_id: string; buyer: string; issue_date: string; due_date: string; due: string; open: string }>(
+      `select i.id, i.reservation_id, i.number, coalesce(f.bill_to_company_id, f.bill_to_guest_id) as bill_to_id, i.document -> 'buyer' ->> 'name' as buyer, to_char(i.issue_date, 'YYYY-MM-DD') as issue_date,
          to_char(i.due_date, 'YYYY-MM-DD') as due_date, i.due, i.due - ${MATCHED} as open
-       from invoices i where i.property_id = $1 and ${OPEN} and i.due - ${MATCHED} > 0 order by i.due_date, i.number`,
+       from invoices i join folios f on f.id = i.folio_id where i.property_id = $1 and ${OPEN} and i.due - ${MATCHED} > 0 order by i.due_date, i.number`,
       [propertyId],
     )).rows;
     const reminders = (await tx.query<{ id: string; invoice_id: string; level: ReminderLevel; issued_at: Date }>(
@@ -69,6 +86,7 @@ export async function listReceivables(pool: Pool, schema: string, propertyId: st
         invoiceId: r.id,
         reservationId: r.reservation_id,
         number: r.number,
+        billToId: r.bill_to_id,
         billToName: r.buyer,
         issueDate: r.issue_date,
         dueDate: r.due_date,
@@ -101,12 +119,9 @@ export async function matchTransfer(pool: Pool, schema: string, input: TransferM
   await withTenant(pool, schema, async (tx) => {
     // locked in one order, so two matches over the same invoices never deadlock
     for (const a of [...allocations].sort((x, y) => x.invoiceId.localeCompare(y.invoiceId))) {
-      const inv = (await tx.query<{ number: string; open: string; is_open: boolean }>(
-        `select i.number, i.due - ${MATCHED} as open, (${OPEN}) as is_open from invoices i where i.id = $1 for update`,
-        [a.invoiceId],
-      )).rows[0];
-      if (!inv || !inv.is_open) throw new Error("Only an open Receivable can be matched");
-      if (a.amount > Number(inv.open)) throw new Error(`${inv.number}: that is more than is open (${Number(inv.open).toFixed(2)})`);
+      const invoice = await lockOpen(tx, a.invoiceId);
+      if (!invoice || !invoice.isOpen) throw new Error("Only an open Receivable can be matched");
+      if (a.amount > invoice.open) throw new Error(`${invoice.number}: that is more than is open (${invoice.open.toFixed(2)})`);
       await tx.query("insert into receivable_matches (invoice_id, amount, received_on, reference, created_by) values ($1, $2, $3, $4, $5)", [a.invoiceId, a.amount, input.receivedOn, reference, userId]);
     }
   });
@@ -116,29 +131,26 @@ export async function matchTransfer(pool: Pool, schema: string, input: TransferM
 export async function issueReminder(pool: Pool, schema: string, invoiceId: string, userId: string): Promise<{ id: string; level: ReminderLevel }> {
   if (!isUuid(invoiceId)) throw new Error("Invoice not found");
   return withTenant(pool, schema, async (tx) => {
-    const inv = (await tx.query<{ property_id: string; document: InvoiceDocument; due_date: string; open: string; is_open: boolean }>(
-      `select i.property_id, i.document, to_char(i.due_date, 'YYYY-MM-DD') as due_date, i.due - ${MATCHED} as open, (${OPEN}) as is_open
-       from invoices i where i.id = $1 for update`,
-      [invoiceId],
-    )).rows[0];
-    if (!inv) throw new Error("Invoice not found");
-    const open = Number(inv.open);
-    if (!inv.is_open || open <= 0) throw new Error("Only an open Receivable gets a reminder");
-    const { today } = await propertyToday(tx, inv.property_id);
-    if (daysOverdue(inv.due_date, today) === 0) throw new Error("This invoice is not overdue yet");
+    const invoice = await lockOpen(tx, invoiceId);
+    if (!invoice) throw new Error("Invoice not found");
+    const { open } = invoice;
+    if (!invoice.isOpen || open <= 0) throw new Error("Only an open Receivable gets a reminder");
+    const { today } = await propertyToday(tx, invoice.propertyId);
+    if (daysOverdue(invoice.dueDate, today) === 0) throw new Error("This invoice is not overdue yet");
     const sent = (await tx.query<{ level: number }>("select level from reminders where invoice_id = $1", [invoiceId])).rows.map((r) => r.level);
     const level = nextReminderLevel(sent);
     if (!level) throw new Error("The last reminder has been sent; hand the claim on");
-    const d = inv.document;
+    const d = invoice.document;
     const document: ReminderDocument = {
       level,
       issueDate: today,
       payBy: addDays(today, PAY_WITHIN_DAYS),
       currency: d.currency,
       language: d.language,
-      seller: d.seller,
+      // the Legal Entity as it is now: bank details may have changed since the invoice
+      seller: await sellerOf(tx, invoice.legalEntityId),
       buyer: d.buyer,
-      invoices: [{ number: d.number, issueDate: d.issueDate, dueDate: inv.due_date, open }],
+      invoices: [{ number: d.number, issueDate: d.issueDate, dueDate: invoice.dueDate, open }],
     };
     const { rows } = await tx.query<{ id: string }>("insert into reminders (invoice_id, level, document, issued_by) values ($1, $2, $3, $4) returning id", [invoiceId, level, JSON.stringify(document), userId]);
     return { id: rows[0]!.id, level };
