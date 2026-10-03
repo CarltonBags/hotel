@@ -570,6 +570,8 @@ export async function listFreeRooms(pool: Pool, schema: string, id: string, from
 
 export interface ReservationChange {
   userId: string;
+  /** The Property Manager who approved it beyond the user's limit. */
+  approvedBy: string | null;
   at: Date;
   action: ReservationChangeAction;
   before: Record<string, unknown>;
@@ -579,11 +581,11 @@ export interface ReservationChange {
 export async function reservationHistory(pool: Pool, schema: string, id: string): Promise<ReservationChange[]> {
   if (!isUuid(id)) return [];
   return withTenant(pool, schema, async (tx) => {
-    const { rows } = await tx.query<{ user_id: string; at: Date; action: ReservationChangeAction; before: Record<string, unknown>; after: Record<string, unknown> }>(
-      "select user_id, at, action, before, after from reservation_changes where reservation_id = $1 order by at desc limit 200",
+    const { rows } = await tx.query<{ user_id: string; approved_by: string | null; at: Date; action: ReservationChangeAction; before: Record<string, unknown>; after: Record<string, unknown> }>(
+      "select user_id, approved_by, at, action, before, after from reservation_changes where reservation_id = $1 order by at desc limit 200",
       [id],
     );
-    return rows.map((r) => ({ userId: r.user_id, at: r.at, action: r.action, before: r.before, after: r.after }));
+    return rows.map((r) => ({ userId: r.user_id, approvedBy: r.approved_by, at: r.at, action: r.action, before: r.before, after: r.after }));
   });
 }
 

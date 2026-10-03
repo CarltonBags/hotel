@@ -63,6 +63,7 @@ export async function reservationView(id: string, options: { propertyId?: string
     overrideCheckOut: at("override_check_out"),
     /** City Tax exemptions are set while the stay is open. */
     exemptCityTax: at("check_in") && chargeable,
+    overridePrices: at("override_prices") && chargeable,
   };
   const [users, roomTypes, plans, folios, chargeLog, services, taxCodes, fixedCharges, guest] = await Promise.all([
     listTenantUsers(pool(), tenant.id),
@@ -127,6 +128,9 @@ export async function reservationView(id: string, options: { propertyId?: string
           canEdit: rights.exemptCityTax,
         }
       : null,
+    /** Price Override: the room type's floor and which nights are invoiced (those stay as they are). */
+    priceFloor: roomTypes.find((t) => t.id === r.roomType.id)?.priceFloor ?? null,
+    invoicedNights: [...new Set(folios.folios.flatMap((f) => f.charges.filter((c) => c.invoiceId && !c.voided && c.origin === "stay").map((c) => c.serviceDate)))],
     /** A checked-in guest may be checked out here. */
     canCheckOut: r.status === "checked_in" && rights.checkIn,
     /** Payments and Card Holds: the panels' shared props. */

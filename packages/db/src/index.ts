@@ -220,7 +220,6 @@ export {
   type FolioView,
 } from "./tenant/folios";
 export {
-  ApprovalRequired,
   cancelPendingPayment,
   coverBalanceWithHold,
   retryOpenRefunds,
@@ -293,3 +292,6 @@ export {
   type CityTaxReport,
   type CityTaxRuleView,
 } from "./tenant/city-tax";
+export { ApprovalRequired, decideApproval, findApproval, listApprovals, requestApproval, type Approval, type ApprovalSubject } from "./tenant/approvals";
+export { overrideNightPrices } from "./tenant/price-override";
+export { auditLog, type AuditArea, type AuditEntry, type AuditFilter } from "./tenant/audit-log";

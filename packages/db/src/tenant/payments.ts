@@ -16,7 +16,7 @@ import {
 } from "@hoteloftware/domain";
 import { ProviderError, type IntentState, type PaymentProvider } from "@hoteloftware/payments";
 import { isUuid } from "./catalogue-common";
-import { approvalFor } from "./approvals";
+import { useApproval } from "./approvals";
 import { assertDepositInvoiceable, depositIn } from "./invoices";
 import { openFolios } from "./folios";
 import { mapProviderAccount } from "../control/external-ids";
@@ -30,13 +30,6 @@ import { withTenant } from "./with-tenant";
  * last four digits are stored; no card number ever reaches the PMS.
  */
 
-/** A refund above the Front Desk limit needs a Property Manager's Approval (ticket 31); refused while none is granted. */
-export class ApprovalRequired extends Error {
-  constructor(limit: number) {
-    super(`Refunds above ${limit.toFixed(2)} need a Property Manager's Approval (Approvals come with ticket 31)`);
-    this.name = "ApprovalRequired";
-  }
-}
 
 export interface Payment {
   id: string;
@@ -441,7 +434,7 @@ export async function simulateCard(pool: Pool, schema: string, provider: Payment
  * original, through the provider for card tenders (back to the same card),
  * under an idempotency key so a retried request never refunds twice. Front
  * Desk may refund up to the property's limit per payment (earlier refunds
- * count); above it a Property Manager's Approval is needed (ticket 31). A
+ * count); above it a Property Manager's Approval is needed, used once. A
  * refund the provider did not answer stays pending and is retried; one the
  * hotel's balance cannot cover waits as "refund pending balance".
  */
@@ -450,7 +443,7 @@ export async function refundPayment(
   schema: string,
   provider: PaymentProvider,
   input: { paymentId: string; amount: number; reason: string },
-  actor: { userId: string; unlimited: boolean },
+  actor: { userId: string; unlimited: boolean; approverId?: string | null },
 ): Promise<Payment> {
   const reason = input.reason.trim().slice(0, 200);
   if (!reason) throw new Error("A refund needs a reason");
@@ -469,9 +462,18 @@ export async function refundPayment(
     if (verdict === "exceeds_refundable") throw new Error(`Cannot refund more than ${refundable.toFixed(2)} of this payment`);
     let approvedBy: string | null = null;
     if (verdict === "needs_approval") {
-      const decision = await approvalFor({ kind: "refund_over_limit", propertyId: orig.property_id, requestedBy: actor.userId, amount, subjectId: orig.id });
-      if (!decision.granted) throw new ApprovalRequired(limit);
-      approvedBy = decision.approvedBy;
+      approvedBy = await useApproval(
+        tx,
+        {
+          kind: "refund_over_limit",
+          propertyId: orig.property_id,
+          // the Approval is for this refund of this payment, at this amount
+          key: `${orig.id}:${amount.toFixed(2)}`,
+          summary: `Refund of ${amount.toFixed(2)} ${orig.currency.trim()} (above the limit of ${limit.toFixed(2)})`,
+          recordId: orig.id,
+        },
+        actor,
+      );
     }
     const viaProvider = Boolean(orig.provider_intent_id);
     const { rows } = await tx.query<PaymentRow>(

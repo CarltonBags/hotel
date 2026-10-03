@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { migrateControl, provisionTenant, type Tenant } from "@hoteloftware/db";
 import { controlMigrations, tenantMigrations } from "@hoteloftware/db/migrations";
-import { createAuth, createStaffUser, getTenantSession, signInToTenant, type Auth } from "../src/index";
+import { createAuth, createStaffUser, getTenantSession, signInToTenant, verifyTenantCredentials, type Auth } from "../src/index";
 
 /**
  * Seam: sign-in at a tenant subdomain. A user signs in only at their own
@@ -168,5 +168,17 @@ describe("tenant-scoped sign-in", () => {
     expect(res.ok).toBe(false);
     const { rowCount } = await pool.query("select 1 from control.\"user\" where email = 'mallory@example.com'");
     expect(rowCount).toBe(0);
+  });
+
+  it("verifies a user's credentials at their tenant without creating a session (a manager approving on another user's screen)", async () => {
+    const before = await pool.query<{ n: number }>("select count(*)::int as n from control.session");
+    const bob = await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, login: "bob", password: "correct horse battery" });
+    expect(bob).toMatch(/.+/);
+    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, login: "bob", password: "wrong password here" })).toBeNull();
+    // another tenant's user is unknown here
+    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, login: "carol", password: "another good password" })).toBeNull();
+    expect(await verifyTenantCredentials(auth, pool, { tenantId: alpha.id, login: "carol@example.com", password: "another good password" })).toBeNull();
+    const after = await pool.query<{ n: number }>("select count(*)::int as n from control.session");
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
   });
 });

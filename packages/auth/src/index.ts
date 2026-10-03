@@ -152,6 +152,31 @@ export async function signInToTenant(
   }
 }
 
+/**
+ * Check a user's credentials at a tenant without signing them in: a
+ * Property Manager approving on another user's screen. Returns the user's id,
+ * or null for wrong credentials or a user of another tenant (in the same time).
+ */
+export async function verifyTenantCredentials(auth: Auth, pool: Pool, input: { tenantId: string; login: string; password: string }): Promise<string | null> {
+  const ctx = await auth.$context;
+  const login = input.login.trim();
+  const email = login.includes("@") ? normaliseEmail(login) : await emailForUsername(pool, input.tenantId, login);
+  const row = email
+    ? (
+        await pool.query<{ id: string; password: string | null }>(
+          `select u.id, a.password from control."user" u join control.account a on a.user_id = u.id and a.provider_id = 'credential'
+           where u.email = $1 and u.tenant_id = $2`,
+          [email, input.tenantId],
+        )
+      ).rows[0]
+    : undefined;
+  if (!row?.password) {
+    await ctx.password.hash("burn the same time a real check takes").catch(() => undefined);
+    return null;
+  }
+  return (await ctx.password.verify({ hash: row.password, password: input.password })) ? row.id : null;
+}
+
 export interface TenantSession {
   user: { id: string; email: string; username: string | null; name: string; tenantId: string };
   session: { id: string; expiresAt: Date };

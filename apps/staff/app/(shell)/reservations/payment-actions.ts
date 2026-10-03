@@ -24,6 +24,7 @@ import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
+import { withApproval, type ApprovalMode, type ApprovalState } from "@/lib/approval";
 
 /**
  * Payments and Card Holds on one reservation (ticket 27). The reservation's
@@ -105,19 +106,25 @@ export async function simulateCardAction(reservationId: string, target: { paymen
   });
 }
 
-export async function refundAction(reservationId: string, paymentId: string, amount: number, reason: string): Promise<FormState> {
-  return formAction(async () => {
-    const { schema, tenantId, reservation, userId, actor } = await reservationScope(reservationId, "refund_payments");
+/** A refund; above the Front Desk limit it needs an Approval (asked for remotely, or a manager's credentials here). */
+export async function refundAction(reservationId: string, paymentId: string, amount: number, reason: string, approval?: ApprovalMode): Promise<ApprovalState> {
+  let state: ApprovalState = {};
+  const outer = await formAction(async () => {
+    const { schema, tenantId, reservation, userId, userName, actor } = await reservationScope(reservationId, "refund_payments");
     await ownPayment(schema, reservation.id, paymentId);
-    const r = await refundPayment(
-      pool(),
-      schema,
-      paymentProvider(),
-      { paymentId: String(paymentId), amount: Number(amount), reason: String(reason ?? "") },
-      { userId, unlimited: can(actor, "refund_without_limit", reservation.propertyId) },
-    );
-    return done(tenantId, reservation, r.status === "refund_pending_balance" ? "Refund waiting: the hotel's balance at the provider cannot cover it yet." : "Refunded.");
+    state = await withApproval({ tenantId, schema, propertyId: reservation.propertyId, userId, userName }, approval, async (approverId) => {
+      const r = await refundPayment(
+        pool(),
+        schema,
+        paymentProvider(),
+        { paymentId: String(paymentId), amount: Number(amount), reason: String(reason ?? "") },
+        { userId, unlimited: can(actor, "refund_without_limit", reservation.propertyId), approverId },
+      );
+      return done(tenantId, reservation, r.status === "refund_pending_balance" ? "Refund waiting: the hotel's balance at the provider cannot cover it yet." : "Refunded.");
+    });
+    return state;
   });
+  return outer.error ? outer : state;
 }
 
 export async function placeHoldAction(reservationId: string, amount: number, readerId: string): Promise<FormState & { holdId?: string }> {
