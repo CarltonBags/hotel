@@ -295,3 +295,19 @@ export {
 export { ApprovalRequired, decideApproval, findApproval, listApprovals, requestApproval, type Approval, type ApprovalSubject } from "./tenant/approvals";
 export { overrideNightPrices } from "./tenant/price-override";
 export { auditLog, type AuditArea, type AuditEntry, type AuditFilter } from "./tenant/audit-log";
+export {
+  closeNightAudit,
+  keepNightAuditPdf,
+  listNightAuditReports,
+  markAuditAlerted,
+  nightAuditReport,
+  nightAuditView,
+  overdueAudits,
+  saveArrivalDecision,
+  type AuditWarnings,
+  type MissingArrival,
+  type NightAuditReport,
+  type NightAuditReportRow,
+  type NightAuditView,
+  type OverdueDeparture,
+} from "./tenant/night-audit";

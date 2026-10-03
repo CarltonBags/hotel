@@ -117,6 +117,10 @@ export const PROPERTY_ACTIONS = {
   /** Matrix "Property-wide audit log": Accounting sees its money entries. */
   view_audit_log: ["property_manager", "accounting"],
   view_full_audit_log: ["property_manager"],
+  /** Matrix "Run Night Audit". */
+  run_night_audit: ["property_manager", "front_desk"],
+  /** Matrix "Run Night Audit": Accounting views the result; reports kept under Reports. */
+  view_night_audit_reports: ["property_manager", "accounting"],
   /** Matrix "Financial reports, City Tax report". */
   view_financial_reports: ["property_manager", "accounting"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */

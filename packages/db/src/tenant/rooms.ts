@@ -346,8 +346,8 @@ function toRoom(r: RoomRow): Room {
   };
 }
 
-/** Today in the property's time zone; `param` is the statement parameter holding the property id. */
-const propertyToday = (param: string) => `(now() at time zone (select time_zone from properties where id = ${param}))::date`;
+/** The property's Business Date (ticket 32); `param` is the statement parameter holding the property id. */
+const propertyToday = (param: string) => `(select business_date from properties where id = ${param})`;
 
 async function assertSectionAtProperty(tx: PoolClient, sectionId: string | null, propertyId: string): Promise<void> {
   if (!sectionId) return;

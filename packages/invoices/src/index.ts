@@ -16,3 +16,4 @@ export function invoiceXml(doc: InvoiceDocument): Promise<string> {
   return xrechnung(doc);
 }
 export { cityTaxReportCsv, renderCityTaxReportPdf, type CityTaxReportDocument } from "./city-tax-report";
+export { renderNightAuditPdf, type NightAuditReportDocument } from "./night-audit-report";

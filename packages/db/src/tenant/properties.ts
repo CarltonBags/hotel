@@ -16,6 +16,11 @@ export interface Property extends PropertyInput {
   createdAt: Date;
   /** Front Desk refunds up to this amount; above it Approval is needed (ticket 27). */
   refundLimit: number;
+  /** The operational date the property is on, advanced only by its Night Audit (ticket 32). */
+  businessDate: string;
+  /** Local times: the audit may start from, and is overdue after (next morning). */
+  nightAuditFrom: string;
+  nightAuditDeadline: string;
 }
 
 interface Row {
@@ -28,9 +33,13 @@ interface Row {
   currency: string;
   created_at: Date;
   refund_limit: string;
+  business_date: string;
+  night_audit_from: string;
+  night_audit_deadline: string;
 }
 
-const SELECT = `select p.id, p.name, p.legal_entity_id, l.name as legal_entity_name, p.country, p.time_zone, p.currency, p.created_at, p.refund_limit
+const SELECT = `select p.id, p.name, p.legal_entity_id, l.name as legal_entity_name, p.country, p.time_zone, p.currency, p.created_at, p.refund_limit,
+                  to_char(p.business_date, 'YYYY-MM-DD') as business_date, to_char(p.night_audit_from, 'HH24:MI') as night_audit_from, to_char(p.night_audit_deadline, 'HH24:MI') as night_audit_deadline
                 from properties p join legal_entities l on l.id = p.legal_entity_id`;
 
 function toProperty(r: Row): Property {
@@ -44,6 +53,9 @@ function toProperty(r: Row): Property {
     currency: r.currency,
     createdAt: r.created_at,
     refundLimit: Number(r.refund_limit),
+    businessDate: r.business_date,
+    nightAuditFrom: r.night_audit_from,
+    nightAuditDeadline: r.night_audit_deadline,
   };
 }
 
@@ -60,6 +72,7 @@ export async function createProperty(pool: Pool, schema: string, input: Property
     const le = await tx.query("select 1 from legal_entities where id = $1", [input.legalEntityId]);
     if (!le.rowCount) throw new Error("Legal Entity not found");
     const { rows } = await tx.query<{ id: string }>(
+      // the first Business Date is the property's own calendar date (set by the database)
       `insert into properties (name, legal_entity_id, country, time_zone, currency) values ($1, $2, $3, $4, $5) returning id`,
       [input.name.trim(), input.legalEntityId, input.country, input.timeZone, input.currency],
     );

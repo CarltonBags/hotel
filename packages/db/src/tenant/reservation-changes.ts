@@ -151,8 +151,8 @@ async function planChange(tx: PoolClient, res: ResRow, patch: ReservationPatch, 
   if (unchanged) return { before, after, roomTypeChanged, unchanged, oldNights, repriced: [], needsOverbooking: false, overbooked: res.overbooked, total: sumTotals(oldNights) };
   if (res.status === "checked_in" && after.arrival !== before.arrival) throw new Error("The arrival of a checked-in guest cannot move");
   if (res.status === "checked_in" && roomTypeChanged && !inHouseFrom) throw new Error("A checked-in guest changes room type through a room move");
-  // TODO(Night Audit ticket): use the property's Business Date instead of its wall-clock date
-  const today = (await tx.query<{ today: string }>("select to_char((now() at time zone $1)::date, 'YYYY-MM-DD') as today", [res.time_zone])).rows[0]!.today;
+  // "today" is the property's Business Date (ticket 32)
+  const today = (await tx.query<{ today: string }>("select to_char(business_date, 'YYYY-MM-DD') as today from properties where id = $1", [res.property_id])).rows[0]!.today;
   // in house, nights already slept (and nights before a room-type move) keep their price and Charges
   const keepBefore = res.status === "checked_in" ? (inHouseFrom && inHouseFrom > today ? inHouseFrom : today) : null;
   const fromMove = (d: string) => keepBefore === null || d >= keepBefore;
@@ -460,7 +460,7 @@ export async function moveRoomInHouse(pool: Pool, schema: string, id: string, us
   await withTenant(pool, schema, async (tx) => {
     const r = await loadForChange(tx, id);
     if (r.status !== "checked_in") throw new Error("Only a checked-in guest moves this way");
-    const today = (await tx.query<{ today: string }>("select to_char((now() at time zone $1)::date, 'YYYY-MM-DD') as today", [r.time_zone])).rows[0]!.today;
+    const today = (await tx.query<{ today: string }>("select to_char(business_date, 'YYYY-MM-DD') as today from properties where id = $1", [r.property_id])).rows[0]!.today;
     if (fromNight < today) throw new Error("Nights already slept cannot move");
     if (fromNight <= r.arrival || fromNight >= r.departure) throw new Error("Choose a night of the stay after the first");
     const room = await tx.query<{ room_type_id: string }>("select room_type_id from rooms where id = $1 and property_id = $2", [roomId, r.property_id]);
@@ -502,7 +502,7 @@ export async function listRoomChoices(pool: Pool, schema: string, id: string, op
   if (!isUuid(id)) return [];
   return withTenant(pool, schema, async (tx) => {
     const r = await loadForRead(tx, id);
-    const today = (await tx.query<{ today: string }>("select to_char((now() at time zone $1)::date, 'YYYY-MM-DD') as today", [r.time_zone])).rows[0]!.today;
+    const today = (await tx.query<{ today: string }>("select to_char(business_date, 'YYYY-MM-DD') as today from properties where id = $1", [r.property_id])).rows[0]!.today;
     const inHouse = r.status === "checked_in";
     // a guest in house keeps the rooms of nights slept: choices start tonight at the earliest
     const earliest = inHouse && today > r.arrival ? today : r.arrival;

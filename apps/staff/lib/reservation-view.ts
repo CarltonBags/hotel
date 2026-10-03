@@ -1,4 +1,4 @@
-import { can, canAtAnyProperty, formatCurrency, registrationFields, registrationGaps, todayIn, type Language, type RegistrationField } from "@hoteloftware/domain";
+import { can, canAtAnyProperty, formatCurrency, registrationFields, registrationGaps, type Language, type RegistrationField } from "@hoteloftware/domain";
 import {
   chargeHistory,
   findGuest,
@@ -81,8 +81,8 @@ export async function reservationView(id: string, options: { propertyId?: string
     ? await Promise.all([listTerminalReaders(pool(), s, r.propertyId), listCardHolds(pool(), s, r.id), listInvoices(pool(), s, r.id)])
     : [[], [], []];
   const provider = paymentProvider();
-  // TODO(Night Audit ticket): the property's Business Date
-  const today = todayIn(property.timeZone);
+  // the property's open Business Date (ticket 32)
+  const today = property.businessDate;
   const names = new Map(users.map((u) => [u.id, u.name]));
   const plan = plans.find((p) => p.id === r.ratePlan.id);
   const currency = { code: property.currency, language, country: property.country };

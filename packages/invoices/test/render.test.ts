@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cityTaxReportCsv, invoicePdf, invoiceXml, renderCityTaxReportPdf, renderReminderPdf } from "../src/index";
+import { cityTaxReportCsv, invoicePdf, invoiceXml, renderCityTaxReportPdf, renderNightAuditPdf, renderReminderPdf } from "../src/index";
 import { cancellationInvoice, finalInvoice, reminder } from "./fixture";
 
 /** Seam: an invoice renders as a Factur-X PDF carrying its EN16931 XML, and as XRechnung XML. (Full validation: scripts/validate-invoice.sh with Mustang.) */
@@ -54,5 +54,34 @@ describe("invoice rendering", () => {
     // a guest name is never a formula in a spreadsheet
     expect(csv).toContain(";'=HYPERLINK(1);");
     expect(csv.split("\r\n")[2]!.endsWith(";yes;")).toBe(true);
+  });
+
+  it("a Night Audit report renders as PDF", async () => {
+    const stay = { confirmationNumber: "100031", guestName: "Aiko Tanaka", roomNumber: "101" };
+    const pdf = Buffer.from(
+      await renderNightAuditPdf(
+        {
+          property: { name: "Alpha Berlin", currency: "EUR" },
+          businessDate: "2026-10-03",
+          closedAt: "2026-10-03T21:30:00Z",
+          closedBy: "u1",
+          occupancy: { rooms: 10, occupied: 4, percent: 40 },
+          arrivals: [stay],
+          departures: [],
+          noShows: [{ ...stay, fee: 100, feeStatus: "confirmed", waiveReason: null }],
+          lateArrivals: [],
+          revenue: [{ service: "Übernachtung", taxCode: "ACC", taxRate: 7, gross: 400 }],
+          payments: [{ tender: "card_terminal", amount: 250, count: 2 }],
+          cityTax: { charged: 30, absorbed: 0, nights: 4 },
+          openBalances: [{ ...stay, balance: 150 }],
+          expiringHolds: [],
+          changes: { voids: [], corrections: [], priceOverrides: [], refunds: [], cancellationInvoices: [], approvals: [] },
+          warnings: { incompleteRegistrations: [{ ...stay, missing: ["nationality"] }], arrivalsWithoutRoom: [] },
+        },
+        "de",
+        { u1: "Fiona Desk" },
+      ),
+    );
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
   });
 });
