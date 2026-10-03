@@ -24,6 +24,7 @@ import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
+import { withApproval, type ApprovalMode, type ApprovalState } from "@/lib/approval";
 
 /**
  * Payments and Card Holds on one reservation (ticket 27). The reservation's
@@ -105,18 +106,21 @@ export async function simulateCardAction(reservationId: string, target: { paymen
   });
 }
 
-export async function refundAction(reservationId: string, paymentId: string, amount: number, reason: string): Promise<FormState> {
+/** A refund; above the Front Desk limit it needs an Approval (asked for remotely, or a manager's credentials here). */
+export async function refundAction(reservationId: string, paymentId: string, amount: number, reason: string, approval?: ApprovalMode): Promise<ApprovalState> {
   return formAction(async () => {
-    const { schema, tenantId, reservation, userId, actor } = await reservationScope(reservationId, "refund_payments");
+    const { schema, tenantId, reservation, userId, actor, approvalContext } = await reservationScope(reservationId, "refund_payments");
     await ownPayment(schema, reservation.id, paymentId);
-    const r = await refundPayment(
-      pool(),
-      schema,
-      paymentProvider(),
-      { paymentId: String(paymentId), amount: Number(amount), reason: String(reason ?? "") },
-      { userId, unlimited: can(actor, "refund_without_limit", reservation.propertyId) },
-    );
-    return done(tenantId, reservation, r.status === "refund_pending_balance" ? "Refund waiting: the hotel's balance at the provider cannot cover it yet." : "Refunded.");
+    return withApproval(approvalContext, approval, async (approverId) => {
+      const r = await refundPayment(
+        pool(),
+        schema,
+        paymentProvider(),
+        { paymentId: String(paymentId), amount: Number(amount), reason: String(reason ?? "") },
+        { userId, unlimited: can(actor, "refund_without_limit", reservation.propertyId), approverId },
+      );
+      return done(tenantId, reservation, r.status === "refund_pending_balance" ? "Refund waiting: the hotel's balance at the provider cannot cover it yet." : "Refunded.");
+    });
   });
 }
 

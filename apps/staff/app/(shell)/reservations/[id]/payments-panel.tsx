@@ -6,6 +6,8 @@ import { DESK_TENDERS, captureAmount, formatCurrency, type Language } from "@hot
 import type { CardHold, Payment } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 import { useFormAction } from "../use-form-action";
+import { ApprovalPrompt } from "@/components/approval-prompt";
+import type { ApprovalMode } from "@/lib/approval";
 import {
   cancelPaymentAction,
   captureHoldAction,
@@ -118,6 +120,18 @@ export function PaymentsPanel({
   const [amount, setAmount] = useState("");
   const [reference, setReference] = useState("");
   const [refunding, setRefunding] = useState<string | null>(null);
+  // the Approval a refund above the limit needs, once refused
+  const [approval, setApproval] = useState<string | null>(null);
+  const refund = (paymentId: string, mode?: ApprovalMode) =>
+    run(
+      async () => {
+        const r = await refundAction(reservationId, paymentId, Number(refundAmount.replace(",", ".")), reason, mode);
+        // a failed attempt to approve (say, a wrong password) keeps the prompt open
+        setApproval(r.approval?.summary ?? (r.error && mode ? approval : null));
+        return r;
+      },
+      () => setRefunding(null),
+    );
   const [refundAmount, setRefundAmount] = useState("");
   const [reason, setReason] = useState("");
   const waiting = folios.flatMap((f) => f.payments).filter((p) => p.status === "pending" && !p.refundOf);
@@ -183,14 +197,23 @@ export function PaymentsPanel({
                     <button
                       type="button"
                       disabled={!reason.trim() || pending}
-                      onClick={() => run(() => refundAction(reservationId, p.id, Number(refundAmount.replace(",", ".")), reason), () => setRefunding(null))}
+                      onClick={() => refund(p.id)}
                       className={`${button} bg-danger text-white disabled:opacity-40`}
                     >
                       {m["pay.refundConfirm"]}
                     </button>
-                    <button type="button" onClick={() => setRefunding(null)} className={secondary}>
+                    <button type="button" onClick={() => (setRefunding(null), setApproval(null))} className={secondary}>
                       {m["res.keepAsIs"]}
                     </button>
+                    {approval ? (
+                      <ApprovalPrompt
+                        summary={approval}
+                        pending={pending}
+                        onRequest={() => refund(p.id, { mode: "request" })}
+                        onCredentials={(username, password) => refund(p.id, { mode: "credentials", username, password })}
+                        m={m}
+                      />
+                    ) : null}
                   </div>
                 ) : null}
               </li>

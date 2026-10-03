@@ -13,5 +13,14 @@ export async function reservationScope(reservationId: string, action: PropertyAc
   const r = await findReservation(pool(), tenant.schemaName, String(reservationId));
   if (!r) throw new Error("Reservation not found");
   const { session, actor } = await authorize(action, r.propertyId);
-  return { schema: tenant.schemaName, tenantId: tenant.id, reservation: r, userId: session.user.id, actor };
+  const userId = session.user.id;
+  return {
+    schema: tenant.schemaName,
+    tenantId: tenant.id,
+    reservation: r,
+    userId,
+    actor,
+    /** For actions that may need an Approval at the reservation's property. */
+    approvalContext: { tenantId: tenant.id, schema: tenant.schemaName, propertyId: r.propertyId, userId, userName: session.user.name },
+  };
 }

@@ -12,6 +12,7 @@ import { FixedCharges } from "./fixed-charges";
 import { CardHoldsPanel, PaymentsPanel } from "./payments-panel";
 import { CheckOutPanel, InvoicesPanel } from "./invoices-panel";
 import { CityTaxPanel } from "./city-tax-panel";
+import { PriceOverride } from "./price-override";
 import { FolioPanel } from "./folio-panel";
 import { RegistrationStatus } from "./guest-details";
 import { GuestDrawerButton } from "./guest-drawer-button";
@@ -172,6 +173,17 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
           </tbody>
         </table>
         <p className="mt-2 text-xs text-ink-60">{m["res.pricesKept"]}</p>
+        {rights.overridePrices ? (
+          <PriceOverride
+            // new prices or nights: the form starts from them
+            key={r.nights.map((n) => `${n.date}=${n.total}`).join(",")}
+            reservationId={r.id}
+            nights={r.nights.map((n) => ({ date: n.date, label: date(n.date), total: n.total, invoiced: v.invoicedNights.includes(n.date) }))}
+            floor={v.priceFloor}
+            currency={v.currency}
+            m={m}
+          />
+        ) : null}
       </section>
 
       {manage ? (
@@ -185,6 +197,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
           {history.map((h, i) => (
             <li key={i}>
               <span className="text-ink-60">{fmt.format(h.at)}</span> · {names.get(h.userId) ?? h.userId} · <strong>{m[`res.action.${h.action}`]}</strong>
+              {h.approvedBy ? <span className="text-ink-60"> · {fill(m["res.approvedBy"], { name: names.get(h.approvedBy) ?? h.approvedBy })}</span> : null}
               <div className="text-ink-80">
                 {m["res.before"]}: {describe(h.before)}
               </div>

@@ -655,10 +655,14 @@ export const reservationChanges = pgTable(
     action: text("action").notNull(),
     before: jsonb("before").notNull().default({}),
     after: jsonb("after").notNull().default({}),
+    approvedBy: text("approved_by"),
   },
   (t) => [
     index("reservation_changes_reservation_idx").on(t.reservationId, t.at.desc()),
-    check("reservation_changes_action_check", sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in', 'cancel_check_in', 'check_out')`),
+    check(
+      "reservation_changes_action_check",
+      sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in', 'cancel_check_in', 'check_out', 'price_override')`,
+    ),
   ],
 );
 
@@ -1071,6 +1075,35 @@ export const cityTaxNights = pgTable(
   (t) => [primaryKey({ columns: [t.reservationId, t.date] }), index("city_tax_nights_property_date_idx").on(t.propertyId, t.date)],
 );
 
+export const approvals = pgTable(
+  "approvals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    kind: text("kind").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    summary: text("summary").notNull(),
+    recordId: uuid("record_id"),
+    requestedBy: text("requested_by").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    status: text("status").notNull().default("pending"),
+    decidedBy: text("decided_by"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    note: text("note").notNull().default(""),
+    inPlace: boolean("in_place").notNull().default(false),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("approvals_property_idx").on(t.propertyId, t.requestedAt.desc()),
+    index("approvals_match_idx").on(t.kind, t.subjectKey, t.requestedBy).where(sql`${t.status} = 'approved'`),
+    check("approvals_kind_check", sql`${t.kind} in ('refund_over_limit', 'price_below_floor', 'complimentary')`),
+    check("approvals_status_check", sql`${t.status} in ('pending', 'approved', 'rejected', 'used')`),
+    check("approvals_decided_check", sql`(${t.status} = 'pending') = (${t.decidedBy} is null)`),
+    check("approvals_used_check", sql`(${t.status} = 'used') = (${t.usedAt} is not null)`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1124,4 +1157,5 @@ export const tenantSchema = {
   cityTaxExemptionReasons,
   reservationCityTaxExemptions,
   cityTaxNights,
+  approvals,
 };

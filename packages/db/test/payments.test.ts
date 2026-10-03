@@ -16,8 +16,8 @@ import { setRates } from "../src/tenant/rates";
 import { createGuest } from "../src/tenant/guests";
 import { createBooking } from "../src/tenant/reservations";
 import { loadFolios, postServiceCharge } from "../src/tenant/folios";
+import { ApprovalRequired } from "../src/tenant/approvals";
 import {
-  ApprovalRequired,
   cancelPendingPayment,
   coverBalanceWithHold,
   retryOpenRefunds,

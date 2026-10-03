@@ -110,6 +110,13 @@ export const PROPERTY_ACTIONS = {
   manage_receivables: ["property_manager", "accounting"],
   /** Check-out with balances open: a Manager's decision (Front Desk would need an Approval, ticket 31). */
   override_check_out: ["property_manager"],
+  /** Matrix "Price Override at or above Price Floor"; below the floor and complimentary need an Approval. */
+  override_prices: ["property_manager", "front_desk"],
+  /** Approve another user's action beyond their limit (matrix "Approval"). */
+  approve_requests: ["property_manager"],
+  /** Matrix "Property-wide audit log": Accounting sees its money entries. */
+  view_audit_log: ["property_manager", "accounting"],
+  view_full_audit_log: ["property_manager"],
   /** Matrix "Financial reports, City Tax report". */
   view_financial_reports: ["property_manager", "accounting"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */

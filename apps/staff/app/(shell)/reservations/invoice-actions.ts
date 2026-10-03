@@ -44,7 +44,7 @@ export async function checkOutAction(reservationId: string, override: boolean): 
   let open: CheckOutState["open"];
   const state = await formAction(async () => {
     const { schema, tenantId, reservation, userId, actor } = await reservationScope(reservationId, "check_in");
-    // TODO(ticket 31): Front Desk asks for a Manager's Approval instead
+    // the permission matrix gives this to the Property Manager alone (no Approval row); revisit with Night Audit (ticket 32) if Front Desk needs it
     if (override && !can(actor, "override_check_out", reservation.propertyId)) throw new Error("Only a Property Manager checks out with balances open");
     try {
       await checkOut(pool(), schema, reservation.id, userId, { override: override === true });
