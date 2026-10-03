@@ -60,7 +60,7 @@ export function zonedInstant(date: string, time: string, timeZone: string): Date
 }
 
 /** Actions a reservation's change history records (migration 0009). */
-export const RESERVATION_CHANGE_ACTIONS = ["edit", "cancel", "assign_room", "move_room", "unassign_room", "fee_confirmed", "fee_waived", "check_in", "cancel_check_in"] as const;
+export const RESERVATION_CHANGE_ACTIONS = ["edit", "cancel", "assign_room", "move_room", "unassign_room", "fee_confirmed", "fee_waived", "check_in", "cancel_check_in", "check_out"] as const;
 export type ReservationChangeAction = (typeof RESERVATION_CHANGE_ACTIONS)[number];
 
 /** Same child ages regardless of the order they were entered in. */

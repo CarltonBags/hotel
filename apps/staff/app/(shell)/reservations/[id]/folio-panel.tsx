@@ -111,7 +111,7 @@ export function FolioPanel({ reservationId, view, services, taxCodes, parties, l
                     <td className={`py-1 text-right ${c.voided ? "line-through" : ""}`}>{money(c.amount)}</td>
                     {rights.manage ? (
                       <td className="py-1 pl-2 text-right">
-                        {!c.voided ? (
+                        {!c.voided && !c.invoiceId ? (
                           <div className="flex justify-end gap-1">
                             {folios.length > 1 ? (
                               <select

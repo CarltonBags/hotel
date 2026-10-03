@@ -254,3 +254,17 @@ export {
   type TerminalReader,
 } from "./tenant/payments";
 export { mapProviderAccount } from "./control/external-ids";
+export {
+  CheckOutBlocked,
+  DEFAULT_FORMATS,
+  checkOut,
+  invoiceDocument,
+  issueDepositInvoiceIfDue,
+  issueInvoice,
+  listInvoiceNumberRanges,
+  listInvoices,
+  setInvoiceNumberRange,
+  type IssuedInvoice,
+  type NumberRange,
+  type RangeKind,
+} from "./tenant/invoices";

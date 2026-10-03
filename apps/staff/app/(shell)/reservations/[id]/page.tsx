@@ -10,6 +10,7 @@ import { fill } from "@/i18n/messages";
 import { CheckInButton } from "../check-in-button";
 import { FixedCharges } from "./fixed-charges";
 import { CardHoldsPanel, PaymentsPanel } from "./payments-panel";
+import { CheckOutPanel, InvoicesPanel } from "./invoices-panel";
 import { FolioPanel } from "./folio-panel";
 import { RegistrationStatus } from "./guest-details";
 import { GuestDrawerButton } from "./guest-drawer-button";
@@ -201,6 +202,12 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         <div className="grid items-start gap-4 lg:grid-cols-2">
           <PaymentsPanel {...paymentProps(v)} folios={v.payments.folios} rights={{ take: rights.takePayments, refund: rights.refunds }} m={m} />
           <CardHoldsPanel {...paymentProps(v)} holds={v.payments.holds} balance={v.payments.guestBalance} canTake={rights.takePayments} m={m} />
+        </div>
+      ) : null}
+      {folio ? (
+        <div className="grid items-start gap-4 lg:grid-cols-2">
+          <InvoicesPanel reservationId={r.id} invoices={v.invoices} openFolios={v.openFolios} canIssue={rights.issueInvoices} currency={v.currency} m={m} />
+          {v.canCheckOut ? <CheckOutPanel reservationId={r.id} canOverride={rights.overrideCheckOut} currency={v.currency} m={m} /> : null}
         </div>
       ) : null}
       {folio ? (

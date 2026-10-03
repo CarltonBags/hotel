@@ -146,3 +146,15 @@ export {
   type RefundVerdict,
   type Tender,
 } from "./payments";
+export {
+  allocateDeposit,
+  formatInvoiceNumber,
+  invoiceLines,
+  invoiceTotals,
+  isInvoiceNumberFormat,
+  type InvoiceCharge,
+  type InvoiceLine,
+  type InvoiceTotals,
+  type PrecedingDeposit,
+  type TaxPart,
+} from "./invoices";

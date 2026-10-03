@@ -17,6 +17,7 @@ import {
 import { ProviderError, type IntentState, type PaymentProvider } from "@hoteloftware/payments";
 import { isUuid } from "./catalogue-common";
 import { approvalFor } from "./approvals";
+import { issueDepositInvoiceIfDue } from "./invoices";
 import { openFolios } from "./folios";
 import { mapProviderAccount } from "../control/external-ids";
 import { withTenant } from "./with-tenant";
@@ -342,7 +343,11 @@ export async function takePayment(
     );
     return { row: rows[0]!, ctx, reader };
   });
-  if (!viaProvider) return toPayment(prepared.row);
+  if (!viaProvider) {
+    // money before check-in: its Deposit Invoice at once
+    await issueDepositInvoiceIfDue(pool, schema, prepared.row.id, userId);
+    return toPayment(prepared.row);
+  }
   try {
     const { intentId } = await provider.startTerminalPayment(prepared.ctx.accountId, {
       readerId: prepared.reader!,
@@ -377,6 +382,12 @@ export async function syncPayment(pool: Pool, schema: string, provider: PaymentP
 /** Only a pending payment changes: webhook and desk polling cannot settle it twice. */
 async function applyIntentToPayment(pool: Pool, schema: string, paymentId: string, state: IntentState): Promise<Payment> {
   const status: PaymentStatus | null = state.status === "succeeded" ? "succeeded" : state.status === "failed" || state.status === "cancelled" ? "failed" : null;
+  const settled = await settleIntent(pool, schema, paymentId, state, status);
+  if (settled.status === "succeeded") await issueDepositInvoiceIfDue(pool, schema, settled.id, settled.postedBy);
+  return settled;
+}
+
+async function settleIntent(pool: Pool, schema: string, paymentId: string, state: IntentState, status: PaymentStatus | null): Promise<Payment> {
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query<PaymentRow>(
       `update payments set status = coalesce($2, status), card_brand = coalesce($3, card_brand), card_last4 = coalesce($4, card_last4), error = $5,
