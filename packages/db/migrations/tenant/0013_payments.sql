@@ -35,7 +35,7 @@ create table payments (
   folio_id uuid not null references folios(id),
   reservation_id uuid not null references reservations(id),
   property_id uuid not null references properties(id),
-  tender text not null constraint payments_tender_check check (tender in ('card_terminal', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect')),
+  tender text not null constraint payments_tender_check check (tender in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect')),
   amount numeric(12, 2) not null constraint payments_amount_check check (amount <> 0),
   currency char(3) not null,
   status text not null constraint payments_status_check check (status in ('pending', 'succeeded', 'failed', 'refund_pending_balance')),
@@ -49,6 +49,8 @@ create table payments (
   card_last4 char(4),
   reference text not null default '',
   error text,
+  -- refunds the provider answered "not now" (no balance) are retried under a new idempotency key each attempt
+  provider_attempts integer not null default 0,
   approved_by text,
   posted_at timestamptz not null default clock_timestamp(),
   posted_by text not null,
@@ -67,7 +69,8 @@ create table card_holds (
   provider_intent_id text not null unique,
   reader_id text,
   channel text not null constraint card_holds_channel_check check (channel in ('terminal', 'online', 'moto')),
-  -- the card's token at the provider for renewing the hold; never the card number
+  -- the card saved at the provider for renewing the hold (its customer and payment method ids); never the card number
+  provider_customer_id text,
   payment_method_id text,
   card_brand text,
   card_last4 char(4),

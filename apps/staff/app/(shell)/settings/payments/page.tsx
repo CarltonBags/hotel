@@ -17,10 +17,11 @@ export default async function PaymentSettingsPage({ searchParams }: { searchPara
   const { tenant, actor } = await requireAllowedAnywhere("manage_payment_settings");
   const { messages: m, properties, scope } = await loadShell();
   const provider = paymentProvider();
-  const canAccounts = can(actor, "manage_payment_accounts");
+  // a Legal Entity's account is managed by a Property Manager of one of its properties (Owner and Tenant Admin everywhere)
+  const canAccount = (legalEntityId: string) => properties.some((p) => p.legalEntityId === legalEntityId && can(actor, "manage_payment_settings", p.id));
   // back from the provider's onboarding: read the account's new state
   const back = (await searchParams).account;
-  if (back && canAccounts) await refreshPaymentAccount(pool(), tenant.schemaName, provider, back).catch(() => undefined);
+  if (back && canAccount(back)) await refreshPaymentAccount(pool(), tenant.schemaName, provider, back).catch(() => undefined);
   const [entities, accounts] = await Promise.all([listLegalEntities(pool(), tenant.schemaName), listPaymentAccounts(pool(), tenant.schemaName)]);
   const property = properties.find((p) => p.id === scope);
   const readers = property ? await listTerminalReaders(pool(), tenant.schemaName, property.id) : [];
@@ -38,7 +39,7 @@ export default async function PaymentSettingsPage({ searchParams }: { searchPara
       <section aria-label={m["pset.accounts"]} className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm">
         <h2 className="font-medium">{m["pset.accounts"]}</h2>
         <p className="text-xs text-ink-60">{m["pset.accountsHelp"]}</p>
-        {!canAccounts ? <p className="text-ink-60">{m["pset.ownerOnly"]}</p> : null}
+
         <ul className="grid gap-2">
           {entities.map((le) => {
             const a = accounts.find((x) => x.legalEntityId === le.id);
@@ -47,12 +48,12 @@ export default async function PaymentSettingsPage({ searchParams }: { searchPara
                 <span className="min-w-0 flex-1">
                   <strong>{le.name}</strong> · {a ? (a.chargesEnabled ? m["pset.ready"] : m["pset.notReady"]) : m["pset.none"]}
                 </span>
-                {canAccounts && !a?.chargesEnabled ? (
+                {canAccount(le.id) && !a?.chargesEnabled ? (
                   <ActionForm action={onboardAction} submitLabel={a ? m["pset.continue"] : m["pset.setUp"]} pendingLabel={m["action.saving"]} className="flex">
                     <input type="hidden" name="legalEntityId" value={le.id} />
                   </ActionForm>
                 ) : null}
-                {canAccounts && a ? (
+                {canAccount(le.id) && a ? (
                   <ActionForm action={refreshAccountAction} submitLabel={m["pset.refresh"]} pendingLabel={m["action.saving"]} className="flex">
                     <input type="hidden" name="legalEntityId" value={le.id} />
                   </ActionForm>

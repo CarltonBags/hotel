@@ -34,8 +34,10 @@ export interface IntentState {
   currency: string;
   brand: string | null;
   last4: string | null;
-  /** Token of the card for later use (never the number). */
+  /** Token of the card for later use without the guest (never the number). */
   paymentMethodId: string | null;
+  /** The provider's customer the card is saved to, for later merchant-initiated holds. */
+  customerId: string | null;
   /** The provider's own capture deadline for a hold, when it reports one. */
   captureBefore: Date | null;
   /** True only when the provider confirms an extended authorisation for this hold. */
@@ -71,6 +73,8 @@ export interface TerminalPaymentInput {
   description: string;
   /** Identifiers only (ADR 0007): payment or hold id, tenant. */
   metadata: Record<string, string>;
+  /** Same key, same result: a retried request never charges twice. */
+  idempotencyKey: string;
 }
 
 export interface PaymentProvider {
@@ -93,13 +97,16 @@ export interface PaymentProvider {
   cancelTerminalPayment(accountId: string, readerId: string, intentId: string): Promise<void>;
   getIntent(accountId: string, intentId: string): Promise<IntentState>;
 
-  incrementHold(accountId: string, intentId: string, newAmount: number): Promise<IntentState>;
-  captureHold(accountId: string, intentId: string, amount: number): Promise<IntentState>;
+  incrementHold(accountId: string, intentId: string, newAmount: number, idempotencyKey: string): Promise<IntentState>;
+  captureHold(accountId: string, intentId: string, amount: number, idempotencyKey: string): Promise<IntentState>;
   releaseHold(accountId: string, intentId: string): Promise<void>;
-  /** A new hold on the same card without the guest (merchant-initiated), to renew one before it expires. */
-  renewHold(accountId: string, input: { paymentMethodId: string; amount: number; currency: string; metadata: Record<string, string> }): Promise<IntentState>;
+  /** A new hold on the saved card without the guest (merchant-initiated): to renew one before it expires, or for incidentals beyond a hold's limits. */
+  holdSavedCard(
+    accountId: string,
+    input: { customerId: string; paymentMethodId: string; amount: number; currency: string; metadata: Record<string, string>; idempotencyKey: string },
+  ): Promise<IntentState>;
 
-  refund(accountId: string, input: { intentId: string; amount: number; metadata: Record<string, string> }): Promise<RefundResult>;
+  refund(accountId: string, input: { intentId: string; amount: number; metadata: Record<string, string>; idempotencyKey: string }): Promise<RefundResult>;
   getRefund(accountId: string, refundId: string): Promise<RefundResult>;
 
   /** Check a webhook's signature; null when it is not genuine. */

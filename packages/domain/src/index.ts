@@ -131,6 +131,7 @@ export {
 export {
   HOLD_WARNING_HOURS,
   PAYMENT_STATUSES,
+  DESK_TENDERS,
   PROVIDER_TENDERS,
   TENDERS,
   captureAmount,

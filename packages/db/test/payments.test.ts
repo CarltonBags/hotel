@@ -18,6 +18,10 @@ import { createBooking } from "../src/tenant/reservations";
 import { loadFolios, postServiceCharge } from "../src/tenant/folios";
 import {
   ApprovalRequired,
+  cancelPendingPayment,
+  coverBalanceWithHold,
+  retryOpenRefunds,
+  syncCardHold,
   captureCardHold,
   incrementCardHold,
   listCardHolds,
@@ -164,8 +168,8 @@ describe("payments", () => {
     let [hold] = await listCardHolds(pool, s, res);
     expect(hold).toMatchObject({ status: "active", amount: 300, cardLast4: "4242" });
     expect(hold!.expiresAt).not.toBeNull();
-    await incrementCardHold(pool, s, provider, { holdId: h.id, increment: 100 }, fd);
-    await expect(incrementCardHold(pool, s, provider, { holdId: h.id, increment: 2001 }, fd)).rejects.toThrow(/increment/i);
+    await incrementCardHold(pool, s, provider, { holdId: h.id, increment: 100 });
+    await expect(incrementCardHold(pool, s, provider, { holdId: h.id, increment: 2001 })).rejects.toThrow(/increment/i);
     [hold] = await listCardHolds(pool, s, res);
     expect(hold).toMatchObject({ amount: 400, increments: 1 });
     // a hold is not a payment: the balance is unchanged until capture
@@ -177,7 +181,7 @@ describe("payments", () => {
     expect(hold).toMatchObject({ status: "captured", capturedAmount: 140 });
     const other = await placeCardHold(pool, s, provider, { reservationId: res, amount: 50, readerId: reader }, fd);
     await simulateCard(pool, s, provider, { holdId: other.id });
-    await releaseCardHold(pool, s, provider, other.id, fd);
+    await releaseCardHold(pool, s, provider, other.id);
     expect((await listCardHolds(pool, s, res)).find((x) => x.id === other.id)!.status).toBe("released");
   });
 
@@ -187,6 +191,8 @@ describe("payments", () => {
     await simulateCard(pool, s, provider, { holdId: h.id });
     // pretend it was made long ago and expires within the warning window
     await pool.query(`update ${s}.card_holds set authorised_at = now() - interval '4 days', expires_at = now() + interval '20 hours' where id = $1`, [h.id]);
+    // the stay lasts beyond the hold
+    await pool.query(`update ${s}.reservations set departure = departure + 5 where id = $1`, [res]);
     const warnings: string[] = [];
     const done = await renewExpiringHolds(pool, s, provider, new Date(), (w) => warnings.push(w.reservationId));
     expect(done).toEqual({ renewed: 1, failed: 0 });
@@ -195,5 +201,78 @@ describe("payments", () => {
     expect(holds.find((x) => x.id === h.id)!.status).toBe("released");
     expect(holds.find((x) => x.renewedFrom === h.id)).toMatchObject({ status: "active", amount: 80 });
     expect(await renewExpiringHolds(pool, s, provider, new Date(), () => undefined)).toEqual({ renewed: 0, failed: 0 });
+  });
+
+  it("cancelling at the desk after the card was presented keeps the payment received", async () => {
+    const s = tenant.schemaName;
+    const p = await takePayment(pool, s, provider, { reservationId: res, tender: "card_terminal", amount: 5, readerId: reader }, fd);
+    // the guest taps just before the desk cancels
+    const account = [...provider.accounts.keys()][0]!;
+    await provider.simulateCard(account, reader);
+    expect(await cancelPendingPayment(pool, s, provider, p.id)).toMatchObject({ status: "succeeded" });
+  });
+
+  it("the Front Desk limit counts earlier refunds of the payment, so a large refund cannot be split", async () => {
+    const s = tenant.schemaName;
+    await pool.query(`update ${s}.properties set refund_limit = 50 where id = $1`, [berlin]);
+    const p = await takePayment(pool, s, provider, { reservationId: res, tender: "bank_transfer", amount: 90, reference: "split test" }, fd);
+    await refundPayment(pool, s, provider, { paymentId: p.id, amount: 40, reason: "part" }, asFrontDesk);
+    await expect(refundPayment(pool, s, provider, { paymentId: p.id, amount: 40, reason: "rest" }, asFrontDesk)).rejects.toBeInstanceOf(ApprovalRequired);
+  });
+
+  it("a refund without an answer stays pending and counted, and is sent again under the same key", async () => {
+    const s = tenant.schemaName;
+    const p = await takePayment(pool, s, provider, { reservationId: res, tender: "card_terminal", amount: 30, readerId: reader }, fd);
+    await simulateCard(pool, s, provider, { paymentId: p.id });
+    provider.refundNoAnswer = true;
+    expect(await refundPayment(pool, s, provider, { paymentId: p.id, amount: 30, reason: "timeout" }, asManager)).toMatchObject({ status: "pending" });
+    // nothing more can be refunded while it is open
+    await expect(refundPayment(pool, s, provider, { paymentId: p.id, amount: 1, reason: "again" }, asManager)).rejects.toThrow(/more than 0.00/);
+    provider.refundNoAnswer = false;
+    await retryOpenRefunds(pool, s, provider);
+    const refunds = (await loadFolios(pool, s, res)).folios.flatMap((f) => f.payments).filter((x) => x.refundOf === p.id);
+    expect(refunds.map((x) => x.status)).toEqual(["succeeded"]);
+  });
+
+  it("a late poll never reopens a captured hold; capture defaults to what is due; a renewed hold is captured as card online", async () => {
+    const s = tenant.schemaName;
+    const h = await placeCardHold(pool, s, provider, { reservationId: res, amount: 1000, readerId: reader }, fd);
+    await simulateCard(pool, s, provider, { holdId: h.id });
+    const due = await balance();
+    const captured = await captureCardHold(pool, s, provider, { holdId: h.id }, fd);
+    expect(captured.amount).toBe(Math.min(1000, due));
+    await syncCardHold(pool, s, provider, h.id);
+    expect((await listCardHolds(pool, s, res)).find((x) => x.id === h.id)!.status).toBe("captured");
+    const renewed = (await listCardHolds(pool, s, res)).find((x) => x.renewedFrom !== null && x.status === "active")!;
+    await postServiceCharge(pool, s, res, { serviceId: (await pool.query(`select id from ${s}.services where code = 'MINI'`)).rows[0].id, quantity: 1 }, fd);
+    expect(await captureCardHold(pool, s, provider, { holdId: renewed.id }, fd)).toMatchObject({ tender: "card_online" });
+  });
+
+  it("incidentals beyond a hold's limits go on the saved card as a fresh hold", async () => {
+    const s = tenant.schemaName;
+    const h = await placeCardHold(pool, s, provider, { reservationId: res, amount: 10, readerId: reader }, fd);
+    await simulateCard(pool, s, provider, { holdId: h.id });
+    // owe 1000 more than held: beyond max(500, 5 × 10)
+    await postServiceCharge(pool, s, res, { serviceId: (await pool.query(`select id from ${s}.services where code = 'MINI'`)).rows[0].id, quantity: 10 }, fd);
+    const r = await coverBalanceWithHold(pool, s, provider, h.id, fd);
+    expect(r.newHoldId).not.toBeNull();
+    const fresh = (await listCardHolds(pool, s, res)).find((x) => x.id === r.newHoldId)!;
+    expect(fresh).toMatchObject({ status: "active", channel: "online" });
+  });
+
+  it("a hold whose stay ends before it runs out is not renewed", async () => {
+    const s = tenant.schemaName;
+    await pool.query(`update ${s}.reservations set departure = arrival + 1 where id = $1`, [res]);
+    const h = await placeCardHold(pool, s, provider, { reservationId: res, amount: 20, readerId: reader }, fd);
+    await simulateCard(pool, s, provider, { holdId: h.id });
+    // the hold runs out at noon on the departure day: the stay does not outlast it
+    await pool.query(
+      `update ${s}.card_holds h set authorised_at = now() - interval '4 days', expires_at = (r.departure + time '12:00') at time zone 'Europe/Berlin' from ${s}.reservations r where r.id = h.reservation_id and h.id = $1`,
+      [h.id],
+    );
+    const warned: string[] = [];
+    await renewExpiringHolds(pool, s, provider, new Date(), (w) => warned.push(w.holdId));
+    expect(warned).not.toContain(h.id);
+    expect((await listCardHolds(pool, s, res)).find((x) => x.id === h.id)!.status).toBe("active");
   });
 });

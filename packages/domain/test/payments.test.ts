@@ -4,7 +4,7 @@ import { TENDERS, captureAmount, folioBalance, holdExpiry, holdIncrementAllowed,
 /** Seams: balance after payments; what may still be refunded and who may; Card Hold validity and limits (payments research, ticket 27). */
 describe("payments", () => {
   it("knows the v1 desk tenders", () => {
-    expect(TENDERS).toEqual(["card_terminal", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect"]);
+    expect(TENDERS).toEqual(["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect"]);
   });
 
   it("balance is gross Charges less succeeded payments; refunds count back", () => {
@@ -18,11 +18,17 @@ describe("payments", () => {
   });
 
   it("refunds over the refundable amount are refused; over the Front Desk limit they need Approval", () => {
-    expect(refundCheck({ amount: 80, refundable: 70, limit: 200, unlimited: false })).toBe("exceeds_refundable");
-    expect(refundCheck({ amount: 0, refundable: 70, limit: 200, unlimited: false })).toBe("not_positive");
-    expect(refundCheck({ amount: 250, refundable: 300, limit: 200, unlimited: false })).toBe("needs_approval");
-    expect(refundCheck({ amount: 250, refundable: 300, limit: 200, unlimited: true })).toBe("ok");
-    expect(refundCheck({ amount: 200, refundable: 300, limit: 200, unlimited: false })).toBe("ok");
+    const fd = { refundedSoFar: 0, limit: 200, unlimited: false };
+    expect(refundCheck({ ...fd, amount: 80, refundable: 70 })).toBe("exceeds_refundable");
+    expect(refundCheck({ ...fd, amount: 0, refundable: 70 })).toBe("not_positive");
+    expect(refundCheck({ ...fd, amount: 250, refundable: 300 })).toBe("needs_approval");
+    expect(refundCheck({ ...fd, amount: 250, refundable: 300, unlimited: true })).toBe("ok");
+    expect(refundCheck({ ...fd, amount: 200, refundable: 300 })).toBe("ok");
+  });
+
+  it("the Front Desk limit counts earlier refunds of the same payment, so it cannot be split", () => {
+    expect(refundCheck({ amount: 100, refundable: 300, refundedSoFar: 150, limit: 200, unlimited: false })).toBe("needs_approval");
+    expect(refundCheck({ amount: 50, refundable: 300, refundedSoFar: 150, limit: 200, unlimited: false })).toBe("ok");
   });
 
   it("a Card Hold lasts 2 days on a terminal (Visa 5), 7 online (Visa 5), 30 when extended", () => {
@@ -33,9 +39,10 @@ describe("payments", () => {
     expect(holdExpiry({ channel: "terminal", brand: "visa", extended: true, authorisedAt: at }).toISOString()).toBe("2026-11-01T10:00:00.000Z");
   });
 
-  it("the expiry warning comes 48 hours before, never before the hold was made", () => {
+  it("renewal comes 48 hours before expiry, or halfway through a shorter hold", () => {
     expect(holdWarningAt(new Date("2026-10-09T10:00:00Z"), new Date("2026-10-02T10:00:00Z")).toISOString()).toBe("2026-10-07T10:00:00.000Z");
-    expect(holdWarningAt(new Date("2026-10-03T10:00:00Z"), new Date("2026-10-02T10:00:00Z")).toISOString()).toBe("2026-10-02T10:00:00.000Z");
+    // a 2-day terminal hold is renewed after one day, not at once
+    expect(holdWarningAt(new Date("2026-10-04T10:00:00Z"), new Date("2026-10-02T10:00:00Z")).toISOString()).toBe("2026-10-03T10:00:00.000Z");
   });
 
   it("increments: at most 10, each up to the greater of 500 or five times the amount held before", () => {

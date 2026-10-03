@@ -57,8 +57,6 @@ export const TENANT_ACTIONS = {
   manage_tenant_settings: ["owner", "tenant_admin"],
   manage_subscription: ["owner"],
   delete_tenant: ["owner"],
-  /** Payment accounts of the Legal Entities (onboarding with the payment provider); Legal Entities are tenant matters. */
-  manage_payment_accounts: ["owner", "tenant_admin"],
 } as const satisfies Record<string, readonly TenantRole[]>;
 export type TenantAction = keyof typeof TENANT_ACTIONS;
 
@@ -104,7 +102,7 @@ export const PROPERTY_ACTIONS = {
   refund_payments: ["property_manager", "front_desk", "accounting"],
   /** Matrix "Refund" without limit. */
   refund_without_limit: ["property_manager", "accounting"],
-  /** Card terminals of the property and its refund limit. */
+  /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */
   manage_payment_settings: ["property_manager"],
 } as const satisfies Record<string, readonly PropertyRole[]>;
 export type PropertyAction = keyof typeof PROPERTY_ACTIONS;

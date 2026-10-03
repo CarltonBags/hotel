@@ -28,7 +28,7 @@ const port = Number(process.env.WORKER_PORT ?? 8080);
 const provider = paymentProvider();
 const boss = await startQueue(pool, directUrl, {
   tenantCheckCron: process.env.TENANT_CHECK_CRON ?? null,
-  processors: { [provider.name]: paymentProcessor(provider) },
+  providerProcessors: { [provider.name]: paymentProcessor(provider) },
   paymentProvider: provider,
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });

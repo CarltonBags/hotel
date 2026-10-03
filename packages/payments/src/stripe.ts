@@ -3,7 +3,7 @@ import type { AccountStatus, IntentState, IntentStatus, PaymentProvider, Provide
 import { ProviderError } from "./provider";
 
 /** Currencies without minor units at Stripe (none of the DACH ones; kept for safety). */
-const ZERO_DECIMAL = new Set(["jpy", "krw", "vnd", "clp", "isk", "huf"]);
+const ZERO_DECIMAL = new Set(["jpy", "krw", "vnd", "clp", "isk"]);
 const toMinor = (amount: number, currency: string) => Math.round(amount * (ZERO_DECIMAL.has(currency.toLowerCase()) ? 1 : 100));
 const toMajor = (minor: number, currency: string) => minor / (ZERO_DECIMAL.has(currency.toLowerCase()) ? 1 : 100);
 
@@ -28,8 +28,8 @@ export class StripePaymentProvider implements PaymentProvider {
     this.testMode = secretKey.startsWith("sk_test_");
   }
 
-  private on(accountId: string) {
-    return { stripeAccount: accountId };
+  private on(accountId: string, idempotencyKey?: string) {
+    return idempotencyKey ? { stripeAccount: accountId, idempotencyKey } : { stripeAccount: accountId };
   }
 
   private async call<T>(fn: () => Promise<T>): Promise<T> {
@@ -79,6 +79,10 @@ export class StripePaymentProvider implements PaymentProvider {
   async startTerminalPayment(accountId: string, input: TerminalPaymentInput): Promise<{ intentId: string }> {
     // keyed card-not-present entry on a reader is a Stripe beta enabled by Stripe Support (research); not wired until it is
     if (input.moto) throw new ProviderError("Keyed entry (MOTO) on the reader needs Stripe Support to enable it for this account first");
+    // a hold saves the card to a customer, so it can be renewed or topped up later without the guest (generated card)
+    const customer = input.hold
+      ? await this.call(() => this.stripe.customers.create({ metadata: input.metadata }, this.on(accountId, `${input.idempotencyKey}:customer`)))
+      : null;
     const intent = await this.call(() =>
       this.stripe.paymentIntents.create(
         {
@@ -88,9 +92,15 @@ export class StripePaymentProvider implements PaymentProvider {
           capture_method: input.hold ? "manual" : "automatic",
           description: input.description,
           metadata: input.metadata,
-          ...(input.hold ? { payment_method_options: { card_present: { request_extended_authorization: true, request_incremental_authorization_support: true } } } : {}),
+          ...(customer
+            ? {
+                customer: customer.id,
+                setup_future_usage: "off_session" as const,
+                payment_method_options: { card_present: { request_extended_authorization: true, request_incremental_authorization_support: true } },
+              }
+            : {}),
         },
-        this.on(accountId),
+        this.on(accountId, input.idempotencyKey),
       ),
     );
     await this.call(() => this.stripe.terminal.readers.processPaymentIntent(input.readerId, { payment_intent: intent.id }, this.on(accountId)));
@@ -103,8 +113,16 @@ export class StripePaymentProvider implements PaymentProvider {
   }
 
   async cancelTerminalPayment(accountId: string, readerId: string, intentId: string): Promise<void> {
+    // the reader may have nothing left to cancel; that is fine
     await this.call(() => this.stripe.terminal.readers.cancelAction(readerId, {}, this.on(accountId))).catch(() => undefined);
-    await this.call(() => this.stripe.paymentIntents.cancel(intentId, {}, this.on(accountId))).catch(() => undefined);
+    try {
+      await this.stripe.paymentIntents.cancel(intentId, {}, this.on(accountId));
+    } catch (err) {
+      // already paid or already cancelled: the caller reads the intent's real state next
+      if (err instanceof Stripe.errors.StripeError && err.code === "payment_intent_unexpected_state") return;
+      if (err instanceof Stripe.errors.StripeError) throw new ProviderError(err.message);
+      throw err;
+    }
   }
 
   async getIntent(accountId: string, intentId: string): Promise<IntentState> {
@@ -112,15 +130,15 @@ export class StripePaymentProvider implements PaymentProvider {
     return this.view(pi);
   }
 
-  async incrementHold(accountId: string, intentId: string, newAmount: number): Promise<IntentState> {
+  async incrementHold(accountId: string, intentId: string, newAmount: number, idempotencyKey: string): Promise<IntentState> {
     const current = await this.call(() => this.stripe.paymentIntents.retrieve(intentId, {}, this.on(accountId)));
-    const pi = await this.call(() => this.stripe.paymentIntents.incrementAuthorization(intentId, { amount: toMinor(newAmount, current.currency) }, this.on(accountId)));
+    const pi = await this.call(() => this.stripe.paymentIntents.incrementAuthorization(intentId, { amount: toMinor(newAmount, current.currency) }, this.on(accountId, idempotencyKey)));
     return this.getIntent(accountId, pi.id);
   }
 
-  async captureHold(accountId: string, intentId: string, amount: number): Promise<IntentState> {
+  async captureHold(accountId: string, intentId: string, amount: number, idempotencyKey: string): Promise<IntentState> {
     const current = await this.call(() => this.stripe.paymentIntents.retrieve(intentId, {}, this.on(accountId)));
-    await this.call(() => this.stripe.paymentIntents.capture(intentId, { amount_to_capture: toMinor(amount, current.currency) }, this.on(accountId)));
+    await this.call(() => this.stripe.paymentIntents.capture(intentId, { amount_to_capture: toMinor(amount, current.currency) }, this.on(accountId, idempotencyKey)));
     return this.getIntent(accountId, intentId);
   }
 
@@ -128,13 +146,17 @@ export class StripePaymentProvider implements PaymentProvider {
     await this.call(() => this.stripe.paymentIntents.cancel(intentId, {}, this.on(accountId)));
   }
 
-  async renewHold(accountId: string, input: { paymentMethodId: string; amount: number; currency: string; metadata: Record<string, string> }): Promise<IntentState> {
-    // merchant-initiated, off-session, with the card saved from the original hold (generated card of a card-present payment)
+  async holdSavedCard(
+    accountId: string,
+    input: { customerId: string; paymentMethodId: string; amount: number; currency: string; metadata: Record<string, string>; idempotencyKey: string },
+  ): Promise<IntentState> {
+    // merchant-initiated, off-session, with the card saved by the original hold (its generated card)
     const pi = await this.call(() =>
       this.stripe.paymentIntents.create(
         {
           amount: toMinor(input.amount, input.currency),
           currency: input.currency.toLowerCase(),
+          customer: input.customerId,
           payment_method: input.paymentMethodId,
           allowed_payment_method_types: ["card"],
           capture_method: "manual",
@@ -142,16 +164,16 @@ export class StripePaymentProvider implements PaymentProvider {
           off_session: true,
           metadata: input.metadata,
         },
-        this.on(accountId),
+        this.on(accountId, input.idempotencyKey),
       ),
     );
     return this.getIntent(accountId, pi.id);
   }
 
-  async refund(accountId: string, input: { intentId: string; amount: number; metadata: Record<string, string> }): Promise<RefundResult> {
+  async refund(accountId: string, input: { intentId: string; amount: number; metadata: Record<string, string>; idempotencyKey: string }): Promise<RefundResult> {
     const pi = await this.call(() => this.stripe.paymentIntents.retrieve(input.intentId, {}, this.on(accountId)));
     try {
-      const r = await this.stripe.refunds.create({ payment_intent: input.intentId, amount: toMinor(input.amount, pi.currency), metadata: input.metadata }, this.on(accountId));
+      const r = await this.stripe.refunds.create({ payment_intent: input.intentId, amount: toMinor(input.amount, pi.currency), metadata: input.metadata }, this.on(accountId, input.idempotencyKey));
       return { refundId: r.id, status: refundStatus(r.status), error: r.failure_reason ?? null };
     } catch (err) {
       if (err instanceof Stripe.errors.StripeError && err.code === "balance_insufficient") return { refundId: "", status: "insufficient_balance", error: err.message };
@@ -188,8 +210,8 @@ export class StripePaymentProvider implements PaymentProvider {
     const charge = typeof pi.latest_charge === "object" && pi.latest_charge ? pi.latest_charge : null;
     const present = charge?.payment_method_details?.card_present ?? null;
     const card = present ?? charge?.payment_method_details?.card ?? null;
-    const status: IntentStatus =
-      pi.status === "succeeded" ? "succeeded" : pi.status === "requires_capture" ? "authorised" : pi.status === "canceled" ? (pi.last_payment_error ? "failed" : "cancelled") : pi.last_payment_error ? "failed" : "waiting";
+    // a declined tap leaves the intent waiting for another card on the reader: still waiting, with the reason shown
+    const status: IntentStatus = pi.status === "succeeded" ? "succeeded" : pi.status === "requires_capture" ? "authorised" : pi.status === "canceled" ? (pi.last_payment_error ? "failed" : "cancelled") : "waiting";
     return {
       intentId: pi.id,
       status,
@@ -200,7 +222,9 @@ export class StripePaymentProvider implements PaymentProvider {
       brand: card?.brand ?? null,
       last4: card?.last4 ?? null,
       // the reusable card of a card-present payment is its generated card
-      paymentMethodId: present?.generated_card ?? (typeof pi.payment_method === "string" ? pi.payment_method : (pi.payment_method?.id ?? null)),
+      // only a generated card can be used again without the guest; a card-present method cannot
+      paymentMethodId: present ? (present.generated_card ?? null) : typeof pi.payment_method === "string" ? pi.payment_method : (pi.payment_method?.id ?? null),
+      customerId: typeof pi.customer === "string" ? pi.customer : (pi.customer?.id ?? null),
       captureBefore: card?.capture_before ? new Date(card.capture_before * 1000) : null,
       extended: (card as { extended_authorization?: { status?: string } } | null)?.extended_authorization?.status === "enabled",
       error: pi.last_payment_error?.message ?? null,

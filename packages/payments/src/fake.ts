@@ -22,8 +22,14 @@ export class FakePaymentProvider implements PaymentProvider {
   readonly readers = new Map<string, { accountId: string; label: string; pending: string | null }>();
   readonly intents = new Map<string, FakeIntent>();
   readonly refunds = new Map<string, RefundResult & { accountId: string }>();
+  /** Idempotency: a key seen before returns what it returned then. */
+  private readonly byKey = new Map<string, string>();
   /** Set to make refunds fail for lack of balance (provider debits the hotel's balance). */
   insufficientBalance = false;
+  /** Set to make holds on the saved card decline. */
+  declineSavedCard = false;
+  /** Set to make refunds time out without an answer (the refund may or may not exist). */
+  refundNoAnswer = false;
 
   async createAccount(input: { businessName: string }): Promise<{ accountId: string }> {
     const accountId = `acct_fake_${randomUUID().slice(0, 8)}`;
@@ -56,6 +62,9 @@ export class FakePaymentProvider implements PaymentProvider {
   }
 
   async startTerminalPayment(accountId: string, input: TerminalPaymentInput): Promise<{ intentId: string }> {
+    const known = this.byKey.get(input.idempotencyKey);
+    if (known) return { intentId: known };
+    this.revive(accountId, input.readerId);
     const reader = this.readers.get(input.readerId);
     if (!reader || reader.accountId !== accountId) throw new ProviderError("Reader not found");
     if (reader.pending) throw new ProviderError("The reader is busy with another payment");
@@ -73,16 +82,19 @@ export class FakePaymentProvider implements PaymentProvider {
       brand: null,
       last4: null,
       paymentMethodId: null,
+      customerId: null,
       captureBefore: null,
       extended: false,
       error: null,
       refunded: 0,
     });
     reader.pending = intentId;
+    this.byKey.set(input.idempotencyKey, intentId);
     return { intentId };
   }
 
   async simulateCard(accountId: string, readerId: string): Promise<void> {
+    this.revive(accountId, readerId);
     const reader = this.readers.get(readerId);
     if (!reader || reader.accountId !== accountId || !reader.pending) throw new ProviderError("Nothing is waiting on this reader");
     const intent = this.intents.get(reader.pending)!;
@@ -95,6 +107,7 @@ export class FakePaymentProvider implements PaymentProvider {
       brand: "visa",
       last4: "4242",
       paymentMethodId: `pm_fake_${randomUUID().slice(0, 8)}`,
+      customerId: intent.hold ? `cus_fake_${randomUUID().slice(0, 8)}` : null,
       ...(intent.hold ? { status: "authorised", capturable: intent.amount, captureBefore: new Date(Date.now() + 5 * 86_400_000) } : { status: "succeeded", received: intent.amount }),
     });
   }
@@ -111,6 +124,7 @@ export class FakePaymentProvider implements PaymentProvider {
   }
 
   async incrementHold(accountId: string, intentId: string, newAmount: number): Promise<IntentState> {
+    // a repeated request repeats the result: the new total is set, not added
     const i = this.intent(accountId, intentId);
     if (i.status !== "authorised") throw new ProviderError("The hold is not active");
     Object.assign(i, { amount: newAmount, capturable: newAmount });
@@ -119,6 +133,8 @@ export class FakePaymentProvider implements PaymentProvider {
 
   async captureHold(accountId: string, intentId: string, amount: number): Promise<IntentState> {
     const i = this.intent(accountId, intentId);
+    // a repeated capture returns the earlier result
+    if (i.status === "succeeded" && i.hold) return this.view(i);
     if (i.status !== "authorised") throw new ProviderError("The hold is not active");
     if (amount > i.capturable + 0.005) throw new ProviderError("Cannot capture more than held");
     Object.assign(i, { status: "succeeded", received: amount, capturable: 0 });
@@ -130,8 +146,12 @@ export class FakePaymentProvider implements PaymentProvider {
     if (i.status === "authorised" || i.status === "waiting") Object.assign(i, { status: "cancelled", capturable: 0 });
   }
 
-  async renewHold(accountId: string, input: { paymentMethodId: string; amount: number; currency: string }): Promise<IntentState> {
+  async holdSavedCard(accountId: string, input: { customerId: string; paymentMethodId: string; amount: number; currency: string; idempotencyKey: string }): Promise<IntentState> {
+    const known = this.byKey.get(input.idempotencyKey);
+    if (known) return this.view(this.intent(accountId, known));
+    if (this.declineSavedCard) throw new ProviderError("The card was declined");
     const intentId = `pi_fake_${randomUUID().slice(0, 12)}`;
+    this.byKey.set(input.idempotencyKey, intentId);
     const i: FakeIntent = {
       intentId,
       accountId,
@@ -145,6 +165,7 @@ export class FakePaymentProvider implements PaymentProvider {
       brand: "visa",
       last4: "4242",
       paymentMethodId: input.paymentMethodId,
+      customerId: input.customerId,
       captureBefore: new Date(Date.now() + 5 * 86_400_000),
       extended: false,
       error: null,
@@ -154,7 +175,13 @@ export class FakePaymentProvider implements PaymentProvider {
     return this.view(i);
   }
 
-  async refund(accountId: string, input: { intentId: string; amount: number }): Promise<RefundResult> {
+  async refund(accountId: string, input: { intentId: string; amount: number; idempotencyKey: string }): Promise<RefundResult> {
+    const known = this.byKey.get(input.idempotencyKey);
+    if (known) {
+      const r = this.refunds.get(known)!;
+      return { refundId: r.refundId, status: r.status, error: r.error };
+    }
+    if (this.refundNoAnswer) throw new Error("timeout");
     const i = this.intent(accountId, input.intentId);
     if (i.status !== "succeeded") throw new ProviderError("Only a received payment can be refunded; a hold is released instead");
     if (input.amount > i.received - i.refunded + 0.005) throw new ProviderError("Cannot refund more than was received");
@@ -162,6 +189,7 @@ export class FakePaymentProvider implements PaymentProvider {
     const result: RefundResult = this.insufficientBalance ? { refundId, status: "insufficient_balance", error: "Insufficient balance" } : { refundId, status: "succeeded", error: null };
     if (result.status !== "insufficient_balance") i.refunded += input.amount;
     this.refunds.set(refundId, { ...result, accountId });
+    this.byKey.set(input.idempotencyKey, refundId);
     return result;
   }
 
@@ -188,7 +216,19 @@ export class FakePaymentProvider implements PaymentProvider {
     }
   }
 
+  /**
+   * Development across restarts: the database still knows accounts and
+   * readers this in-memory fake made before; its own ids come back to life.
+   */
+  private revive(accountId: string, readerId?: string) {
+    if (accountId.startsWith("acct_fake_") && !this.accounts.has(accountId)) {
+      this.accounts.set(accountId, { businessName: "", chargesEnabled: true, detailsSubmitted: true, payoutsEnabled: true });
+    }
+    if (readerId?.startsWith("tmr_fake_") && !this.readers.has(readerId)) this.readers.set(readerId, { accountId, label: "", pending: null });
+  }
+
   private account(accountId: string) {
+    this.revive(accountId);
     const a = this.accounts.get(accountId);
     if (!a) throw new ProviderError("Payment account not found");
     return a;
@@ -201,7 +241,7 @@ export class FakePaymentProvider implements PaymentProvider {
   }
 
   private view(i: FakeIntent): IntentState {
-    const { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, captureBefore, extended, error } = i;
-    return { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, captureBefore, extended, error };
+    const { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, customerId, captureBefore, extended, error } = i;
+    return { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, customerId, captureBefore, extended, error };
   }
 }

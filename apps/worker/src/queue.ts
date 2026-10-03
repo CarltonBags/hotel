@@ -4,7 +4,7 @@ import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
 import { findTenantById } from "@hoteloftware/db";
-import { checkHolds } from "./payments";
+import { checkHolds, type ProviderProcessor } from "./payments";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 
 export const QUEUES = {
@@ -28,6 +28,8 @@ export interface QueueOptions {
   tenantCheckCron?: string | null;
   /** Webhook processors by source name; later tickets register theirs. */
   processors?: Record<string, TenantJobHandler<WebhookJobData>>;
+  /** Processors that call a provider: run without an open tenant transaction. */
+  providerProcessors?: Record<string, ProviderProcessor>;
   /** The payment provider, for the Card Hold check. */
   paymentProvider?: PaymentProvider;
 }
@@ -41,11 +43,18 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
   await boss.work<WebhookJobData>(QUEUES.webhook, { includeMetadata: true }, async (jobs) => {
     for (const job of jobs) {
       try {
-        const processor = options.processors?.[job.data.source];
-        await runTenantJob(pool, job.data, async (ctx) => {
-          if (processor) await processor(ctx);
-          else console.log(`[webhook] ${job.data.source} ${job.data.externalId} for ${ctx.tenant.slug}: no processor registered yet`);
-        });
+        const providerProcessor = options.providerProcessors?.[job.data.source];
+        if (providerProcessor) {
+          const tenant = await findTenantById(pool, job.data.tenantId);
+          if (!tenant) throw new Error(`Unknown tenant ${job.data.tenantId}`);
+          await providerProcessor({ tenant, data: job.data, pool });
+        } else {
+          const processor = options.processors?.[job.data.source];
+          await runTenantJob(pool, job.data, async (ctx) => {
+            if (processor) await processor(ctx);
+            else console.log(`[webhook] ${job.data.source} ${job.data.externalId} for ${ctx.tenant.slug}: no processor registered yet`);
+          });
+        }
         await markWebhook(pool, job.data.eventId, { ok: true });
       } catch (err) {
         // pg-boss retries; the stored event turns "failed" only once the last attempt is gone.

@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { onboardPaymentAccount, refreshPaymentAccount, registerTerminalReader, removeTerminalReader, setRefundLimit } from "@hoteloftware/db";
 import { paymentProvider } from "@hoteloftware/payments";
-import { authorize } from "@/lib/authorize";
+import { can } from "@hoteloftware/domain";
+import { authorize, ForbiddenError, accessibleProperties, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decimalOrNull, field, formAction, type FormState } from "@/lib/form";
@@ -15,12 +16,20 @@ function settingsUrl(slug: string, legalEntityId: string): string {
   return `${scheme}://${slug}.${env.appDomain}/settings/payments?account=${legalEntityId}`;
 }
 
+/** A Property Manager of one of the Legal Entity's properties (Owner and Tenant Admin everywhere) manages its payment account. */
+async function authorizeAccount(legalEntityId: string) {
+  const principal = await requirePrincipal();
+  const props = (await accessibleProperties()).filter((p) => p.legalEntityId === legalEntityId);
+  if (!props.some((p) => can(principal.actor, "manage_payment_settings", p.id))) throw new ForbiddenError("manage_payment_settings");
+  return principal;
+}
+
 /** Start or continue the provider's onboarding for a Legal Entity; the browser goes to the provider and comes back here. */
 export async function onboardAction(_prev: FormState, formData: FormData): Promise<FormState> {
   let link: string | undefined;
   const state = await formAction(async () => {
-    const { tenant, session } = await authorize("manage_payment_accounts");
     const legalEntityId = field(formData, "legalEntityId");
+    const { tenant, session } = await authorizeAccount(legalEntityId);
     const back = settingsUrl(tenant.slug, legalEntityId);
     link = await onboardPaymentAccount(pool(), tenant.schemaName, paymentProvider(), { tenantId: tenant.id, legalEntityId, email: session.user.email, returnUrl: back, refreshUrl: back }, session.user.id);
   });
@@ -30,8 +39,9 @@ export async function onboardAction(_prev: FormState, formData: FormData): Promi
 
 export async function refreshAccountAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
-    const { tenant } = await authorize("manage_payment_accounts");
-    await refreshPaymentAccount(pool(), tenant.schemaName, paymentProvider(), field(formData, "legalEntityId"));
+    const legalEntityId = field(formData, "legalEntityId");
+    const { tenant } = await authorizeAccount(legalEntityId);
+    await refreshPaymentAccount(pool(), tenant.schemaName, paymentProvider(), legalEntityId);
     revalidatePath("/settings/payments");
     return { ok: true, message: "Status updated." };
   });

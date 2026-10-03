@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { TENDERS, formatCurrency, type Language } from "@hoteloftware/domain";
+import { DESK_TENDERS, captureAmount, formatCurrency, type Language } from "@hoteloftware/domain";
 import type { CardHold, Payment } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 import { useFormAction } from "../use-form-action";
 import {
   cancelPaymentAction,
   captureHoldAction,
+  coverBalanceAction,
   holdStatusAction,
   incrementHoldAction,
   paymentStatusAction,
@@ -215,7 +216,7 @@ export function PaymentsPanel({
           <label className="grid gap-1">
             <span className="text-ink-80">{m["pay.tender"]}</span>
             <select value={tender} onChange={(e) => setTender(e.target.value)} className={input}>
-              {TENDERS.map((t) => (
+              {DESK_TENDERS.map((t) => (
                 <option key={t} value={t}>
                   {m[`pay.tender.${t}`]}
                 </option>
@@ -316,7 +317,7 @@ export function CardHoldsPanel({ holds, balance, canTake, ...c }: Common & { hol
                   <input
                     inputMode="decimal"
                     value={capture[h.id] ?? ""}
-                    placeholder={String(Math.max(0, Math.min(h.amount, balance)))}
+                    placeholder={String(captureAmount(h.amount, balance).capture)}
                     onChange={(e) => setCapture({ ...capture, [h.id]: e.target.value })}
                     className={`${input} w-24`}
                   />
@@ -324,10 +325,13 @@ export function CardHoldsPanel({ holds, balance, canTake, ...c }: Common & { hol
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={() => run(() => captureHoldAction(reservationId, h.id, capture[h.id] ? Number(capture[h.id]!.replace(",", ".")) : Math.max(0, Math.min(h.amount, balance))))}
+                  onClick={() => run(() => captureHoldAction(reservationId, h.id, capture[h.id] ? Number(capture[h.id]!.replace(",", ".")) : null))}
                   className={`${button} bg-accent text-white`}
                 >
                   {m["hold.capture"]}
+                </button>
+                <button type="button" disabled={pending} onClick={() => run(() => coverBalanceAction(reservationId, h.id))} className={secondary} title={m["hold.coverHelp"]}>
+                  {m["hold.cover"]}
                 </button>
                 <button type="button" disabled={pending} onClick={() => run(() => releaseHoldAction(reservationId, h.id))} className={secondary}>
                   {m["hold.release"]}

@@ -16,6 +16,8 @@ export function paymentProvider(env: NodeJS.ProcessEnv = process.env): PaymentPr
   if (g.__hsPaymentProvider) return g.__hsPaymentProvider;
   const key = env.STRIPE_SECRET_KEY;
   if (!key && env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is not set");
+  // without the webhook secret every Stripe event would be refused silently: refuse to start instead
+  if (key && !env.STRIPE_WEBHOOK_SECRET && env.NODE_ENV === "production") throw new Error("STRIPE_WEBHOOK_SECRET is not set");
   g.__hsPaymentProvider = key ? new StripePaymentProvider(key, env.STRIPE_WEBHOOK_SECRET ?? null) : new FakePaymentProvider();
   return g.__hsPaymentProvider;
 }

@@ -222,6 +222,8 @@ export {
 export {
   ApprovalRequired,
   cancelPendingPayment,
+  coverBalanceWithHold,
+  retryOpenRefunds,
   captureCardHold,
   incrementCardHold,
   listCardHolds,

@@ -5,6 +5,7 @@ import { can } from "@hoteloftware/domain";
 import {
   cancelPendingPayment,
   captureCardHold,
+  coverBalanceWithHold,
   incrementCardHold,
   listCardHolds,
   loadFolios,
@@ -86,8 +87,9 @@ export async function cancelPaymentAction(reservationId: string, paymentId: stri
   return formAction(async () => {
     const { schema, tenantId, reservation } = await reservationScope(reservationId, "take_payments");
     await ownPayment(schema, reservation.id, paymentId);
-    await cancelPendingPayment(pool(), schema, paymentProvider(), String(paymentId));
-    return done(tenantId, reservation, "Cancelled.");
+    const p = await cancelPendingPayment(pool(), schema, paymentProvider(), String(paymentId));
+    // the card may have been presented just before: then it was paid, not cancelled
+    return done(tenantId, reservation, p.status === "succeeded" ? "The card had already been presented: the payment was received." : "Cancelled.");
   });
 }
 
@@ -142,27 +144,38 @@ export async function holdStatusAction(reservationId: string, holdId: string): P
 
 export async function incrementHoldAction(reservationId: string, holdId: string, increment: number): Promise<FormState> {
   return formAction(async () => {
-    const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "take_payments");
+    const { schema, tenantId, reservation } = await reservationScope(reservationId, "take_payments");
     await ownHold(schema, reservation.id, holdId);
-    await incrementCardHold(pool(), schema, paymentProvider(), { holdId: String(holdId), increment: Number(increment) }, userId);
+    await incrementCardHold(pool(), schema, paymentProvider(), { holdId: String(holdId), increment: Number(increment) });
     return done(tenantId, reservation, "Hold raised.");
   });
 }
 
-export async function captureHoldAction(reservationId: string, holdId: string, amount: number): Promise<FormState> {
+/** Without an amount: what the guest owes, never more than held. */
+export async function captureHoldAction(reservationId: string, holdId: string, amount: number | null): Promise<FormState> {
   return formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "take_payments");
     await ownHold(schema, reservation.id, holdId);
-    await captureCardHold(pool(), schema, paymentProvider(), { holdId: String(holdId), amount: Number(amount) }, userId);
+    await captureCardHold(pool(), schema, paymentProvider(), { holdId: String(holdId), amount: typeof amount === "number" ? amount : undefined }, userId);
     return done(tenantId, reservation, "Captured.");
   });
 }
 
 export async function releaseHoldAction(reservationId: string, holdId: string): Promise<FormState> {
   return formAction(async () => {
+    const { schema, tenantId, reservation } = await reservationScope(reservationId, "take_payments");
+    await ownHold(schema, reservation.id, holdId);
+    await releaseCardHold(pool(), schema, paymentProvider(), String(holdId));
+    return done(tenantId, reservation, "Hold released.");
+  });
+}
+
+/** Incidentals in one batch: raise the hold to what the guest owes (a fresh hold on the saved card beyond its limits). */
+export async function coverBalanceAction(reservationId: string, holdId: string): Promise<FormState> {
+  return formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "take_payments");
     await ownHold(schema, reservation.id, holdId);
-    await releaseCardHold(pool(), schema, paymentProvider(), String(holdId), userId);
-    return done(tenantId, reservation, "Hold released.");
+    const r = await coverBalanceWithHold(pool(), schema, paymentProvider(), String(holdId), userId);
+    return done(tenantId, reservation, r.raisedBy === 0 ? "The holds already cover the balance." : r.newHoldId ? "A new hold for the rest was placed on the saved card." : "Hold raised to the balance.");
   });
 }
