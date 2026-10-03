@@ -51,7 +51,7 @@ describe("invoices and check-out", () => {
     await resetTestDatabase(pool);
     await migrateControl(pool, controlMigrations());
     tenant = await provisionTenant(pool, { slug: "alpha", name: "Alpha" }, tenantMigrations());
-    le = (await createLegalEntity(pool, s(), { name: "Alpha GmbH", country: "DE" })).id;
+    le = (await createLegalEntity(pool, s(), { name: "Alpha GmbH", country: "DE", addressLine1: "Unter den Linden 1", postalCode: "10117", city: "Berlin", vatId: "DE123456789", taxNumber: "27/123/45678" })).id;
     berlin = (await createProperty(pool, s(), { name: "Berlin", legalEntityId: le, country: "DE", timeZone: "Europe/Berlin", currency: "EUR" })).id;
     dbl = (await createRoomType(pool, s(), { propertyId: berlin, code: "DBL", name: "Double", maxOccupancy: 2, maxAdults: 2, bedPlaces: 2, extraBeds: 0 })).id;
     rooms = await createRooms(pool, s(), { propertyId: berlin, roomTypeId: dbl, numbers: Array.from({ length: 30 }, (_, i) => String(101 + i)) });
@@ -131,6 +131,25 @@ describe("invoices and check-out", () => {
     const company = (await listInvoices(pool, s(), res)).find((i) => i.billToName === "Acme AG")!;
     expect(company).toMatchObject({ receivable: true, due: 96 });
     expect((await invoiceDocument(pool, s(), company.id)).dueDate).toBe(addDays(today, 30));
+  });
+
+  it("on account is no money received: the invoice stays due as a Receivable, yet the folio is settled for check-out", async () => {
+    const res = await book(today, day(1));
+    await assignRoom(pool, s(), res, fd, rooms[2]!.id);
+    await checkIn(pool, s(), res, fd);
+    await takePayment(pool, s(), provider, { reservationId: res, tender: "on_account", amount: 120 }, fd);
+    await checkOut(pool, s(), res, fd, { override: false });
+    expect((await listInvoices(pool, s(), res)).find((i) => i.kind === "final")).toMatchObject({ due: 120, receivable: true });
+  });
+
+  it("the yearly counter only moves forward, and a first number set this year is kept", async () => {
+    const other = (await createLegalEntity(pool, s(), { name: "Beta GmbH", country: "DE", addressLine1: "X 1", postalCode: "10115", city: "Berlin", vatId: "DE999999998" })).id;
+    await setInvoiceNumberRange(pool, s(), other, "final", "B-{YYYY}-{NNNN}", 120);
+    const year = Number(today.slice(0, 4));
+    // a property still in the old year issues after the new year has started elsewhere: no restart, no duplicate
+    await pool.query(`update ${s()}.invoice_number_ranges set counter_year = $2 where legal_entity_id = $1`, [other, year + 1]);
+    const { rows } = await pool.query(`select next_value, counter_year from ${s()}.invoice_number_ranges where legal_entity_id = $1`, [other]);
+    expect(rows[0]).toMatchObject({ next_value: 120 });
   });
 
   it("parallel invoices get consecutive numbers without gap or duplicate; a refused check-out leaves no gap", async () => {

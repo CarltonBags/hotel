@@ -28,6 +28,7 @@ export const LABELS = {
     taxNumber: "Steuernummer",
     bank: "Bankverbindung",
     depositLine: "Anzahlung für den Aufenthalt",
+    earlyDepartureFee: "Gebühr für vorzeitige Abreise",
     page: "Seite",
   },
   en: {
@@ -58,6 +59,7 @@ export const LABELS = {
     taxNumber: "Tax number",
     bank: "Bank details",
     depositLine: "Deposit for the stay",
+    earlyDepartureFee: "Early departure fee",
     page: "Page",
   },
 } as const;

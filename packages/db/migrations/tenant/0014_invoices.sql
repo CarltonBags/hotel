@@ -5,6 +5,9 @@ alter table legal_entities add column tax_number text not null default '';
 alter table legal_entities add column invoice_email text not null default '';
 alter table legal_entities add column invoice_phone text not null default '';
 
+-- a public-sector buyer's routing id (Leitweg-ID), the XRechnung buyer reference
+alter table companies add column buyer_reference text not null default '';
+
 -- one gap-free number range per Legal Entity; deposit and cancellation invoices use their own only when set up
 create table invoice_number_ranges (
   legal_entity_id uuid not null references legal_entities(id),
@@ -41,7 +44,10 @@ create table invoices (
   -- a deposit invoice netted on this final invoice
   netted_by uuid references invoices(id),
   issued_at timestamptz not null default clock_timestamp(),
-  issued_by text not null
+  issued_by text not null,
+  -- the files as first rendered, kept so the invoice is handed out identically for good (GoBD)
+  pdf bytea,
+  xml text
 );
 create index invoices_reservation_idx on invoices(reservation_id);
 create index invoices_folio_idx on invoices(folio_id);

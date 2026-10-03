@@ -1,11 +1,14 @@
 import { sql } from "drizzle-orm";
-import { bigserial, boolean, char, check, date, foreignKey, index, pgSequence, integer, jsonb, numeric, pgTable, primaryKey, text, time, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { bigserial, customType, boolean, char, check, date, foreignKey, index, pgSequence, integer, jsonb, numeric, pgTable, primaryKey, text, time, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 /**
  * Tenant tables are declared UNQUALIFIED (pgTable, no schema): the same
  * definition serves every tenant through the transaction's search path.
  * Never use pgSchema(...) here. Mirrors migrations/tenant/*.sql.
  */
+/** Binary columns (issued invoice files). */
+const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
+
 export const tenantSettings = pgTable("tenant_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
@@ -909,6 +912,8 @@ export const invoices = pgTable(
     nettedBy: uuid("netted_by").references((): AnyPgColumn => invoices.id),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     issuedBy: text("issued_by").notNull(),
+    pdf: bytea("pdf"),
+    xml: text("xml"),
   },
   (t) => [
     unique("invoices_number_key").on(t.legalEntityId, t.number),

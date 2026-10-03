@@ -36,22 +36,37 @@ export interface TaxPart {
   vat: number;
 }
 
-/** Charges of the same description, unit price and Tax Code become one line spanning their Service Dates. */
+const nextDay = (d: string) => new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * Charges of the same description, unit price and Tax Code on consecutive
+ * Service Dates become one line spanning them; a gap starts a new line, so
+ * a period never claims a day without the service.
+ */
 export function invoiceLines(charges: InvoiceCharge[]): InvoiceLine[] {
-  const lines = new Map<string, InvoiceLine>();
-  for (const c of charges) {
+  const sorted = [...charges].sort((a, b) => a.serviceDate.localeCompare(b.serviceDate));
+  const open = new Map<string, InvoiceLine>();
+  const lines: InvoiceLine[] = [];
+  for (const c of sorted) {
     const key = `${c.description}|${c.taxCode}|${c.taxRate}|${roundMoney(c.unitPrice)}`;
-    const l = lines.get(key);
-    if (l) {
+    const l = open.get(key);
+    if (l && (c.serviceDate === l.periodEnd || c.serviceDate === nextDay(l.periodEnd))) {
       l.quantity = roundMoney(l.quantity + c.quantity);
       l.gross = roundMoney(l.gross + c.amount);
-      if (c.serviceDate < l.periodStart) l.periodStart = c.serviceDate;
-      if (c.serviceDate > l.periodEnd) l.periodEnd = c.serviceDate;
+      l.periodEnd = c.serviceDate;
     } else {
-      lines.set(key, { description: c.description, taxCode: c.taxCode, rate: c.taxRate, quantity: c.quantity, unitGross: roundMoney(c.unitPrice), gross: roundMoney(c.amount), periodStart: c.serviceDate, periodEnd: c.serviceDate });
+      const line = { description: c.description, taxCode: c.taxCode, rate: c.taxRate, quantity: c.quantity, unitGross: roundMoney(c.unitPrice), gross: roundMoney(c.amount), periodStart: c.serviceDate, periodEnd: c.serviceDate };
+      open.set(key, line);
+      lines.push(line);
     }
   }
-  return [...lines.values()];
+  // the order Charges were first posted in: the stay before extras
+  const firstSeen = new Map<string, number>();
+  charges.forEach((c, i) => {
+    const k = `${c.description}|${c.taxCode}|${c.taxRate}|${roundMoney(c.unitPrice)}`;
+    if (!firstSeen.has(k)) firstSeen.set(k, i);
+  });
+  return lines.sort((a, b) => firstSeen.get(`${a.description}|${a.taxCode}|${a.rate}|${a.unitGross}`)! - firstSeen.get(`${b.description}|${b.taxCode}|${b.rate}|${b.unitGross}`)! || a.periodStart.localeCompare(b.periodStart));
 }
 
 /** Split an amount over weights so the parts are whole cents and add up exactly (largest remainder). */
@@ -138,9 +153,14 @@ export function allocateDeposit(amount: number, stay: { taxCode: string; rate: n
 
 const COUNTER = /\{(N+)\}/;
 
-/** A number format needs exactly one counter ({N}, {NNNN}, ...); {YYYY}, {YY} and {MM} are the issue date's. */
+/**
+ * A number format needs exactly one counter ({N}, {NNNN}, ...); {YYYY}, {YY}
+ * and {MM} are the issue date's. Plain letters, digits and - _ / . only, so
+ * numbers travel safely in file names and e-invoices.
+ */
 export function isInvoiceNumberFormat(format: string): boolean {
-  return (format.match(/\{N+\}/g) ?? []).length === 1 && format.length <= 40 && !/[\\/]{2}/.test(format);
+  const literal = format.replace(/\{(N+|YYYY|YY|MM)\}/g, "");
+  return (format.match(/\{N+\}/g) ?? []).length === 1 && format.length <= 40 && /^[A-Za-z0-9._/-]*$/.test(literal);
 }
 
 export function formatInvoiceNumber(format: string, counter: number, issueDate: string): string {

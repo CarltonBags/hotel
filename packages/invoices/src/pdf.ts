@@ -36,6 +36,12 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
   pdf.setTitle(`${doc.kind === "deposit" ? L.deposit : L.final} ${doc.number}`);
   pdf.setAuthor(doc.seller.name);
   pdf.setLanguage(doc.language === "de" ? "de-DE" : "en-GB");
+  // fixed dates: the same invoice renders to the same document
+  const issued = new Date(`${doc.issueDate}T12:00:00Z`);
+  pdf.setCreationDate(issued);
+  pdf.setModificationDate(issued);
+  pdf.setProducer("Hoteloftware");
+  pdf.setCreator("Hoteloftware");
 
   let page: PDFPage = pdf.addPage([A4.w, A4.h]);
   let y = A4.h - M;
@@ -105,14 +111,30 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
   y -= 6;
   line();
   y -= 12;
+  // a long description wraps within its column
+  const wrap = (s: string, width: number, size: number): string[] => {
+    const out: string[] = [];
+    let cur = "";
+    for (const word of s.split(/\s+/)) {
+      const next = cur ? `${cur} ${word}` : word;
+      if (font.widthOfTextAtSize(next, size) > width && cur) {
+        out.push(cur);
+        cur = word;
+      } else cur = next;
+    }
+    if (cur) out.push(cur);
+    return out;
+  };
   for (const l of doc.totals.lines) {
-    newPageIfNeeded(28);
+    const desc = wrap(l.description, col.tax - col.item - 40, 9);
+    newPageIfNeeded(16 + desc.length * 11);
     text(num(l.quantity), col.qty);
-    text(l.description, col.item);
+    desc.slice(1).forEach((d, i) => page.drawText(d, { x: col.item, y: y - (i + 1) * 11, size: 9, font, color: ink }));
+    text(desc[0] ?? "", col.item);
     right(`${num(l.rate)} %`, col.tax + 30);
     right(money(l.unitGross), col.unit);
     right(money(l.gross), col.amount);
-    y -= 11;
+    y -= 11 * desc.length;
     text(l.periodStart === l.periodEnd ? day(l.periodStart) : `${day(l.periodStart)} – ${day(l.periodEnd)}`, col.item, 7.5, grey);
     y -= 14;
   }

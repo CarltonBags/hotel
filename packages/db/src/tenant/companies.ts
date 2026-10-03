@@ -15,6 +15,8 @@ export interface CompanyData {
   billingEmail: string | null;
   phone: string | null;
   contactPerson: string;
+  /** A public-sector buyer's Leitweg-ID, the XRechnung buyer reference. */
+  buyerReference: string;
   /** Days until an invoice is due. */
   paymentTermsDays: number;
   /** Invoices may be issued unpaid and become Receivables. */
@@ -40,6 +42,7 @@ const EMPTY: CompanyData = {
   billingEmail: null,
   phone: null,
   contactPerson: "",
+  buyerReference: "",
   paymentTermsDays: 14,
   onAccount: false,
   routing: [],
@@ -58,6 +61,7 @@ const COLUMNS: Record<keyof CompanyData, string> = {
   billingEmail: "billing_email",
   phone: "phone",
   contactPerson: "contact_person",
+  buyerReference: "buyer_reference",
   paymentTermsDays: "payment_terms_days",
   onAccount: "on_account",
   routing: "routing",
@@ -101,6 +105,7 @@ function clean(d: CompanyData): CompanyData {
     billingEmail,
     phone: opt(d.phone),
     contactPerson: d.contactPerson.trim(),
+    buyerReference: (d.buyerReference ?? "").trim().slice(0, 50),
     routing: [...new Set(d.routing)],
     notes: d.notes.trim(),
   };

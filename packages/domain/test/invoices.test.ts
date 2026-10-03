@@ -19,6 +19,18 @@ describe("invoices", () => {
     ]);
   });
 
+  it("nights with a gap become two lines, so no period claims a day without the service", () => {
+    const gap = invoiceLines([
+      { description: "Parking", serviceDate: "2026-10-02", amount: 10, unitPrice: 10, quantity: 1, taxCode: "STD", taxRate: 19 },
+      { description: "Parking", serviceDate: "2026-10-04", amount: 10, unitPrice: 10, quantity: 1, taxCode: "STD", taxRate: 19 },
+      { description: "Parking", serviceDate: "2026-10-05", amount: 10, unitPrice: 10, quantity: 1, taxCode: "STD", taxRate: 19 },
+    ]);
+    expect(gap.map((l) => [l.periodStart, l.periodEnd, l.quantity])).toEqual([
+      ["2026-10-02", "2026-10-02", 1],
+      ["2026-10-04", "2026-10-05", 2],
+    ]);
+  });
+
   it("splits gross once per Tax Code and rate; line nets add up to each rate's net exactly", () => {
     const lines = invoiceLines([...charges, { description: "Wasser", serviceDate: "2026-10-03", amount: 3.33, unitPrice: 3.33, quantity: 1, taxCode: "STD", taxRate: 19 }]);
     const t = invoiceTotals(lines);
@@ -60,5 +72,8 @@ describe("invoices", () => {
     expect(formatInvoiceNumber("{YY}{MM}/{N}", 7, "2026-10-03")).toBe("2610/7");
     expect(isInvoiceNumberFormat("RE-{YYYY}")).toBe(false);
     expect(isInvoiceNumberFormat("RE-{NNNN}")).toBe(true);
+    // only letters, digits and - _ / . besides the placeholders
+    expect(isInvoiceNumberFormat("RÉ-{NNNN}")).toBe(false);
+    expect(isInvoiceNumberFormat('R"E-{NNNN}')).toBe(false);
   });
 });

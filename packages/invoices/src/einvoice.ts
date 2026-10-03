@@ -26,7 +26,8 @@ function seller(p: Party) {
       "cac:PostalAddress": address(p),
       ...(schemes?.length ? { "cac:PartyTaxScheme": schemes } : {}),
       "cac:PartyLegalEntity": { "cbc:RegistrationName": p.name },
-      "cac:Contact": { "cbc:Name": p.name, "cbc:Telephone": p.phone || "-", "cbc:ElectronicMail": p.email || "-" },
+      // only real contact data; XRechnung, which requires it, refuses without
+      ...(p.email || p.phone ? { "cac:Contact": { "cbc:Name": p.name, ...(p.phone ? { "cbc:Telephone": p.phone } : {}), ...(p.email ? { "cbc:ElectronicMail": p.email } : {}) } } : {}),
     },
   };
 }
@@ -64,7 +65,12 @@ export function toEn16931(doc: InvoiceDocument): Invoice {
     // the net unit price follows from the line's net share; four decimals keep quantity × price close to the line
     "cac:Price": { "cbc:PriceAmount": (l.net / l.quantity).toFixed(4), "cbc:PriceAmount@currencyID": cur },
   }));
-  const paidInAdvance = t.depositsGross + t.paid;
+  const paidInAdvance = Math.round((t.depositsGross + t.paid) * 100) / 100;
+  // EN16931 computes VAT per rate from the net (BR-S-09); prices here are gross, so the cent it may differ by is the rounding amount
+  const rates = mergeRates(t.byTax).map((x) => ({ ...x, vat: Math.round(((x.net * x.rate) / 100) * 100) / 100 }));
+  const vat = Math.round(rates.reduce((s, x) => s + x.vat, 0) * 100) / 100;
+  const inclusive = Math.round((t.net + vat) * 100) / 100;
+  const rounding = Math.round((t.gross - inclusive) * 100) / 100;
   return {
     "ubl:Invoice": {
       "cbc:CustomizationID": "urn:cen.eu:en16931:2017",
@@ -96,9 +102,9 @@ export function toEn16931(doc: InvoiceDocument): Invoice {
         : {}),
       "cac:TaxTotal": [
         {
-          "cbc:TaxAmount": amount(t.vat),
+          "cbc:TaxAmount": amount(vat),
           "cbc:TaxAmount@currencyID": cur,
-          "cac:TaxSubtotal": mergeRates(t.byTax).map((x) => ({
+          "cac:TaxSubtotal": rates.map((x) => ({
             "cbc:TaxableAmount": amount(x.net),
             "cbc:TaxableAmount@currencyID": cur,
             "cbc:TaxAmount": amount(x.vat),
@@ -112,9 +118,10 @@ export function toEn16931(doc: InvoiceDocument): Invoice {
         "cbc:LineExtensionAmount@currencyID": cur,
         "cbc:TaxExclusiveAmount": amount(t.net),
         "cbc:TaxExclusiveAmount@currencyID": cur,
-        "cbc:TaxInclusiveAmount": amount(t.gross),
+        "cbc:TaxInclusiveAmount": amount(inclusive),
         "cbc:TaxInclusiveAmount@currencyID": cur,
         ...(paidInAdvance ? { "cbc:PrepaidAmount": amount(paidInAdvance), "cbc:PrepaidAmount@currencyID": cur } : {}),
+        ...(rounding ? { "cbc:PayableRoundingAmount": amount(rounding), "cbc:PayableRoundingAmount@currencyID": cur } : {}),
         "cbc:PayableAmount": amount(t.due),
         "cbc:PayableAmount@currencyID": cur,
       },
@@ -147,8 +154,9 @@ export async function facturX(doc: InvoiceDocument, visualPdf: Uint8Array): Prom
   return typeof out === "string" ? new TextEncoder().encode(out) : out;
 }
 
-/** XRechnung (CII) XML for public-sector buyers, on request. */
+/** XRechnung (CII) XML for public-sector buyers, on request; it needs the seller's contact (BR-DE-2). */
 export async function xrechnung(doc: InvoiceDocument): Promise<string> {
+  if (!doc.seller.email || !doc.seller.phone) throw new Error("XRechnung needs the Legal Entity's invoice email and phone (Settings → Legal Entities)");
   const out = await new InvoiceService(quiet).generate(toEn16931(doc), { format: "XRechnung-CII", lang: doc.language === "de" ? "de-de" : "en-gb" });
   return typeof out === "string" ? out : new TextDecoder().decode(out);
 }

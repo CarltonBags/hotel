@@ -259,6 +259,8 @@ export {
   DEFAULT_FORMATS,
   checkOut,
   invoiceDocument,
+  invoiceFiles,
+  keepInvoiceFile,
   issueDepositInvoiceIfDue,
   issueInvoice,
   listInvoiceNumberRanges,

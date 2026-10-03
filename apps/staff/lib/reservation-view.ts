@@ -19,7 +19,7 @@ import {
   type Guest,
   type ReservationDetail,
 } from "@hoteloftware/db";
-import type { Messages } from "@/i18n/messages";
+import { fill, type Messages } from "@/i18n/messages";
 import { paymentProvider } from "@hoteloftware/payments";
 import { requireAllowed, requirePrincipal } from "./authorize";
 import { pool } from "./db";
@@ -107,7 +107,7 @@ export async function reservationView(id: string, options: { propertyId?: string
     /** Folios with Charges not invoiced yet. */
     openFolios: folios.folios
       .filter((f) => f.charges.some((c) => !c.voided && !c.invoiceId))
-      .map((f) => ({ id: f.id, label: m["folio.label"].replace("{n}", String(f.number)).replace("{name}", f.billToName) })),
+      .map((f) => ({ id: f.id, label: fill(m["folio.label"], { n: String(f.number), name: f.billToName }) })),
     /** A checked-in guest may be checked out here. */
     canCheckOut: r.status === "checked_in" && rights.checkIn,
     /** Payments and Card Holds: the panels' shared props. */

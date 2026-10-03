@@ -10,7 +10,8 @@ import {
   type InvoiceCharge,
   type TaxPart,
 } from "@hoteloftware/domain";
-import type { InvoiceDocument, Party } from "@hoteloftware/invoices";
+import type { InvoiceDocument, Party } from "@hoteloftware/invoices/document";
+import { LABELS } from "@hoteloftware/invoices/labels";
 import { isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
@@ -55,9 +56,13 @@ export async function setInvoiceNumberRange(pool: Pool, schema: string, legalEnt
     const cur = (await tx.query<{ next_value: number }>("select next_value from invoice_number_ranges where legal_entity_id = $1 and kind = $2 for update", [legalEntityId, kind])).rows[0];
     if (cur) {
       if (startAt !== undefined && startAt < cur.next_value) throw new Error(`Numbers up to ${cur.next_value - 1} are used; the counter cannot go back`);
-      await tx.query("update invoice_number_ranges set format = $3, next_value = greatest(next_value, $4) where legal_entity_id = $1 and kind = $2", [legalEntityId, kind, format, startAt ?? 1]);
+      // a first number set this year is this year's: no restart at 1 on the next issue
+      await tx.query(
+        "update invoice_number_ranges set format = $3, next_value = greatest(next_value, $4), counter_year = case when $5::boolean then extract(year from now())::int else counter_year end where legal_entity_id = $1 and kind = $2",
+        [legalEntityId, kind, format, startAt ?? 1, startAt !== undefined],
+      );
     } else {
-      await tx.query("insert into invoice_number_ranges (legal_entity_id, kind, format, next_value) values ($1, $2, $3, $4)", [legalEntityId, kind, format, startAt ?? 1]);
+      await tx.query("insert into invoice_number_ranges (legal_entity_id, kind, format, next_value, counter_year) values ($1, $2, $3, $4, extract(year from now())::int)", [legalEntityId, kind, format, startAt ?? 1]);
     }
   });
 }
@@ -81,8 +86,10 @@ async function nextNumber(tx: PoolClient, legalEntityId: string, kind: RangeKind
   }
   const year = Number(issueDate.slice(0, 4));
   const yearly = /\{YY(YY)?\}/.test(range.format);
-  const counter = yearly && range.counter_year !== null && range.counter_year !== year ? 1 : range.next_value;
-  await tx.query("update invoice_number_ranges set next_value = $3, counter_year = $4 where legal_entity_id = $1 and kind = $2", [legalEntityId, range.kind, counter + 1, year]);
+  // the year only moves forward: a property still in the old year (another time zone) keeps counting, never restarts at 1 again
+  const newYear = yearly && range.counter_year !== null && year > range.counter_year;
+  const counter = newYear ? 1 : range.next_value;
+  await tx.query("update invoice_number_ranges set next_value = $3, counter_year = greatest(coalesce(counter_year, $4), $4) where legal_entity_id = $1 and kind = $2", [legalEntityId, range.kind, counter + 1, year]);
   return formatInvoiceNumber(range.format, counter, issueDate);
 }
 
@@ -99,11 +106,12 @@ interface Context {
   departure: string;
   status: string;
   country: string;
+  timeZone: string;
 }
 
 async function contextOf(tx: PoolClient, reservationId: string): Promise<Context> {
-  const { rows } = await tx.query<{ id: string; property_id: string; legal_entity_id: string; currency: string; today: string; confirmation_number: string; arrival: string; departure: string; status: string; country: string }>(
-    `select r.id, r.property_id, p.legal_entity_id, p.currency, to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today, b.confirmation_number,
+  const { rows } = await tx.query<{ id: string; property_id: string; legal_entity_id: string; currency: string; today: string; confirmation_number: string; arrival: string; departure: string; status: string; country: string; time_zone: string }>(
+    `select r.id, r.property_id, p.legal_entity_id, p.currency, p.time_zone, to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today, b.confirmation_number,
        to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.status, p.country
      from reservations r join properties p on p.id = r.property_id join bookings b on b.id = r.booking_id where r.id = $1`,
     [reservationId],
@@ -121,6 +129,7 @@ async function contextOf(tx: PoolClient, reservationId: string): Promise<Context
     departure: r.departure,
     status: r.status,
     country: r.country,
+    timeZone: r.time_zone,
   };
 }
 
@@ -129,6 +138,9 @@ async function sellerOf(tx: PoolClient, legalEntityId: string): Promise<InvoiceD
     "select name, address_line1, address_line2, postal_code, city, country, vat_id, tax_number, invoice_email, invoice_phone, iban, bic, account_holder from legal_entities where id = $1",
     [legalEntityId],
   )).rows[0]!;
+  // UStG §14(4): the issuer's full address and its VAT ID or tax number
+  if (!l.vat_id && !l.tax_number) throw new Error("Invoices need the Legal Entity's VAT ID or tax number (Settings → Legal Entities)");
+  if (!l.address_line1 || !l.postal_code || !l.city) throw new Error("Invoices need the Legal Entity's full address (Settings → Legal Entities)");
   return {
     name: l.name,
     addressLine1: l.address_line1,
@@ -153,6 +165,8 @@ interface BillTo {
   termsDays: number;
   onAccount: boolean;
   isCompany: boolean;
+  /** A public-sector buyer's Leitweg-ID: the e-invoice's buyer reference. */
+  reference: string | null;
 }
 
 const GERMAN = new Set(["DE", "AT", "CH", "LI"]);
@@ -160,8 +174,8 @@ const GERMAN = new Set(["DE", "AT", "CH", "LI"]);
 async function billToOf(tx: PoolClient, folioId: string, propertyCountry: string): Promise<BillTo> {
   const f = (await tx.query<{ guest_id: string | null; company_id: string | null }>("select bill_to_guest_id as guest_id, bill_to_company_id as company_id from folios where id = $1", [folioId])).rows[0]!;
   if (f.company_id) {
-    const c = (await tx.query<{ name: string; address_line1: string; address_line2: string; postal_code: string; city: string; country: string | null; vat_id: string | null; payment_terms_days: number; on_account: boolean }>(
-      "select name, address_line1, address_line2, postal_code, city, country, vat_id, payment_terms_days, on_account from companies where id = $1",
+    const c = (await tx.query<{ name: string; address_line1: string; address_line2: string; postal_code: string; city: string; country: string | null; vat_id: string | null; payment_terms_days: number; on_account: boolean; buyer_reference: string }>(
+      "select name, address_line1, address_line2, postal_code, city, country, vat_id, payment_terms_days, on_account, buyer_reference from companies where id = $1",
       [f.company_id],
     )).rows[0]!;
     const country = c.country?.trim() || propertyCountry;
@@ -171,6 +185,7 @@ async function billToOf(tx: PoolClient, folioId: string, propertyCountry: string
       termsDays: c.payment_terms_days,
       onAccount: c.on_account,
       isCompany: true,
+      reference: c.buyer_reference || null,
     };
   }
   const g = (await tx.query<{ first_name: string; last_name: string; address_line1: string; address_line2: string; postal_code: string | null; city: string; country_of_residence: string | null; language: string | null }>(
@@ -184,6 +199,7 @@ async function billToOf(tx: PoolClient, folioId: string, propertyCountry: string
     termsDays: 0,
     onAccount: false,
     isCompany: false,
+    reference: null,
   };
 }
 
@@ -221,12 +237,12 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
     [folioId],
   )).rows;
   if (charges.length === 0) return null;
-  const pending = (await tx.query("select 1 from payments where folio_id = $1 and status = 'pending' limit 1", [folioId])).rows.length;
+  const pending = (await tx.query("select 1 from payments where folio_id = $1 and status = 'pending' and refund_of is null limit 1", [folioId])).rows.length;
   if (pending) throw new Error("A payment is still waiting at the reader; finish or cancel it first");
   const billTo = await billToOf(tx, folioId, ctx.country);
   const lines: InvoiceCharge[] = charges.map((c) => ({
     // the early-departure fee is stored in English; the invoice speaks the buyer's language
-    description: c.origin === "fee" && billTo.language === "de" ? "Gebühr für vorzeitige Abreise" : c.description,
+    description: c.origin === "fee" ? LABELS[billTo.language].earlyDepartureFee : c.description,
     serviceDate: c.service_date,
     amount: Number(c.amount),
     unitPrice: Number(c.unit_price),
@@ -234,13 +250,32 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
     taxCode: c.tax_code,
     taxRate: Number(c.tax_rate),
   }));
-  const deposits = (await tx.query<{ id: string; number: string; issue_date: string; document: InvoiceDocument }>(
-    "select id, number, to_char(issue_date, 'YYYY-MM-DD') as issue_date, document from invoices where folio_id = $1 and kind = 'deposit' and netted_by is null order by issued_at",
+  const deposits = (await tx.query<{ id: string; number: string; issue_date: string; document: InvoiceDocument; payment_id: string; refunded: string }>(
+    `select i.id, i.number, to_char(i.issue_date, 'YYYY-MM-DD') as issue_date, i.document, i.payment_id,
+       (select coalesce(sum(r.amount), 0) from payments r where r.refund_of = i.payment_id and r.status = 'succeeded') as refunded
+     from invoices i where i.folio_id = $1 and i.kind = 'deposit' and i.netted_by is null order by i.issued_at`,
     [folioId],
   )).rows;
-  const payments = (await tx.query<{ id: string; amount: string }>("select id, amount from payments where folio_id = $1 and status = 'succeeded' and invoice_id is null", [folioId])).rows;
-  const paid = roundMoney(payments.reduce((s, p) => s + Number(p.amount), 0));
-  const depositParts = deposits.map((d) => ({ number: d.number, issueDate: d.issue_date, byTax: d.document.totals.byTax as TaxPart[] }));
+  // refunds of a deposit belong to its deposit, not to the payments of the stay
+  const depositPayments = deposits.map((d) => d.payment_id);
+  // payments received, and refunds once sent (pending or waiting for balance count: the money is owed back)
+  const payments = (await tx.query<{ id: string; amount: string; refund_of: string | null; tender: string }>(
+    `select id, amount, refund_of, tender from payments where folio_id = $1 and invoice_id is null
+       and (status = 'succeeded' or (refund_of is not null and status in ('pending', 'refund_pending_balance')))`,
+    [folioId],
+  )).rows;
+  // "on account" is no money received: it stays due and the invoice becomes a Receivable
+  const onAccount = payments.some((p) => p.tender === "on_account" && !p.refund_of);
+  const paid = roundMoney(payments.filter((p) => p.tender !== "on_account" && !depositPayments.includes(p.refund_of ?? "")).reduce((s, p) => s + Number(p.amount), 0));
+  // a deposit partly refunded is netted for what was kept, with the VAT of that part
+  // TODO(ticket 29): the refunded part gets its own correcting document
+  const depositParts = deposits
+    .map((d) => {
+      const kept = roundMoney(Number(d.document.totals.gross) + Number(d.refunded));
+      const byTax = d.document.totals.byTax as TaxPart[];
+      return { number: d.number, issueDate: d.issue_date, byTax: kept === Number(d.document.totals.gross) ? byTax : allocateDeposit(Math.max(0, kept), byTax) };
+    })
+    .filter((d) => d.byTax.some((x) => x.gross > 0));
   const totals = invoiceTotals(invoiceLines(lines), { deposits: depositParts, paid });
   const dates = charges.map((c) => c.service_date).sort();
   const doc: InvoiceDocument = {
@@ -252,14 +287,18 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
     language: billTo.language,
     seller: await sellerOf(tx, ctx.legalEntityId),
     buyer: billTo.party,
-    reference: ctx.confirmation,
+    reference: billTo.reference ?? ctx.confirmation,
     periodStart: dates[0]!,
     periodEnd: dates.at(-1)!,
     totals,
     deposits: depositParts,
     notes: [],
   };
-  const issued = await storeInvoice(tx, ctx, folioId, doc, { receivable: totals.due > 0 && billTo.onAccount, paymentId: null }, userId);
+  // UStG §14(4) Nr. 1: the recipient's address, waived only for small invoices up to 250 € (§33 UStDV)
+  if (!billTo.isCompany && totals.gross > 250 && (!billTo.party.addressLine1 || !billTo.party.city)) {
+    throw new Error(`${billTo.party.name}'s address is needed for invoices over 250 € (Guest details)`);
+  }
+  const issued = await storeInvoice(tx, ctx, folioId, doc, { receivable: totals.due > 0 && (billTo.onAccount || onAccount), paymentId: null }, userId);
   await tx.query("update charges set invoice_id = $2 where id = any($1::uuid[])", [charges.map((c) => c.id), issued.id]);
   await tx.query("update payments set invoice_id = $2 where id = any($1::uuid[])", [payments.map((p) => p.id), issued.id]);
   await tx.query("update invoices set netted_by = $2 where id = any($1::uuid[])", [deposits.map((d) => d.id), issued.id]);
@@ -270,8 +309,9 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
 export async function issueInvoice(pool: Pool, schema: string, folioId: string, userId: string): Promise<IssuedInvoice> {
   if (!isUuid(folioId)) throw new Error("Folio not found");
   return withTenant(pool, schema, async (tx) => {
-    const f = (await tx.query<{ reservation_id: string }>("select reservation_id from folios where id = $1", [folioId])).rows[0];
+    const f = (await tx.query<{ reservation_id: string; property_id: string }>("select f.reservation_id, r.property_id from folios f join reservations r on r.id = f.reservation_id where f.id = $1", [folioId])).rows[0];
     if (!f) throw new Error("Folio not found");
+    await lockProperty(tx, f.property_id);
     await tx.query("select 1 from reservations where id = $1 for update", [f.reservation_id]);
     const issued = await issueIn(tx, await contextOf(tx, f.reservation_id), folioId, userId);
     if (!issued) throw new Error("The folio has no open Charges to invoice");
@@ -279,66 +319,88 @@ export async function issueInvoice(pool: Pool, schema: string, folioId: string, 
   });
 }
 
-/**
- * A Deposit Invoice for money received before check-in (bank transfer, card
- * at the desk), with the VAT of the stay it pays for, in proportion. Called
- * when a payment settles; does nothing after check-in, for refunds, for
- * money not received by the hotel (on account, collected by the OTA), or
- * when the payment already has one.
- */
 export async function issueDepositInvoiceIfDue(pool: Pool, schema: string, paymentId: string, userId: string): Promise<IssuedInvoice | null> {
   if (!isUuid(paymentId)) return null;
-  return withTenant(pool, schema, async (tx) => {
-    const p = (await tx.query<{ id: string; folio_id: string; reservation_id: string; amount: string; tender: string; status: string; refund_of: string | null; invoice_id: string | null; posted_at: Date }>(
-      "select id, folio_id, reservation_id, amount, tender, status, refund_of, invoice_id, posted_at from payments where id = $1 for update",
-      [paymentId],
-    )).rows[0];
-    if (!p || p.status !== "succeeded" || p.refund_of || p.invoice_id || p.tender === "on_account" || p.tender === "ota_collect") return null;
-    await tx.query("select 1 from reservations where id = $1 for update", [p.reservation_id]);
-    const ctx = await contextOf(tx, p.reservation_id);
-    if (ctx.status !== "confirmed") return null;
-    // the stay's composition by Tax Code and the rate in force each night
-    const stay = (await tx.query<{ code: string; rate: string; gross: string }>(
-      `select t.code, tr.rate, sum(c.amount) as gross
-       from reservation_night_components c
-       join reservations r on r.id = c.reservation_id
-       join rate_plans pl on pl.id = r.rate_plan_id left join rate_plans base on base.id = pl.base_plan_id
-       join services s on s.id = case when c.kind = 'room' then coalesce(pl.accommodation_service_id, base.accommodation_service_id) else c.service_id end
-       join tax_codes t on t.id = s.tax_code_id
-       cross join lateral (select rate from tax_code_rates where tax_code_id = t.id and valid_from <= c.date order by valid_from desc limit 1) tr
-       where c.reservation_id = $1 group by t.code, tr.rate order by t.code`,
-      [p.reservation_id],
-    )).rows;
-    // TODO(gate 03): a stay without an Accommodation Service has no Tax Code for its room part; no Deposit Invoice until one is set
-    if (stay.length === 0) return null;
-    const amount = Number(p.amount);
-    const parts = allocateDeposit(amount, stay.map((x) => ({ taxCode: x.code, rate: Number(x.rate), gross: Number(x.gross) })));
-    const billTo = await billToOf(tx, p.folio_id, ctx.country);
-    const label = billTo.language === "de" ? "Anzahlung für den Aufenthalt" : "Deposit for the stay";
-    const lines: InvoiceCharge[] = parts.map((x) => ({ description: label, serviceDate: ctx.arrival, amount: x.gross, unitPrice: x.gross, quantity: 1, taxCode: x.taxCode, taxRate: x.rate }));
-    const totals = invoiceTotals(invoiceLines(lines), { paid: amount });
-    const doc: InvoiceDocument = {
-      kind: "deposit",
-      number: await nextNumber(tx, ctx.legalEntityId, "deposit", ctx.today),
-      issueDate: ctx.today,
-      dueDate: null,
-      currency: ctx.currency,
-      language: billTo.language,
-      seller: await sellerOf(tx, ctx.legalEntityId),
-      buyer: billTo.party,
-      reference: ctx.confirmation,
-      periodStart: ctx.arrival,
-      periodEnd: addDays(ctx.departure, -1),
-      totals,
-      deposits: [],
-      receivedOn: p.posted_at.toISOString().slice(0, 10),
-      notes: [],
-    };
-    const issued = await storeInvoice(tx, ctx, p.folio_id, doc, { receivable: false, paymentId: p.id }, userId);
-    // the payment is accounted for by its Deposit Invoice, not again as "paid" on the final one
-    await tx.query("update payments set invoice_id = $2 where id = $1", [p.id, issued.id]);
-    return issued;
-  });
+  return withTenant(pool, schema, (tx) => depositIn(tx, paymentId, userId));
+}
+
+/** The stay's composition by Tax Code and the rate in force each night: what a deposit is taxed by. */
+async function stayComposition(tx: PoolClient, reservationId: string): Promise<{ taxCode: string; rate: number; gross: number }[]> {
+  const rows = (await tx.query<{ code: string; rate: string; gross: string }>(
+    `select t.code, tr.rate, sum(c.amount) as gross
+     from reservation_night_components c
+     join reservations r on r.id = c.reservation_id
+     join rate_plans pl on pl.id = r.rate_plan_id left join rate_plans base on base.id = pl.base_plan_id
+     join services s on s.id = case when c.kind = 'room' then coalesce(pl.accommodation_service_id, base.accommodation_service_id) else c.service_id end
+     join tax_codes t on t.id = s.tax_code_id
+     cross join lateral (select rate from tax_code_rates where tax_code_id = t.id and valid_from <= c.date order by valid_from desc limit 1) tr
+     where c.reservation_id = $1 group by t.code, tr.rate order by t.code`,
+    [reservationId],
+  )).rows;
+  return rows.map((x) => ({ taxCode: x.code, rate: Number(x.rate), gross: Number(x.gross) }));
+}
+
+/** Tenders whose money the hotel receives: a payment by them before check-in needs a Deposit Invoice. */
+const RECEIVED = new Set(["card_terminal", "card_online", "bank_transfer", "ota_virtual_card"]);
+
+/**
+ * Before money is taken ahead of check-in: the stay must be taxable as a
+ * deposit (every component has a Tax Code, which needs the Rate Plan's
+ * Accommodation Service), or the Deposit Invoice could not be issued.
+ */
+export async function assertDepositInvoiceable(tx: PoolClient, reservationId: string, tender: string): Promise<void> {
+  if (!RECEIVED.has(tender)) return;
+  const status = (await tx.query<{ status: string }>("select status from reservations where id = $1", [reservationId])).rows[0]?.status;
+  if (status !== "confirmed") return;
+  const components = Number((await tx.query<{ n: string }>("select count(*) as n from reservation_night_components where reservation_id = $1", [reservationId])).rows[0]!.n);
+  const taxed = (await stayComposition(tx, reservationId)).length;
+  if (components === 0 || taxed === 0) throw new Error("Money before check-in needs a Deposit Invoice: set the Rate Plan's Accommodation Service first (Settings → Rate Plans)");
+}
+
+/**
+ * A Deposit Invoice for money received before check-in, with the VAT of the
+ * stay it pays for, in proportion; inside the transaction that settles the
+ * payment, so the payment never stands without it. Does nothing after
+ * check-in, for refunds, for money the hotel does not receive (on account,
+ * collected by the OTA), or when the payment already has one.
+ */
+export async function depositIn(tx: PoolClient, paymentId: string, userId: string): Promise<IssuedInvoice | null> {
+  const p = (await tx.query<{ id: string; folio_id: string; reservation_id: string; amount: string; tender: string; status: string; refund_of: string | null; invoice_id: string | null; posted_at: Date }>(
+    "select id, folio_id, reservation_id, amount, tender, status, refund_of, invoice_id, posted_at from payments where id = $1 for update",
+    [paymentId],
+  )).rows[0];
+  if (!p || p.status !== "succeeded" || p.refund_of || p.invoice_id || !RECEIVED.has(p.tender)) return null;
+  const ctx = await contextOf(tx, p.reservation_id);
+  if (ctx.status !== "confirmed") return null;
+  const stay = await stayComposition(tx, p.reservation_id);
+  if (stay.length === 0) throw new Error("Money before check-in needs a Deposit Invoice: set the Rate Plan's Accommodation Service first (Settings → Rate Plans)");
+  const amount = Number(p.amount);
+  const parts = allocateDeposit(amount, stay);
+  const billTo = await billToOf(tx, p.folio_id, ctx.country);
+  const label = LABELS[billTo.language].depositLine;
+  const lines: InvoiceCharge[] = parts.map((x) => ({ description: label, serviceDate: ctx.arrival, amount: x.gross, unitPrice: x.gross, quantity: 1, taxCode: x.taxCode, taxRate: x.rate }));
+  const totals = invoiceTotals(invoiceLines(lines), { paid: amount });
+  const doc: InvoiceDocument = {
+    kind: "deposit",
+    number: await nextNumber(tx, ctx.legalEntityId, "deposit", ctx.today),
+    issueDate: ctx.today,
+    dueDate: null,
+    currency: ctx.currency,
+    language: billTo.language,
+    seller: await sellerOf(tx, ctx.legalEntityId),
+    buyer: billTo.party,
+    reference: billTo.reference ?? ctx.confirmation,
+    periodStart: ctx.arrival,
+    periodEnd: addDays(ctx.departure, -1),
+    totals,
+    deposits: [],
+    receivedOn: new Intl.DateTimeFormat("en-CA", { timeZone: ctx.timeZone }).format(p.posted_at),
+    notes: [],
+  };
+  const issued = await storeInvoice(tx, ctx, p.folio_id, doc, { receivable: false, paymentId: p.id }, userId);
+  // the payment is accounted for by its Deposit Invoice, not again as "paid" on the final one
+  await tx.query("update payments set invoice_id = $2 where id = $1", [p.id, issued.id]);
+  return issued;
 }
 
 export async function listInvoices(pool: Pool, schema: string, reservationId: string): Promise<IssuedInvoice[]> {
@@ -395,10 +457,12 @@ export async function checkOut(pool: Pool, schema: string, reservationId: string
       if (inv) issued.push(inv);
     }
     const open: CheckOutBlocked["open"] = [];
+    const issuedIds = issued.map((i) => i.id);
     for (const f of folios) {
       const b = (await tx.query<{ balance: string }>(
         `select (select coalesce(sum(amount), 0) from charges where folio_id = $1 and voided_at is null)
-              - (select coalesce(sum(amount), 0) from payments where folio_id = $1 and status = 'succeeded') as balance`,
+              - (select coalesce(sum(amount), 0) from payments where folio_id = $1
+                   and (status = 'succeeded' or (refund_of is not null and status in ('pending', 'refund_pending_balance')))) as balance`,
         [f.id],
       )).rows[0]!;
       const balance = roundMoney(Number(b.balance));
@@ -408,6 +472,8 @@ export async function checkOut(pool: Pool, schema: string, reservationId: string
       open.push({ folioNumber: f.number, billToName: billTo.party.name, balance });
     }
     if (open.length && !options.override) throw new CheckOutBlocked(open);
+    // overridden: what stays unpaid is an open item, never lost
+    if (open.length) await tx.query("update invoices set receivable = true where id = any($1::uuid[]) and due > 0", [issuedIds]);
     await tx.query("update reservations set status = 'checked_out', checked_out_at = now(), checked_out_by = $2 where id = $1", [reservationId, userId]);
     await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'check_out', $3, $4)", [
       reservationId,
@@ -418,4 +484,23 @@ export async function checkOut(pool: Pool, schema: string, reservationId: string
     // TODO(ticket 33): the room turns Dirty with housekeeping's room status
     return issued;
   });
+}
+
+/** The files of an issued invoice as first rendered (null until then). */
+export async function invoiceFiles(pool: Pool, schema: string, invoiceId: string): Promise<{ pdf: Buffer | null; xml: string | null }> {
+  if (!isUuid(invoiceId)) throw new Error("Invoice not found");
+  return withTenant(pool, schema, async (tx) => {
+    const r = (await tx.query<{ pdf: Buffer | null; xml: string | null }>("select pdf, xml from invoices where id = $1", [invoiceId])).rows[0];
+    if (!r) throw new Error("Invoice not found");
+    return r;
+  });
+}
+
+/** Keep a rendered file; the first one kept stays (an invoice is handed out identically for good). */
+export async function keepInvoiceFile(pool: Pool, schema: string, invoiceId: string, file: { pdf: Uint8Array } | { xml: string }): Promise<void> {
+  await withTenant(pool, schema, (tx) =>
+    "pdf" in file
+      ? tx.query("update invoices set pdf = $2 where id = $1 and pdf is null", [invoiceId, Buffer.from(file.pdf)])
+      : tx.query("update invoices set xml = $2 where id = $1 and xml is null", [invoiceId, file.xml]),
+  );
 }
