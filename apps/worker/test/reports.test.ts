@@ -36,7 +36,7 @@ describe("scheduled reports", () => {
     expect(await sendScheduledReports(pool, alpha, new Date("2026-10-06T05:00:00Z"))).toBe(0); // Tuesday
     expect(await sendScheduledReports(pool, alpha, monday)).toBe(1);
     expect(await sendScheduledReports(pool, alpha, new Date("2026-10-05T09:00:00Z"))).toBe(0);
-    const { rows } = await pool.query("select to_email, subject, attachment_name, attachment_type, substring(attachment from 1 for 5) as head from control.mail_outbox");
+    const { rows } = await pool.query("select to_email, subject, attachment_name, attachment_type, substring(attachment from 1 for 5) as head from t_alpha.mail_outbox");
     expect(rows).toEqual([
       { to_email: "rita@alpha.example", subject: "Belegung und Umsatz · 2026-09-28 – 2026-10-04", attachment_name: "occupancy-2026-09-28-2026-10-04.pdf", attachment_type: "application/pdf", head: Buffer.from("%PDF-") },
     ]);
@@ -46,7 +46,7 @@ describe("scheduled reports", () => {
     // Fred has Revenue in München only, but scheduled Berlin
     await createReportSchedule(pool, alpha.schemaName, { userId: "u_fd", kind: "occupancy", propertyIds: [berlin], frequency: "daily", options: {}, language: "en" });
     await sendScheduledReports(pool, alpha, new Date("2026-10-07T05:00:00Z"));
-    expect((await pool.query("select 1 from control.mail_outbox where to_user_id = 'u_fd'")).rowCount).toBe(0);
+    expect((await pool.query("select 1 from t_alpha.mail_outbox where to_user_id = 'u_fd'")).rowCount).toBe(0);
     const [s] = await listReportSchedules(pool, alpha.schemaName, "u_fd");
     expect(s!.stoppedReason).toMatch(/no longer see this report/);
   });

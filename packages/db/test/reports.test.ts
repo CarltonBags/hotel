@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
-import { REPORT_KINDS, addDays, todayIn, type ReportTable } from "@hoteloftware/domain";
+import { REPORT_KINDS, addDays, previousPeriod, todayIn, type ReportTable } from "@hoteloftware/domain";
 import { migrateControl } from "../src/control/migrate-control";
 import { controlMigrations, tenantMigrations } from "../src/migrations/load";
 import { provisionTenant, type Tenant } from "../src/tenant/provision";
@@ -131,5 +131,14 @@ describe("fixed reports", () => {
     }
     const mix = await runReport(pool, s(), req({ kind: "source_mix" }));
     expect(total(mix)).toMatchObject({ nights: 10, revenue: 1000 });
+    // compared line by line with the period before: it holds only the two nights checked in today, if it reaches today
+    const compared = await runReport(pool, s(), req({ kind: "source_mix", compare: { previous: true, lastYear: false } }));
+    expect(compared.columns.map((c) => c.key)).toEqual(expect.arrayContaining(["nights_previous", "revenue_previous"]));
+    const before = previousPeriod({ from: monthStart, to: monthEnd });
+    const todays = [today, addDays(today, 1)].filter((d) => d >= before.from && d <= before.to).length;
+    expect(total(compared)).toMatchObject({ nights: 10, nights_previous: todays, revenue_previous: todays * 100 });
+    // pickup since before any of the month's stays existed: every night on the books is picked up
+    const pickup = await runReport(pool, s(), req({ kind: "pickup", pickupSince: addDays(today, -1) }));
+    expect(total(pickup)).toMatchObject({ otb: 10, pickN: 10, pickR: 1000 });
   });
 });

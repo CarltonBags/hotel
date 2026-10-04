@@ -75,6 +75,11 @@ export interface NightFigures {
   totalRevenue: number;
 }
 
+/** a of b in percent, one decimal; null without b. */
+export function percentOf(a: number, b: number): number | null {
+  return b ? Math.round((a / b) * 1000) / 10 : null;
+}
+
 export interface Kpis {
   available: number;
   occupied: number;
@@ -95,7 +100,7 @@ export function kpis(nights: NightFigures[]): Kpis {
   return {
     available,
     occupied,
-    occupancy: available ? Math.round((occupied / available) * 1000) / 10 : null,
+    occupancy: percentOf(occupied, available),
     adr: occupied ? roundMoney(netRoomRevenue / occupied) : null,
     revpar: available ? roundMoney(netRoomRevenue / available) : null,
     netRoomRevenue,

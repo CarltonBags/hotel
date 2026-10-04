@@ -426,6 +426,6 @@ export {
   type SupportAccessEntry,
   type SupportSession,
 } from "./control/support";
-export { runReport, type ReportRequest } from "./tenant/reports";
+export { logReportExport, runReport, type ReportRequest } from "./tenant/reports";
 export { createReportSchedule, deleteReportSchedule, dueReportSchedules, listReportSchedules, markReportScheduleSent, stopReportSchedule, type ReportSchedule, type ScheduleOptions } from "./tenant/report-schedules";
-export { listOutbox, queueMail, type OutboxEntry, type OutgoingMail } from "./control/mail-outbox";
+export { queueMail, type OutgoingMail } from "./tenant/mail-outbox";

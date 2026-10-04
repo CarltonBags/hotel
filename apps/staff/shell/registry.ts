@@ -5,6 +5,7 @@
  * here; nothing else in the shell knows them.
  */
 import { REPORT_ACCESS, REPORT_KINDS, type Action, type PropertyAction, type ReportKind } from "@hoteloftware/domain";
+import type { MessageKey } from "@/i18n/messages";
 
 const REPORT_ICONS: Record<ReportKind, string> = {
   occupancy: "ChartColumn",
@@ -16,7 +17,6 @@ const REPORT_ICONS: Record<ReportKind, string> = {
   receivables: "FileText",
   cash: "Wallet",
 };
-import type { MessageKey } from "@/i18n/messages";
 
 export type GroupId = "front_desk" | "lists" | "cash_billing" | "rates" | "guests" | "housekeeping" | "reports" | "settings";
 

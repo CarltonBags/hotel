@@ -1,5 +1,7 @@
-import { REPORT_ACCESS, addDays, can, isReportKind, type Actor, type Grain, type ReportKind } from "@hoteloftware/domain";
+import { REPORT_ACCESS, addDays, isReportKind, type Grain, type ReportKind } from "@hoteloftware/domain";
 import type { Property, ReportRequest } from "@hoteloftware/db";
+import { allowedAmong } from "./authorize";
+import { loadShell } from "./shell";
 
 export type ReportParams = Record<string, string | string[] | undefined>;
 
@@ -17,16 +19,19 @@ function defaultRange(kind: ReportKind, today: string): { from: string; to: stri
 }
 
 /**
- * A report request from the page's query: the properties in scope where the
- * user may see this report ("All properties": each one they may), the
- * period, grain, comparisons, room type, currency and stated rates.
+ * A report request from the page's query: the properties in the navbar's
+ * scope where the user may see this report ("All properties": each one they
+ * may), the period, grain, comparisons, room type, currency and stated rates.
+ * Page, export and scheduling all go through here.
  */
-export function reportRequestFrom(kindParam: string, p: ReportParams, ctx: { actor: Actor; properties: Property[]; scope: string; language: "en" | "de" }): { request: ReportRequest; properties: Property[] } | null {
+export async function reportRequestFrom(kindParam: string, p: ReportParams): Promise<{ request: ReportRequest; properties: Property[] } | null> {
   if (!isReportKind(kindParam)) return null;
   const kind = kindParam;
-  const inScope = ctx.scope === "all" || !ctx.scope ? ctx.properties : ctx.properties.filter((x) => x.id === ctx.scope);
-  const properties = inScope.filter((x) => can(ctx.actor, REPORT_ACCESS[kind], x.id));
-  if (!properties.length) return { request: { kind, from: "", to: "", propertyIds: [], grain: "day", compare: { previous: false, lastYear: false }, language: ctx.language }, properties };
+  const shell = await loadShell();
+  const language = shell.language === "de" ? "de" : "en";
+  const inScope = shell.scope === "all" || !shell.scope ? shell.properties : shell.properties.filter((x) => x.id === shell.scope);
+  const properties = await allowedAmong(REPORT_ACCESS[kind], inScope);
+  if (!properties.length) return { request: { kind, from: "", to: "", propertyIds: [], grain: "day", compare: { previous: false, lastYear: false }, language }, properties };
   const today = properties[0]!.businessDate;
   const range = defaultRange(kind, today);
   const from = isDate(one(p, "from")) ? one(p, "from") : range.from;
@@ -53,7 +58,7 @@ export function reportRequestFrom(kindParam: string, p: ReportParams, ctx: { act
       ...(isDate(one(p, "since")) ? { pickupSince: one(p, "since") } : {}),
       currency,
       rates,
-      language: ctx.language,
+      language,
     },
   };
 }

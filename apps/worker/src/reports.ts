@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { REPORT_ACCESS, addDays, can, scheduledRange, type Grain, type ScheduleFrequency } from "@hoteloftware/domain";
-import { dueReportSchedules, listTenantUsers, markReportScheduleSent, queueMail, runReport, stopReportSchedule } from "@hoteloftware/db";
+import { dueReportSchedules, listTenantUsers, logReportExport, markReportScheduleSent, queueMail, runReport, stopReportSchedule } from "@hoteloftware/db";
 import { renderReportPdf } from "@hoteloftware/invoices";
 
 const DEFAULT_GRAIN: Record<ScheduleFrequency, Grain> = { daily: "day", weekly: "day", monthly: "week" };
@@ -42,13 +42,14 @@ export async function sendScheduledReports(pool: Pool, tenant: { id: string; nam
         language: s.language,
       });
       const pdf = await renderReportPdf(table, s.language, `Hoteloftware · ${tenant.name} · ${s.localDate}`);
-      await queueMail(pool, {
+      await queueMail(pool, tenant.schemaName, {
         tenantId: tenant.id,
         toUserId: s.userId,
         subject: `${table.title} · ${range.from} – ${range.to}`,
         body: `${table.title}\n${table.notes.join("\n")}\n\n${s.language === "de" ? "Der Bericht liegt als PDF bei." : "The report is attached as PDF."}`,
         attachment: { name: `${s.kind}-${range.from}-${range.to}.pdf`, type: "application/pdf", bytes: pdf },
       });
+      await logReportExport(pool, tenant.schemaName, { userId: s.userId, kind: s.kind, propertyIds: s.propertyIds, format: "mail", rowCount: table.rows.length });
       sent++;
     } catch (err) {
       // a report that cannot run (a rate no longer stated, a property gone) stops instead of failing every hour

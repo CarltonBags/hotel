@@ -1497,6 +1497,62 @@ export const tourismReports = pgTable(
   ],
 );
 
+
+export const reportSchedules = pgTable(
+  "report_schedules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(),
+    propertyIds: uuid("property_ids").array().notNull(),
+    frequency: text("frequency").notNull(),
+    options: jsonb("options").notNull().default(sql`'{}'`),
+    language: text("language").notNull().default("en"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSentOn: date("last_sent_on"),
+    stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+    stoppedReason: text("stopped_reason"),
+  },
+  (t) => [
+    check("report_schedules_kind_check", sql`${t.kind} in ('occupancy', 'pickup', 'source_mix', 'cancellations', 'revenue_by_code', 'housekeeping', 'receivables', 'cash')`),
+    check("report_schedules_properties_check", sql`cardinality(${t.propertyIds}) > 0`),
+    check("report_schedules_frequency_check", sql`${t.frequency} in ('daily', 'weekly', 'monthly')`),
+    check("report_schedules_language_check", sql`${t.language} in ('en', 'de')`),
+    index("report_schedules_user_idx").on(t.userId),
+  ],
+);
+
+export const reportExports = pgTable(
+  "report_exports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(),
+    propertyIds: uuid("property_ids").array().notNull(),
+    format: text("format").notNull(),
+    rowCount: integer("row_count").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check("report_exports_format_check", sql`${t.format} in ('csv', 'pdf', 'mail')`), index("report_exports_at_idx").on(t.at)],
+);
+
+export const mailOutbox = pgTable(
+  "mail_outbox",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    toUserId: text("to_user_id").notNull(),
+    toEmail: text("to_email").notNull(),
+    subject: text("subject").notNull(),
+    body: text("body").notNull(),
+    attachmentName: text("attachment_name"),
+    attachmentType: text("attachment_type"),
+    attachment: bytea("attachment"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [check("mail_outbox_attachment_check", sql`(${t.attachment} is null) = (${t.attachmentName} is null)`), index("mail_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1569,28 +1625,7 @@ export const tenantSchema = {
   receipts,
   closedPeriods,
   tourismReports,
+  reportSchedules,
+  reportExports,
+  mailOutbox,
 };
-
-export const reportSchedules = pgTable(
-  "report_schedules",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: text("user_id").notNull(),
-    kind: text("kind").notNull(),
-    propertyIds: uuid("property_ids").array().notNull(),
-    frequency: text("frequency").notNull(),
-    options: jsonb("options").notNull().default(sql`'{}'`),
-    language: text("language").notNull().default("en"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    lastSentOn: date("last_sent_on"),
-    stoppedAt: timestamp("stopped_at", { withTimezone: true }),
-    stoppedReason: text("stopped_reason"),
-  },
-  (t) => [
-    check("report_schedules_kind_check", sql`${t.kind} in ('occupancy', 'pickup', 'source_mix', 'cancellations', 'revenue_by_code', 'housekeeping', 'receivables', 'cash')`),
-    check("report_schedules_properties_check", sql`cardinality(${t.propertyIds}) > 0`),
-    check("report_schedules_frequency_check", sql`${t.frequency} in ('daily', 'weekly', 'monthly')`),
-    check("report_schedules_language_check", sql`${t.language} in ('en', 'de')`),
-    index("report_schedules_user_idx").on(t.userId),
-  ],
-);

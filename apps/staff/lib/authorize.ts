@@ -57,6 +57,14 @@ async function allowed(principal: Principal, action: Action, propertyId?: string
   return working === null || working === propertyId;
 }
 
+/** Of these properties, those where the signed-in user may take the action (through the same check as authorize). */
+export async function allowedAmong<P extends { id: string }>(action: PropertyAction, properties: P[]): Promise<P[]> {
+  const principal = await requirePrincipal();
+  const out: P[] = [];
+  for (const p of properties) if (await allowed(principal, action, p.id)) out.push(p);
+  return out;
+}
+
 /**
  * The one permission check every server action and page goes through.
  * Throws ForbiddenError; server actions turn that into a form error.

@@ -7,17 +7,17 @@ import { requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { field, formAction, type FormState } from "@/lib/form";
 import { reportRequestFrom } from "@/lib/reports";
-import { loadShell } from "@/lib/shell";
 
 /** Schedule the report as shown, for oneself only: it goes to the user's own address while they may see it (ticket 82). */
 export async function scheduleReportAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
-    const shell = await loadShell();
-    const { tenant, actor, session } = shell.principal;
+    const { tenant, session } = await requirePrincipal();
+    // a support access works in the customer's tenant without leaving anything of its own there
+    if (session.support) throw new Error("Not during a support access");
     const frequency = field(formData, "frequency") as ScheduleFrequency;
     if (!SCHEDULE_FREQUENCIES.includes(frequency)) throw new Error("Daily, weekly or monthly");
     const query = Object.fromEntries(new URLSearchParams(field(formData, "query")));
-    const parsed = reportRequestFrom(query.kind ?? "", query, { actor, properties: shell.properties, scope: shell.scope, language: shell.language === "de" ? "de" : "en" });
+    const parsed = await reportRequestFrom(query.kind ?? "", query);
     if (!parsed || !parsed.properties.length) throw new Error("You may not see this report here");
     const r = parsed.request;
     await createReportSchedule(pool(), tenant.schemaName, {

@@ -55,7 +55,7 @@ export async function renderReportPdf(table: ReportTable, language: "de" | "en",
     page.drawLine({ start: { x: M, y: y + size - 1 }, end: { x: PAGE.w - M, y: y + size - 1 }, thickness: 0.5, color: rule });
     y -= 3;
   };
-  page.drawText(table.title, { x: M, y, size: 14, font: bold, color: ink });
+  page.drawText(fit(table.title, PAGE.w - 2 * M, bold, 14), { x: M, y, size: 14, font: bold, color: ink });
   y -= 18;
   for (const n of table.notes) {
     page.drawText(fit(n, PAGE.w - 2 * M, font, 7.5), { x: M, y, size: 7.5, font, color: grey });
@@ -96,10 +96,8 @@ export function reportCsv(table: ReportTable): string {
     ...table.notes.map((n) => [n]),
     [],
     table.columns.map((c) => c.label),
-    ...table.rows.map((r) => table.columns.map((c) => {
-      const v = r.cells[c.key];
-      return v === null || v === undefined ? "" : v;
-    })),
+    ...table.rows.map((r) => table.columns.map((c) => r.cells[c.key] ?? "")),
   ];
-  return `﻿${lines.map((l) => l.map(csvCell).join(";")).join("\r\n")}\r\n`;
+  // numbers stay plain (a negative one is no formula); only text is neutralised
+  return `﻿${lines.map((l) => l.map((v) => (typeof v === "number" ? String(v) : csvCell(v))).join(";")).join("\r\n")}\r\n`;
 }

@@ -14,8 +14,8 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const shell = await loadShell();
   const { messages: m } = shell;
   const language = shell.language === "de" ? "de" : "en";
-  const { tenant, actor, session } = shell.principal;
-  const parsed = reportRequestFrom(kind, query, { actor, properties: shell.properties, scope: shell.scope, language });
+  const { tenant, session } = shell.principal;
+  const parsed = await reportRequestFrom(kind, query);
   if (!parsed) notFound();
   const { request, properties } = parsed;
   const title = REPORT_TITLES[request.kind][language];
@@ -34,7 +34,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
-  const roomTypes = properties.length === 1 && ["occupancy", "source_mix"].includes(request.kind) ? await listRoomTypes(pool(), tenant.schemaName, properties[0]!.id) : [];
+  const roomTypes = properties.length === 1 && ["occupancy", "pickup", "source_mix", "cancellations"].includes(request.kind) ? await listRoomTypes(pool(), tenant.schemaName, properties[0]!.id) : [];
   const schedules = (await listReportSchedules(pool(), tenant.schemaName, session.user.id)).filter((s) => s.kind === request.kind);
   const currencies = [...new Set(properties.map((p) => p.currency))];
   const locale = language === "de" ? "de-DE" : "en-GB";

@@ -13,6 +13,7 @@ const table: ReportTable = {
   rows: [
     { cells: { label: "2026-11", occupancy: 4.2, adr: 100 } },
     { cells: { label: "=cmd", occupancy: null, adr: 1234.5 }, emphasis: true },
+    { cells: { label: "Difference", occupancy: -2.5, adr: -12.5 } },
   ],
 };
 
@@ -20,7 +21,7 @@ describe("report table files", () => {
   it("the spreadsheet keeps plain numbers, empty cells for no value, and neutralises formulas", () => {
     const csv = reportCsv(table);
     expect(csv.startsWith("﻿Occupancy and revenue\r\n")).toBe(true);
-    expect(csv).toContain("Period;Occupancy;Average Daily Rate\r\n2026-11;4.2;100\r\n'=cmd;;1234.5\r\n");
+    expect(csv).toContain("Period;Occupancy;Average Daily Rate\r\n2026-11;4.2;100\r\n'=cmd;;1234.5\r\nDifference;-2.5;-12.5\r\n");
   });
 
   it("renders a PDF", async () => {

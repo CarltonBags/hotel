@@ -1,6 +1,5 @@
 import type { Pool, PoolClient } from "pg";
 import {
-  AGEING_BUCKETS,
   LAST_YEAR_SHIFT,
   REPORT_TEXT,
   REPORT_TITLES,
@@ -11,6 +10,7 @@ import {
   kpis,
   lastYearPeriod,
   occupancyRows,
+  percentOf,
   previousPeriod,
   roundMoney,
   type Grain,
@@ -75,13 +75,13 @@ const NET = "(c.amount / (1 + c.tax_rate / 100))";
 
 /**
  * Revenue per reservation and night: posted Charges (Corrections count with
- * the component they correct), and for stays not yet checked in the room
+ * the component and origin they correct), and for stays not yet checked in the room
  * and Service components on the books, net at the Tax Code's rate that night.
  */
 const NIGHT_REVENUE = `
   select c.reservation_id, c.service_date as date,
-    sum(case when c.category = 'accommodation' and c.origin <> 'fee' and coalesce(o.component, c.component) = 'room' then ${NET} else 0 end) as room,
-    sum(case when c.origin = 'fee' then ${NET} else 0 end) as fees,
+    sum(case when c.category = 'accommodation' and coalesce(o.origin, c.origin) <> 'fee' and coalesce(o.component, c.component) = 'room' then ${NET} else 0 end) as room,
+    sum(case when coalesce(o.origin, c.origin) = 'fee' then ${NET} else 0 end) as fees,
     sum(case when c.category <> 'city_tax' then ${NET} else 0 end) as total
   from charges c left join charges o on o.id = c.corrects
   where c.property_id = $1 and c.voided_at is null and c.service_date between $2 and $3 and c.reservation_id is not null
@@ -227,29 +227,43 @@ async function pickupReport(tx: PoolClient, req: ReportRequest, props: PropertyI
   const since = req.pickupSince ?? addDays(props[0]!.today, -7);
   const byDate = new Map<string, { otb: number; pickN: number; pickR: number; available: number; ly: number; lyAvailable: number }>();
   for (const p of props) {
-    // the stay as it stands, and as it stood at the start of the chosen day (property time); last year the same, 364 days earlier
+    // the stay as it stands, and as it stood at the start of the chosen day (property time); last year the same, 364 days earlier.
+    // Each part is aggregated per date once, then joined: no per-date scans.
     const { rows } = await tx.query<{ date: string; available: number; otb: number; then_n: number; now_r: string; then_r: string; ly: number; ly_available: number }>(
       `with d as (select generate_series($2::date, $3::date, interval '1 day')::date as date),
-       rev as (${NIGHT_REVENUE}),
-       cut as (select ($4::date)::timestamp at time zone $5 as at),
+       types as (select id from room_types where property_id = $1 and ($6::uuid is null or id = $6)),
+       cut as (select ($4::date)::timestamp at time zone $5 as at, now() - interval '${LAST_YEAR_SHIFT} days' as ly_at),
+       room_count as (select count(*)::int as n from rooms where room_type_id in (select id from types)),
+       ooo as (
+         select d.date, count(b.id)::int as n from d join room_blocks b on b.kind = 'out_of_order' and b.room_id in (select x.id from rooms x where x.room_type_id in (select id from types))
+           and b.from_date <= d.date and b.to_date > d.date group by d.date
+       ),
+       ooo_ly as (
+         select d.date, count(b.id)::int as n from d join room_blocks b on b.kind = 'out_of_order' and b.room_id in (select x.id from rooms x where x.room_type_id in (select id from types))
+           and b.from_date <= d.date - ${LAST_YEAR_SHIFT} and b.to_date > d.date - ${LAST_YEAR_SHIFT} group by d.date
+       ),
        stays as (
          select rn.date, r.id, r.status, r.created_at, r.cancelled_at from reservation_nights rn join reservations r on r.id = rn.reservation_id
-         where r.property_id = $1 and (rn.date between $2 and $3 or rn.date between ($2::date - ${LAST_YEAR_SHIFT}) and ($3::date - ${LAST_YEAR_SHIFT}))
+         where r.property_id = $1 and r.room_type_id in (select id from types)
+           and (rn.date between $2 and $3 or rn.date between ($2::date - ${LAST_YEAR_SHIFT}) and ($3::date - ${LAST_YEAR_SHIFT}))
        ),
+       -- on the books at a moment: made before it and not yet cancelled (a later No-show was on the books then)
        held_then as (select s.* from stays s, cut where s.created_at < cut.at and (s.cancelled_at is null or s.cancelled_at >= cut.at)),
-       held_ly as (select s.* from stays s where s.created_at < now() - interval '${LAST_YEAR_SHIFT} days' and (s.cancelled_at is null or s.cancelled_at >= now() - interval '${LAST_YEAR_SHIFT} days'))
+       held_ly as (select s.* from stays s, cut where s.created_at < cut.ly_at and (s.cancelled_at is null or s.cancelled_at >= cut.ly_at)),
+       rev as (${NIGHT_REVENUE}),
+       now_n as (select date, count(*)::int as n from stays where status in ${ACTIVE} group by date),
+       then_n as (select date, count(*)::int as n from held_then group by date),
+       ly_n as (select date + ${LAST_YEAR_SHIFT} as date, count(*)::int as n from held_ly group by date),
+       now_r as (select rev.date, sum(rev.room) as v from rev join stays s on s.id = rev.reservation_id and s.date = rev.date where s.status in ${ACTIVE} group by rev.date),
+       then_r as (select rev.date, sum(rev.room) as v from rev join held_then h on h.id = rev.reservation_id and h.date = rev.date group by rev.date)
        select to_char(d.date, 'YYYY-MM-DD') as date,
-         (select count(*) from rooms x join room_types rt on rt.id = x.room_type_id where rt.property_id = $1
-            and not exists (select 1 from room_blocks b where b.room_id = x.id and b.kind = 'out_of_order' and b.from_date <= d.date and b.to_date > d.date))::int as available,
-         (select count(*) from stays s where s.date = d.date and s.status in ${ACTIVE})::int as otb,
-         (select count(*) from held_then s where s.date = d.date)::int as then_n,
-         coalesce((select sum(rev.room) from rev join reservations r on r.id = rev.reservation_id where rev.date = d.date and r.status in ${ACTIVE}), 0) as now_r,
-         coalesce((select sum(rev.room) from rev join held_then h on h.id = rev.reservation_id and h.date = rev.date where rev.date = d.date), 0) as then_r,
-         (select count(*) from held_ly s where s.date = d.date - ${LAST_YEAR_SHIFT})::int as ly,
-         (select count(*) from rooms x join room_types rt on rt.id = x.room_type_id where rt.property_id = $1
-            and not exists (select 1 from room_blocks b where b.room_id = x.id and b.kind = 'out_of_order' and b.from_date <= d.date - ${LAST_YEAR_SHIFT} and b.to_date > d.date - ${LAST_YEAR_SHIFT}))::int as ly_available
-       from d order by 1`,
-      [p.id, req.from, req.to, since, p.timeZone],
+         (select n from room_count) - coalesce(ooo.n, 0) as available,
+         coalesce(now_n.n, 0) as otb, coalesce(then_n.n, 0) as then_n, coalesce(now_r.v, 0) as now_r, coalesce(then_r.v, 0) as then_r,
+         coalesce(ly_n.n, 0) as ly, (select n from room_count) - coalesce(ooo_ly.n, 0) as ly_available
+       from d left join ooo on ooo.date = d.date left join ooo_ly on ooo_ly.date = d.date left join now_n on now_n.date = d.date left join then_n on then_n.date = d.date
+         left join ly_n on ly_n.date = d.date left join now_r on now_r.date = d.date left join then_r on then_r.date = d.date
+       order by 1`,
+      [p.id, req.from, req.to, since, p.timeZone, req.roomTypeId ?? null],
     );
     for (const r of rows) {
       const x = byDate.get(r.date) ?? { otb: 0, pickN: 0, pickR: 0, available: 0, ly: 0, lyAvailable: 0 };
@@ -263,10 +277,9 @@ async function pickupReport(tx: PoolClient, req: ReportRequest, props: PropertyI
       });
     }
   }
-  const pct = (a: number, b: number) => (b ? Math.round((a / b) * 1000) / 10 : null);
-  const rows: ReportRow[] = [...byDate.entries()].map(([date, x]) => ({ cells: { date, otb: x.otb, pickN: x.pickN, pickR: x.pickR, occ: pct(x.otb, x.available), ly: pct(x.ly, x.lyAvailable) } }));
+  const rows: ReportRow[] = [...byDate.entries()].map(([date, x]) => ({ cells: { date, otb: x.otb, pickN: x.pickN, pickR: x.pickR, occ: percentOf(x.otb, x.available), ly: percentOf(x.ly, x.lyAvailable) } }));
   const sum = (k: "otb" | "pickN" | "pickR" | "available" | "ly" | "lyAvailable") => [...byDate.values()].reduce((s, x) => s + x[k], 0);
-  rows.push({ cells: { date: t(req, "total"), otb: sum("otb"), pickN: sum("pickN"), pickR: roundMoney(sum("pickR")), occ: pct(sum("otb"), sum("available")), ly: pct(sum("ly"), sum("lyAvailable")) }, emphasis: true });
+  rows.push({ cells: { date: t(req, "total"), otb: sum("otb"), pickN: sum("pickN"), pickR: roundMoney(sum("pickR")), occ: percentOf(sum("otb"), sum("available")), ly: percentOf(sum("ly"), sum("lyAvailable")) }, emphasis: true });
   return {
     title: REPORT_TITLES.pickup[req.language],
     notes: [...baseNotes(req, props, currency), t(req, "pickupNote").replace("{since}", since), t(req, "baseAvailable")],
@@ -305,7 +318,7 @@ async function sourceMixReport(tx: PoolClient, req: ReportRequest, props: Proper
   }
   const totalNights = [...bySource.values()].reduce((s, x) => s + x.nights, 0);
   const totalRevenue = roundMoney([...bySource.values()].reduce((s, x) => s + x.revenue, 0));
-  const share = (n: number) => (totalNights ? Math.round((n / totalNights) * 1000) / 10 : null);
+  const share = (n: number) => percentOf(n, totalNights);
   const rows: ReportRow[] = [...bySource.entries()]
     .sort((a, b) => b[1].nights - a[1].nights)
     .map(([source, x]) => ({ cells: { source, nights: x.nights, share: share(x.nights), revenue: x.revenue, adr: x.nights ? roundMoney(x.revenue / x.nights) : null } }));
@@ -338,14 +351,15 @@ async function cancellationsReport(tx: PoolClient, req: ReportRequest, props: Pr
          coalesce(sum(r.cancellation_fee) filter (where r.cancellation_fee_status in ('open', 'confirmed')), 0) as charged,
          coalesce(sum(r.cancellation_fee) filter (where r.cancellation_fee_status = 'waived'), 0) as waived,
          coalesce(sum(greatest(r.arrival - (r.cancelled_at at time zone $4)::date, 0)), 0)::int as lead
-       from reservations r where r.property_id = $1 and r.status = 'cancelled' and (r.cancelled_at at time zone $4)::date between $2 and $3`,
-      [p.id, req.from, req.to, p.timeZone],
+       from reservations r where r.property_id = $1 and r.status = 'cancelled' and (r.cancelled_at at time zone $4)::date between $2 and $3 and ($5::uuid is null or r.room_type_id = $5)`,
+      [p.id, req.from, req.to, p.timeZone, req.roomTypeId ?? null],
     )).rows[0]!;
     const ns = (await tx.query<{ n: number; lost: number; fees: string }>(
       `select count(*)::int as n, coalesce(sum(r.departure - r.arrival), 0)::int as lost,
-         coalesce(sum((select sum(c.amount / (1 + c.tax_rate / 100)) from charges c where c.reservation_id = r.id and c.origin = 'fee' and c.voided_at is null)), 0) as fees
-       from reservations r where r.property_id = $1 and r.status = 'no_show' and r.arrival between $2 and $3`,
-      [p.id, req.from, req.to],
+         coalesce(sum((select sum(c.amount / (1 + c.tax_rate / 100)) from charges c left join charges o on o.id = c.corrects
+           where c.reservation_id = r.id and coalesce(o.origin, c.origin) = 'fee' and c.voided_at is null)), 0) as fees
+       from reservations r where r.property_id = $1 and r.status = 'no_show' and r.arrival between $2 and $3 and ($4::uuid is null or r.room_type_id = $4)`,
+      [p.id, req.from, req.to, req.roomTypeId ?? null],
     )).rows[0]!;
     const money = (v: string) => convertAmount(roundMoney(Number(v)), p.currency, currency, rates);
     const line = { cancellations: c.n, lost: c.lost, charged: money(c.charged), waived: money(c.waived), lead: c.n ? Math.round((c.lead / c.n) * 10) / 10 : null, noShows: ns.n, noShowLost: ns.lost, noShowFees: money(ns.fees) };
@@ -477,31 +491,36 @@ async function housekeepingReport(tx: PoolClient, req: ReportRequest, props: Pro
 
 // ── Receivables ageing ──
 
-const BUCKET_TEXT: Record<(typeof AGEING_BUCKETS)[number], keyof typeof REPORT_TEXT> = { current: "notDue", "1_30": "d30", "31_60": "d60", "61_90": "d90", over_90: "older" };
+/** Ages by invoice date ("Reporting scope"): days since the invoice was issued, at the end of the period. */
+const INVOICE_AGES = ["0_30", "31_60", "61_90", "over_90"] as const;
+const AGE_TEXT: Record<(typeof INVOICE_AGES)[number], keyof typeof REPORT_TEXT> = { "0_30": "d30", "31_60": "d60", "61_90": "d90", over_90: "older" };
+const ageOf = (days: number): (typeof INVOICE_AGES)[number] => (days <= 30 ? "0_30" : days <= 60 ? "31_60" : days <= 90 ? "61_90" : "over_90");
 
 async function receivablesReport(pool: Pool, schema: string, req: ReportRequest, props: PropertyInfo[], currency: string): Promise<ReportTable> {
   const rates = req.rates ?? {};
   const byBillTo = new Map<string, Record<string, number>>();
   for (const p of props) {
     const r = await listReceivables(pool, schema, p.id);
-    for (const row of r.rows) {
+    // invoices issued by the end of the period, still open today
+    for (const row of r.rows.filter((x) => x.issueDate <= req.to)) {
       const key = props.length > 1 ? `${p.name} · ${row.billToName}` : row.billToName;
-      const x = byBillTo.get(key) ?? Object.fromEntries([...AGEING_BUCKETS, "open"].map((b) => [b, 0]));
+      const x = byBillTo.get(key) ?? Object.fromEntries([...INVOICE_AGES, "open"].map((b) => [b, 0]));
       const open = convertAmount(row.open, r.currency, currency, rates);
-      x[row.bucket] = roundMoney(x[row.bucket]! + open);
+      const age = ageOf(daysBetween(row.issueDate, req.to));
+      x[age] = roundMoney(x[age]! + open);
       x.open = roundMoney(x.open! + open);
       byBillTo.set(key, x);
     }
   }
   const rows: ReportRow[] = [...byBillTo.entries()].sort((a, b) => b[1].open! - a[1].open!).map(([billTo, x]) => ({ cells: { billTo, ...x } }));
-  const totals = Object.fromEntries([...AGEING_BUCKETS, "open"].map((b) => [b, roundMoney([...byBillTo.values()].reduce((s, x) => s + x[b]!, 0))]));
+  const totals = Object.fromEntries([...INVOICE_AGES, "open"].map((b) => [b, roundMoney([...byBillTo.values()].reduce((s, x) => s + x[b]!, 0))]));
   rows.push({ cells: { billTo: t(req, "total"), ...totals }, emphasis: true });
   return {
     title: REPORT_TITLES.receivables[req.language],
-    notes: [`${t(req, "property")}: ${props.map((p) => p.name).join(", ")}`, ...baseNotes(req, props, currency).slice(2), t(req, "receivablesNote")],
+    notes: [...baseNotes(req, props, currency), t(req, "receivablesNote").replaceAll("{date}", req.to)],
     columns: [
       { key: "billTo", label: t(req, "billTo"), kind: "text" },
-      ...AGEING_BUCKETS.map((b) => ({ key: b, label: t(req, BUCKET_TEXT[b]), kind: "money" as const })),
+      ...INVOICE_AGES.map((b) => ({ key: b, label: t(req, AGE_TEXT[b]), kind: "money" as const })),
       { key: "open", label: t(req, "open"), kind: "money" },
     ],
     rows,
@@ -529,12 +548,13 @@ async function cashReport(tx: PoolClient, req: ReportRequest, props: PropertyInf
     for (const g of registers) {
       rows.push({ cells: { label: props.length > 1 ? `${p.name} · ${g.name}` : g.name, cashIn: money(g.cash_in), cashOut: money(g.cash_out), paidOuts: money(g.paid_outs), deposits: money(g.deposits), shifts: null, differences: money(g.differences) } });
     }
+    // a Cash Difference is booked on the Business Date its Shift closed on, like every Cash Book entry
     const people = (await tx.query<{ name: string | null; shifts: number; difference: string }>(
-      `select u.name, count(*)::int as shifts, coalesce(sum(s.difference), 0) as difference
-       from cash_shifts s left join control."user" u on u.id = s.user_id
-       where s.property_id = $1 and s.closed_at is not null and (s.closed_at at time zone $4)::date between $2 and $3
+      `select u.name, count(distinct m.shift_id)::int as shifts, coalesce(sum(m.amount), 0) as difference
+       from cash_movements m join cash_shifts s on s.id = m.shift_id left join control."user" u on u.id = s.user_id
+       where m.property_id = $1 and m.kind = 'difference' and m.business_date between $2 and $3
        group by s.user_id, u.name order by u.name`,
-      [p.id, req.from, req.to, p.timeZone],
+      [p.id, req.from, req.to],
     )).rows;
     for (const u of people) {
       rows.push({ cells: { label: `${t(req, "user")}: ${u.name ?? "–"}${props.length > 1 ? ` (${p.name})` : ""}`, cashIn: null, cashOut: null, paidOuts: null, deposits: null, shifts: u.shifts, differences: money(u.difference) }, emphasis: true });
@@ -577,23 +597,70 @@ export async function runReport(pool: Pool, schema: string, req: ReportRequest):
     const props = await propertiesOf(tx, req.propertyIds);
     const currency = req.currency ?? props[0]!.currency;
     checkRates(req, props, currency);
-    switch (req.kind) {
-      case "occupancy":
-        return occupancyReport(tx, req, props, currency);
-      case "pickup":
-        return pickupReport(tx, req, props, currency);
-      case "source_mix":
-        return sourceMixReport(tx, req, props, currency);
-      case "cancellations":
-        return cancellationsReport(tx, req, props, currency);
-      case "revenue_by_code":
-        return revenueByCodeReport(tx, req, props, currency);
-      case "housekeeping":
-        return housekeepingReport(tx, req, props);
-      case "cash":
-        return cashReport(tx, req, props, currency);
-      default:
-        throw new Error("Unknown report");
-    }
+    const table = await build(tx, req, props, currency);
+    const comparable = COMPARABLE[req.kind];
+    if (!comparable || !(req.compare.previous || req.compare.lastYear)) return table;
+    const plain = { ...req, compare: { previous: false, lastYear: false } };
+    const others: [ComparedWith, ReportTable][] = [];
+    if (req.compare.previous) others.push(["previous", await build(tx, { ...plain, ...previousPeriod(req) }, props, currency)]);
+    if (req.compare.lastYear) others.push(["lastYear", await build(tx, { ...plain, ...lastYearPeriod(req) }, props, currency)]);
+    return withComparisons(table, others, comparable, req);
   });
+}
+
+type ComparedWith = "previous" | "lastYear";
+
+/** Reports compared line by line with another period (occupancy compares per period itself): the line's key and the figures compared. */
+const COMPARABLE: Partial<Record<ReportKind, { key: (cells: ReportRow["cells"]) => string; columns: string[] }>> = {
+  source_mix: { key: (c) => String(c.source), columns: ["nights", "revenue"] },
+  cancellations: { key: (c) => String(c.label), columns: ["cancellations", "lost", "noShows"] },
+  revenue_by_code: { key: (c) => `${c.category}|${c.service}|${c.taxCode}`, columns: ["net", "gross"] },
+};
+
+/** The compared periods' figures beside each line; a line the other period lacks shows none there. */
+function withComparisons(table: ReportTable, others: [ComparedWith, ReportTable][], spec: { key: (cells: ReportRow["cells"]) => string; columns: string[] }, req: ReportRequest): ReportTable {
+  const columns = [...table.columns];
+  for (const [suffix] of others) {
+    for (const k of spec.columns) {
+      const c = table.columns.find((x) => x.key === k)!;
+      columns.push({ key: `${k}_${suffix}`, label: `${c.label} ${t(req, suffix)}`, kind: c.kind });
+    }
+  }
+  const rows = table.rows.map((r) => {
+    const cells = { ...r.cells };
+    for (const [suffix, other] of others) {
+      const match = other.rows.find((o) => spec.key(o.cells) === spec.key(r.cells));
+      for (const k of spec.columns) cells[`${k}_${suffix}`] = match?.cells[k] ?? null;
+    }
+    return { ...r, cells };
+  });
+  return { ...table, columns, rows, notes: [...table.notes, t(req, "lastYearNote")] };
+}
+
+async function build(tx: PoolClient, req: ReportRequest, props: PropertyInfo[], currency: string): Promise<ReportTable> {
+  switch (req.kind) {
+    case "occupancy":
+      return occupancyReport(tx, req, props, currency);
+    case "pickup":
+      return pickupReport(tx, req, props, currency);
+    case "source_mix":
+      return sourceMixReport(tx, req, props, currency);
+    case "cancellations":
+      return cancellationsReport(tx, req, props, currency);
+    case "revenue_by_code":
+      return revenueByCodeReport(tx, req, props, currency);
+    case "housekeeping":
+      return housekeepingReport(tx, req, props);
+    case "cash":
+      return cashReport(tx, req, props, currency);
+    default:
+      throw new Error("Unknown report");
+  }
+}
+
+/** Log an export of a report: who, which, where, how, how many rows. */
+export async function logReportExport(pool: Pool, schema: string, entry: { userId: string; kind: ReportKind; propertyIds: string[]; format: "csv" | "pdf" | "mail"; rowCount: number }): Promise<void> {
+  await withTenant(pool, schema, (tx) =>
+    tx.query("insert into report_exports (user_id, kind, property_ids, format, row_count) values ($1, $2, $3, $4, $5)", [entry.userId, entry.kind, entry.propertyIds, entry.format, entry.rowCount]),
+  );
 }
