@@ -13,7 +13,7 @@ export const ROOM_BLOCK_KINDS = ["out_of_order", "out_of_service"] as const;
 export type RoomBlockKind = (typeof ROOM_BLOCK_KINDS)[number];
 
 /** Why a room turned Dirty (or was set by hand). */
-export type CleanlinessSource = "manual" | "check_out" | "room_move" | "block_end" | "night_audit";
+export type CleanlinessSource = "manual" | "check_out" | "room_move" | "block_end" | "night_audit" | "inspection";
 
 /** Ready for a guest: Inspected, or Clean where the property does not inspect. */
 export function isReady(cleanliness: Cleanliness, inspectionRequired: boolean): boolean {

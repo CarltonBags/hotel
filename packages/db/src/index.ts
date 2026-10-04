@@ -325,3 +325,19 @@ export {
   type RoomState,
   type Viewer,
 } from "./tenant/room-state";
+export {
+  TaskStarted,
+  failInspection,
+  generateHousekeepingTasks,
+  housekeepingBoard,
+  moveHousekeepingTask,
+  propertyOfTask,
+  proposeHousekeeping,
+  publishHousekeeping,
+  setWaitingForRoom,
+  setHousekeepingRules,
+  setRoomTypeHousekeeping,
+  workHousekeepingTask,
+  type BoardTask,
+  type HousekeepingBoard,
+} from "./tenant/housekeeping";

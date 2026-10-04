@@ -210,3 +210,16 @@ export {
   type RoomBlockKind,
   type RoomScope,
 } from "./room-state";
+export {
+  DEFAULT_MINUTES,
+  STAYOVER_RHYTHMS,
+  TASK_KINDS,
+  proposeDistribution,
+  tasksForDay,
+  workload,
+  type PlanTask,
+  type StayOnDay,
+  type StayoverRhythm,
+  type TaskKind,
+  type TaskRules,
+} from "./housekeeping";

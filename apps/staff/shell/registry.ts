@@ -70,7 +70,7 @@ export const MODULES: ModuleDef[] = [
   { id: "companies", group: "guests", label: "module.companies", icon: "Building", hue: "#6b7280", href: "/companies", requiresProperty: "view_companies" },
   soon("guest_inbox", "guests", "module.guest_inbox", "MessageCircle", "#0aa5a5", 42),
   { id: "housekeeping", group: "housekeeping", label: "module.housekeeping", icon: "Sparkles", hue: "#e0900b", href: "/rooms", requiresProperty: "view_rooms" },
-  soon("housekeeping_tasks", "housekeeping", "module.housekeeping_tasks", "ClipboardCheck", "#e0900b", 34),
+  { id: "housekeeping_tasks", group: "housekeeping", label: "module.housekeeping_tasks", icon: "ClipboardCheck", hue: "#e0900b", href: "/housekeeping", requiresProperty: "assign_housekeeping" },
   soon("maintenance", "housekeeping", "module.maintenance", "Wrench", "#6b7280", 36),
   soon("lost_found", "housekeeping", "module.lost_found", "PackageSearch", "#b98900", 35),
   soon("reports", "reports", "module.reports", "ChartColumn", "#4f5bd5", 82),

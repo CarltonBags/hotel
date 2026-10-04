@@ -15,6 +15,7 @@ import { LABELS } from "@hoteloftware/invoices/labels";
 import { isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
+import { syncHousekeepingTasks } from "./housekeeping";
 import { markDirty } from "./room-state";
 
 /**
@@ -601,6 +602,8 @@ export async function checkOut(pool: Pool, schema: string, reservationId: string
     // the room the guest leaves turns Dirty
     const lastRoom = (await tx.query<{ room_id: string }>("select room_id from room_assignments where reservation_id = $1 order by from_date desc limit 1", [reservationId])).rows[0];
     if (lastRoom) await markDirty(tx, [lastRoom.room_id], "check_out", userId);
+    // an early departure turns the day's stayover into a departure clean
+    await syncHousekeepingTasks(tx, pre.property_id, userId);
     return issued;
   });
 }

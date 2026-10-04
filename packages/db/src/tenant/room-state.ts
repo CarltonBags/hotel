@@ -37,7 +37,7 @@ export interface Viewer {
 }
 
 /** Turn rooms Dirty (check-out, room move, block end, Night Audit), logged with their source. */
-export async function markDirty(tx: PoolClient, roomIds: string[], source: CleanlinessSource, userId: string): Promise<void> {
+export async function markDirty(tx: PoolClient, roomIds: string[], source: CleanlinessSource, userId: string, reason = ""): Promise<void> {
   if (!roomIds.length) return;
   const { rows } = await tx.query<{ id: string; property_id: string; before: string }>(
     `update rooms m set cleanliness = 'dirty', cleanliness_at = clock_timestamp(), cleanliness_by = $2
@@ -46,8 +46,17 @@ export async function markDirty(tx: PoolClient, roomIds: string[], source: Clean
     [[...new Set(roomIds)], userId],
   );
   for (const r of rows) {
-    await tx.query("insert into room_cleanliness_changes (room_id, property_id, before, after, source, user_id) values ($1, $2, $3, 'dirty', $4, $5)", [r.id, r.property_id, r.before, source, userId]);
+    await tx.query("insert into room_cleanliness_changes (room_id, property_id, before, after, source, user_id, reason) values ($1, $2, $3, 'dirty', $4, $5, $6)", [r.id, r.property_id, r.before, source, userId, reason]);
   }
+}
+
+/** Set a room's Cleanliness and log it (the caller checked the rights and holds the room). */
+export async function setCleanlinessIn(tx: PoolClient, roomId: string, to: Cleanliness, userId: string): Promise<void> {
+  const room = (await tx.query<{ property_id: string; cleanliness: Cleanliness }>("select property_id, cleanliness from rooms where id = $1 for update", [roomId])).rows[0];
+  if (!room) throw new Error("Room not found");
+  if (room.cleanliness === to) return;
+  await tx.query("update rooms set cleanliness = $2, cleanliness_at = clock_timestamp(), cleanliness_by = $3 where id = $1", [roomId, to, userId]);
+  await tx.query("insert into room_cleanliness_changes (room_id, property_id, before, after, source, user_id) values ($1, $2, $3, $4, 'manual', $5)", [roomId, room.property_id, room.cleanliness, to, userId]);
 }
 
 /** The room a stay holds on a night. */
@@ -61,10 +70,14 @@ async function businessDateOf(tx: PoolClient, propertyId: string): Promise<{ bus
   return { businessDate: p.business_date, inspectionRequired: p.inspection_required };
 }
 
-/** Rooms with a Housekeeping Task of the user on the property's Business Date. */
+/** Rooms with a Housekeeping Task of the user on the property's Business Date, once the day's plan is published (ticket 34). */
 async function ownRooms(tx: PoolClient, propertyId: string, businessDate: string, userId: string): Promise<Set<string>> {
   return new Set(
-    (await tx.query<{ room_id: string }>("select room_id from housekeeping_tasks where property_id = $1 and business_date = $2 and assignee_id = $3", [propertyId, businessDate, userId])).rows.map((r) => r.room_id),
+    (await tx.query<{ room_id: string }>(
+      `select t.room_id from housekeeping_tasks t join housekeeping_plans p on p.property_id = t.property_id and p.business_date = t.business_date and p.published_at is not null
+       where t.property_id = $1 and t.business_date = $2 and t.assignee_id = $3`,
+      [propertyId, businessDate, userId],
+    )).rows.map((r) => r.room_id),
   );
 }
 
@@ -177,9 +190,7 @@ export async function setCleanliness(pool: Pool, schema: string, roomId: string,
       const { businessDate } = await businessDateOf(tx, room.property_id);
       if (!(await ownRooms(tx, room.property_id, businessDate, viewer.userId)).has(roomId)) throw new Error("Not one of your rooms today");
     }
-    if (room.cleanliness === to) return;
-    await tx.query("update rooms set cleanliness = $2, cleanliness_at = clock_timestamp(), cleanliness_by = $3 where id = $1", [roomId, to, viewer.userId]);
-    await tx.query("insert into room_cleanliness_changes (room_id, property_id, before, after, source, user_id) values ($1, $2, $3, $4, 'manual', $5)", [roomId, room.property_id, room.cleanliness, to, viewer.userId]);
+    await setCleanlinessIn(tx, roomId, to, viewer.userId);
   });
 }
 
