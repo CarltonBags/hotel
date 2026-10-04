@@ -159,14 +159,17 @@ async function writeGuest(tx: PoolClient, current: Guest, next: GuestData, userI
 }
 
 export async function updateGuest(pool: Pool, schema: string, id: string, patch: GuestPatch, ctx: { userId: string }): Promise<Guest> {
-  return withTenant(pool, schema, async (tx) => {
-    // locked: a concurrent save or merge must not be overwritten with an old snapshot
-    const current = await loadGuest(tx, id, { lock: true });
-    if (!current) throw new Error("Guest not found");
-    const next = clean({ ...current, ...patch });
-    await writeGuest(tx, current, next, ctx.userId);
-    return (await loadGuest(tx, id))!;
-  });
+  return withTenant(pool, schema, (tx) => updateGuestIn(tx, id, patch, ctx));
+}
+
+/** Inside a caller's transaction (a change that must land together with the guest's). */
+export async function updateGuestIn(tx: PoolClient, id: string, patch: GuestPatch, ctx: { userId: string }): Promise<Guest> {
+  // locked: a concurrent save or merge must not be overwritten with an old snapshot
+  const current = await loadGuest(tx, id, { lock: true });
+  if (!current) throw new Error("Guest not found");
+  const next = clean({ ...current, ...patch });
+  await writeGuest(tx, current, next, ctx.userId);
+  return (await loadGuest(tx, id))!;
 }
 
 export async function findGuest(pool: Pool, schema: string, id: string): Promise<Guest | null> {

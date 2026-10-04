@@ -1575,6 +1575,63 @@ export const propertyOutages = pgTable(
   ],
 );
 
+export const registrations = pgTable(
+  "registrations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().unique().references(() => reservations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    country: text("country").notNull(),
+    deviceId: uuid("device_id"),
+    queue: uuid("queue").array().notNull().default(sql`'{}'`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [check("registrations_country_check", sql`${t.country} in ('DE', 'AT')`), uniqueIndex("registrations_device_key").on(t.deviceId).where(sql`${t.deviceId} is not null`)],
+);
+
+export const registrationPersons = pgTable(
+  "registration_persons",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    registrationId: uuid("registration_id").notNull().references(() => registrations.id, { onDelete: "cascade" }),
+    guestId: uuid("guest_id").references(() => guests.id, { onDelete: "set null" }),
+    role: text("role").notNull(),
+    firstName: text("first_name").notNull().default(""),
+    lastName: text("last_name").notNull().default(""),
+    dateOfBirth: date("date_of_birth"),
+    nationality: text("nationality").notNull().default(""),
+    addressLine1: text("address_line1").notNull().default(""),
+    postalCode: text("postal_code").notNull().default(""),
+    city: text("city").notNull().default(""),
+    country: text("country").notNull().default(""),
+    documentNumber: text("document_number").notNull().default(""),
+    gender: text("gender").notNull().default(""),
+    language: text("language").notNull().default("de"),
+    step: text("step").notNull().default("waiting"),
+    guestDoneAt: timestamp("guest_done_at", { withTimezone: true }),
+    confirmation: text("confirmation"),
+    signature: bytea("signature"),
+    paperSignedBy: text("paper_signed_by"),
+    paperSignedAt: timestamp("paper_signed_at", { withTimezone: true }),
+    idCheckedBy: text("id_checked_by"),
+    idCheckedAt: timestamp("id_checked_at", { withTimezone: true }),
+    idCheckNote: text("id_check_note").notNull().default(""),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    pdf: bytea("pdf"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("registration_persons_gender_check", sql`${t.gender} in ('', 'f', 'm', 'x')`),
+    check("registration_persons_role_check", sql`${t.role} in ('primary', 'spouse', 'partner', 'child', 'other')`),
+    check("registration_persons_step_check", sql`${t.step} in ('waiting', 'welcome', 'details', 'companions', 'review', 'done')`),
+    check("registration_persons_confirmation_check", sql`${t.confirmation} in ('tablet_signature', 'paper')`),
+    check("registration_persons_signature_check", sql`(${t.confirmation} = 'tablet_signature') = (${t.signature} is not null)`),
+    check("registration_persons_paper_check", sql`(${t.confirmation} = 'paper') = (${t.paperSignedAt} is not null and ${t.paperSignedBy} is not null)`),
+    index("registration_persons_registration_idx").on(t.registrationId),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1651,4 +1708,6 @@ export const tenantSchema = {
   reportExports,
   mailOutbox,
   propertyOutages,
+  registrations,
+  registrationPersons,
 };

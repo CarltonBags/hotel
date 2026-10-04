@@ -40,14 +40,8 @@ export default async function DevicePage() {
       </>,
     );
   }
-  if (device.kind !== "staff") {
-    return card(
-      <>
-        <h1 className="text-lg font-medium">{device.name}</h1>
-        <p className="mt-2 text-sm text-ink-60">{m["dev.guestDevice"]}</p>
-      </>,
-    );
-  }
+  // a guest tablet shows only what the desk sends it (ticket 45)
+  if (device.kind !== "staff") redirect("/tablet");
   const people = await deviceSignInList(pool(), device);
   return card(
     <div className="grid gap-4">

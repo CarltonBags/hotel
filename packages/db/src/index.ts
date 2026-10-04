@@ -430,3 +430,29 @@ export { logReportExport, runReport, type ReportRequest } from "./tenant/reports
 export { createReportSchedule, deleteReportSchedule, dueReportSchedules, listReportSchedules, markReportScheduleSent, stopReportSchedule, type ReportSchedule, type ScheduleOptions } from "./tenant/report-schedules";
 export { queueMail, type OutgoingMail } from "./tenant/mail-outbox";
 export { catchUp, downtimeSet, emergencyReport, endOutage, getDowntimeOptions, listOutages, logOutage, setDowntimeOptions, type CatchUpInput, type DowntimeGuestRow, type DowntimeSet, type EmergencyReport, type Outage, type RoomRackRow } from "./tenant/downtime";
+export {
+  addRegistrationPerson,
+  completeRegistrationPerson,
+  confirmSignedOnPaper,
+  deleteExpiredRegistrations,
+  findRegistration,
+  openRegistration,
+  recordIdCheck,
+  registrationDocument,
+  registrationPdf,
+  registrationPersonProperty,
+  renderRegistration,
+  TabletProblem,
+  sendToTablet,
+  tabletState,
+  tabletStep,
+  takeBackFromTablet,
+  type GuestDetails,
+  type PersonInput,
+  type RegistrationDocument,
+  type RegistrationPersonView,
+  type RegistrationView,
+  type TabletInput,
+  type TabletPerson,
+  type TabletState,
+} from "./tenant/registration";
