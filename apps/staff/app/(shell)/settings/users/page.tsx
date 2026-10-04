@@ -75,7 +75,7 @@ export default async function UsersPage() {
         <details key={u.id} className="rounded-2xl bg-surface-2 p-5">
           <summary className="cursor-pointer">
             <span className="font-medium">{u.name}</span>{" "}
-            <span className="font-mono text-ink-80">{u.username ?? m["settings.users.noUsername"]}</span> <span className="text-ink-60">{u.email}</span>{" "}
+            <span className="font-mono text-ink-80">{u.username ?? m["settings.users.noUsername"]}</span> <span className="text-ink-60">{u.pinOnly ? m["dev.pinUsers"] : u.email}</span>{" "}
             {u.pendingInvitation ? <span className="rounded-full bg-warning/15 px-2 text-xs text-warning">{m["settings.users.invited"]}</span> : null}{" "}
             <span className="text-ink-60">
               {[

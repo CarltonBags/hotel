@@ -2,10 +2,9 @@
 
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { signInToTenant } from "@hoteloftware/auth";
-import { getPreferences } from "@hoteloftware/db";
-import { ACCENT_COOKIE, LANGUAGE_COOKIE, SCOPE_COOKIE, THEME_COOKIE } from "@/lib/shell";
+import { DEVICE_COOKIE, signInToTenant } from "@hoteloftware/auth";
 import { auth } from "@/lib/auth";
+import { dropSessionCookies, takeSignInCookies } from "@/lib/auth-cookies";
 import { pool } from "@/lib/db";
 import { currentTenant } from "@/lib/tenant";
 
@@ -27,51 +26,13 @@ export async function signIn(_prev: SignInState, formData: FormData): Promise<Si
     headers: await headers(),
   });
   if (!result.ok) return { error: "Username or password is wrong." };
-
-  // Forward the cookies Better Auth set on its response to this response.
-  const jar = await cookies();
-  for (const raw of result.response.headers.getSetCookie()) {
-    const [pair = "", ...attrs] = raw.split(";");
-    const eq = pair.indexOf("=");
-    const name = pair.slice(0, eq).trim();
-    // The raw header value is URL-encoded; cookies().set encodes again, so decode first.
-    const value = decodeURIComponent(pair.slice(eq + 1));
-    const opts = new Map(
-      attrs.map((a) => {
-        const [k = "", ...v] = a.trim().split("=");
-        return [k.toLowerCase(), v.join("=")] as const;
-      }),
-    );
-    const sameSite = opts.get("samesite")?.toLowerCase();
-    jar.set(name, value, {
-      httpOnly: opts.has("httponly"),
-      secure: opts.has("secure"),
-      sameSite: sameSite === "strict" || sameSite === "none" ? sameSite : "lax",
-      path: opts.get("path") || "/",
-      ...(opts.has("max-age") ? { maxAge: Number(opts.get("max-age")) } : {}),
-      ...(opts.has("expires") ? { expires: new Date(opts.get("expires")!) } : {}),
-    });
-  }
-  // a shared desk PC: the property chosen by whoever signed in before does not carry over
-  jar.delete(SCOPE_COOKIE);
-  // Mirror the user's display settings so the next page already paints correctly.
-  const session = await auth().api.getSession({ headers: new Headers({ cookie: jar.toString() }) });
-  if (session) {
-    const prefs = await getPreferences(pool(), session.user.id);
-    const year = 60 * 60 * 24 * 365;
-    jar.set(LANGUAGE_COOKIE, prefs.language, { path: "/", maxAge: year, sameSite: "lax" });
-    jar.set(THEME_COOKIE, prefs.theme, { path: "/", maxAge: year, sameSite: "lax" });
-    jar.set(ACCENT_COOKIE, tenant.accent, { path: "/", maxAge: year, sameSite: "lax" });
-  }
+  await takeSignInCookies(result.response, tenant);
   redirect("/");
 }
 
 export async function signOut(): Promise<void> {
   await auth().api.signOut({ headers: await headers() });
-  const jar = await cookies();
-  for (const c of jar.getAll()) {
-    if (c.name.includes("session_token")) jar.delete(c.name);
-  }
-  jar.delete(SCOPE_COOKIE);
-  redirect("/sign-in");
+  await dropSessionCookies();
+  // an enrolled Device goes back to its lock screen
+  redirect((await cookies()).has(DEVICE_COOKIE) ? "/device" : "/sign-in");
 }

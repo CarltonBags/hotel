@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigserial, boolean, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigserial, boolean, check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 /** Control schema (ADR 0006). Mirrors migrations/control/*.sql; the SQL is the source of truth. */
 export const control = pgSchema("control");
@@ -41,6 +41,7 @@ export const user = control.table(
     image: text("image"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    pinOnly: boolean("pin_only").notNull().default(false),
   },
   (t) => [index("user_tenant_idx").on(t.tenantId), uniqueIndex("user_tenant_username_idx").on(t.tenantId, sql`lower(${t.username})`)],
 );
@@ -170,7 +171,93 @@ export const externalIds = control.table(
   (t) => [primaryKey({ columns: [t.provider, t.externalId] })],
 );
 
+export const devices = control.table(
+  "devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull(),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    ownerUserId: text("owner_user_id").references(() => user.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull().unique(),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true }).notNull().defaultNow(),
+    enrolledBy: text("enrolled_by").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: text("revoked_by"),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    lastUserId: text("last_user_id").references(() => user.id, { onDelete: "set null" }),
+  },
+  (t) => [index("devices_tenant_property_idx").on(t.tenantId, t.propertyId), check("devices_kind_check", sql`${t.kind} in ('staff', 'guest')`)],
+);
+
+export const deviceUsers = control.table(
+  "device_users",
+  {
+    deviceId: uuid("device_id").notNull().references(() => devices.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.deviceId, t.userId] })],
+);
+
+export const deviceEnrolments = control.table(
+  "device_enrolments",
+  {
+    codeHash: text("code_hash").primaryKey(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull(),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    ownerUserId: text("owner_user_id").references(() => user.id, { onDelete: "cascade" }),
+    userIds: text("user_ids").array().notNull().default(sql`'{}'`),
+    createdBy: text("created_by").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+  },
+  (t) => [check("device_enrolments_kind_check", sql`${t.kind} in ('staff', 'guest')`)],
+);
+
+export const deviceSessions = control.table(
+  "device_sessions",
+  {
+    sessionId: text("session_id").primaryKey().references(() => session.id, { onDelete: "cascade" }),
+    deviceId: uuid("device_id").notNull().references(() => devices.id, { onDelete: "cascade" }),
+    idleMinutes: integer("idle_minutes").notNull().default(2),
+    lastActiveAt: timestamp("last_active_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("device_sessions_device_idx").on(t.deviceId), check("device_sessions_idle_minutes_check", sql`${t.idleMinutes} between 1 and 10`)],
+);
+
+export const userPins = control.table("user_pins", {
+  userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+  pinHash: text("pin_hash").notNull(),
+  failedCount: integer("failed_count").notNull().default(0),
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+  mustChange: boolean("must_change").notNull().default(true),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const pinEvents = control.table(
+  "pin_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    deviceId: uuid("device_id").references(() => devices.id, { onDelete: "set null" }),
+    kind: text("kind").notNull(),
+    byUserId: text("by_user_id"),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("pin_events_user_idx").on(t.userId, t.at.desc()), check("pin_events_kind_check", sql`${t.kind} in ('success', 'wrong', 'lock', 'reset', 'changed')`)],
+);
+
 export const controlSchema = {
+  devices,
+  deviceUsers,
+  deviceEnrolments,
+  deviceSessions,
+  userPins,
+  pinEvents,
   tenants,
   tenantMigrations,
   user,

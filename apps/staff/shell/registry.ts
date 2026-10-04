@@ -84,7 +84,7 @@ export const MODULES: ModuleDef[] = [
   { id: "settings_users", group: "settings", label: "module.settings_users", icon: "Users", hue: "#7c5cff", href: "/settings/users", requiresProperty: "manage_property_users" },
   { id: "settings_services", group: "settings", label: "module.settings_services", icon: "Tag", hue: "#e0457b", href: "/settings/services", requiresProperty: "view_property" },
   { id: "settings_rate_plans", group: "settings", label: "module.settings_rate_plans", icon: "Tag", hue: "#e0457b", href: "/settings/rate-plans", requiresProperty: "manage_rates" },
-  soon("settings_devices", "settings", "module.settings_devices", "TabletSmartphone", "#6b7280", 14),
+  { id: "settings_devices", group: "settings", label: "module.settings_devices", icon: "TabletSmartphone", hue: "#6b7280", href: "/settings/devices", requiresProperty: "manage_floor_users" },
   { id: "settings_payments", group: "settings", label: "module.settings_payments", icon: "CreditCard", hue: "#635bff", href: "/settings/payments", requiresProperty: "manage_payment_settings" },
   { id: "settings_city_tax", group: "settings", label: "module.settings_city_tax", icon: "Landmark", hue: "#b98900", href: "/settings/city-tax", requiresProperty: "manage_property_settings" },
   { id: "settings_rooms", group: "settings", label: "module.settings_rooms", icon: "BedDouble", hue: "#0aa5a5", href: "/settings/rooms", requiresProperty: "manage_property_settings" },

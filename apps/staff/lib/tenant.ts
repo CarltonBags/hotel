@@ -22,6 +22,6 @@ export const currentTenant = cache(async (): Promise<Tenant | null> => {
 export const currentSession = cache(async (): Promise<{ tenant: Tenant; session: TenantSession } | null> => {
   const tenant = await currentTenant();
   if (!tenant) return null;
-  const session = await getTenantSession(auth(), await headers(), tenant.id);
+  const session = await getTenantSession(auth(), pool(), await headers(), tenant.id);
   return session ? { tenant, session } : null;
 });

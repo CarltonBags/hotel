@@ -129,6 +129,10 @@ export const PROPERTY_ACTIONS = {
   assign_housekeeping: ["property_manager", "housekeeping_supervisor"],
   /** Matrix "View Cleanliness and Room Blocks" (a Housekeeper only own rooms: roomViewScope). */
   view_rooms: ["property_manager", "front_desk", "housekeeping_supervisor", "housekeeper", "maintenance"],
+  /** Enrol and revoke Devices of the property, choose who signs in on them (Property Manager). */
+  manage_devices: ["property_manager"],
+  /** Create Housekeeper users, reset their PIN and unlock them (amendment "Shared-device login"); the Property Manager for every user. */
+  manage_floor_users: ["property_manager", "housekeeping_supervisor"],
   /** Matrix "Financial reports, City Tax report". */
   view_financial_reports: ["property_manager", "accounting"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */

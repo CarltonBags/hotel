@@ -2,8 +2,12 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import type { Pool } from "pg";
-import { controlDb, controlSchema, emailForUsername, findTenantBySlug, setUsername } from "@hoteloftware/db";
-import { resolveTenantSlugFromHeaders } from "@hoteloftware/domain";
+import { randomUUID } from "node:crypto";
+import { controlDb, controlSchema, emailForUsername, findTenantBySlug, setPropertyRoles, setUsername } from "@hoteloftware/db";
+import { PIN_ROLES, resolveTenantSlugFromHeaders, type PropertyRole } from "@hoteloftware/domain";
+import { DEVICE_COOKIE, checkDeviceSession, cookieValue, devicePinPlugin, setPin, type DeviceSession } from "./devices";
+
+export * from "./devices";
 
 export interface AuthConfig {
   pool: Pool;
@@ -47,6 +51,7 @@ export function createAuth(config: AuthConfig) {
       // alpha.<domain> is never sent to beta.<domain>.
       useSecureCookies: scheme === "https",
     },
+    plugins: [devicePinPlugin(config.pool, config.appDomain)],
     hooks: {
       // The HTTP endpoint is public, so scope password sign-in to the tenant of the
       // host here, not only in the server action: a user may sign in only at their
@@ -89,6 +94,36 @@ export async function createStaffUser(auth: Auth, pool: Pool, input: StaffUserIn
     password: await ctx.password.hash(input.password),
   });
   await setUsername(pool, input.tenantId, user.id, input.username);
+  return { id: user.id };
+}
+
+/**
+ * A PIN-only user (a Housekeeper, say): no email of their own and no
+ * password, so they can sign in only by PIN on an enrolled Device. They get a
+ * floor role at one property and a first PIN, to change at first sign-in.
+ */
+export async function createPinUser(
+  auth: Auth,
+  pool: Pool,
+  input: { tenantId: string; propertyId: string; username: string; name: string; role: PropertyRole; pin: string; createdBy: string },
+): Promise<{ id: string }> {
+  if (!PIN_ROLES.includes(input.role)) throw new Error("Only floor roles sign in by PIN");
+  const name = input.name.trim();
+  if (!name) throw new Error("Give the name");
+  const ctx = await auth.$context;
+  const user = await ctx.internalAdapter.createUser(
+    { email: `${randomUUID()}@pin.invalid`, name, emailVerified: false, tenantId: input.tenantId },
+    { method: "pin" },
+  );
+  try {
+    await pool.query('update control."user" set pin_only = true where id = $1', [user.id]);
+    await setUsername(pool, input.tenantId, user.id, input.username);
+    await setPropertyRoles(pool, { tenantId: input.tenantId, userId: user.id, propertyId: input.propertyId, roles: [input.role], grantedBy: input.createdBy });
+    await setPin(ctx.password.hash, pool, { tenantId: input.tenantId, userId: user.id, pin: input.pin, byUserId: input.createdBy, mustChange: true });
+  } catch (err) {
+    await pool.query('delete from control."user" where id = $1', [user.id]);
+    throw err;
+  }
   return { id: user.id };
 }
 
@@ -184,19 +219,25 @@ export async function verifyTenantCredentials(auth: Auth, pool: Pool, input: { t
 export interface TenantSession {
   user: { id: string; email: string; username: string | null; name: string; tenantId: string };
   session: { id: string; expiresAt: Date };
+  /** Signed in by PIN on this Device (ticket 14); null for a password session. */
+  device: DeviceSession | null;
 }
 
 /**
  * Read the session from the request and accept it only if the user belongs
- * to the tenant of the host. Anything else counts as signed out.
+ * to the tenant of the host, and, for a PIN session, only from its Device.
+ * Anything else counts as signed out.
  */
-export async function getTenantSession(auth: Auth, headers: Headers, tenantId: string): Promise<TenantSession | null> {
+export async function getTenantSession(auth: Auth, pool: Pool, headers: Headers, tenantId: string): Promise<TenantSession | null> {
   const result = await auth.api.getSession({ headers });
   if (!result) return null;
   const user = result.user as typeof result.user & { tenantId?: string; username?: string | null };
   if (user.tenantId !== tenantId) return null;
+  const device = await checkDeviceSession(pool, result.session.id, cookieValue(headers, DEVICE_COOKIE));
+  if (device === false) return null;
   return {
     user: { id: user.id, email: user.email, username: user.username ?? null, name: user.name, tenantId: user.tenantId },
     session: { id: result.session.id, expiresAt: result.session.expiresAt },
+    device,
   };
 }

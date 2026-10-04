@@ -21,6 +21,8 @@ export interface Property extends PropertyInput {
   /** Local times: the audit may start from, and is overdue after (next morning). */
   nightAuditFrom: string;
   nightAuditDeadline: string;
+  /** An enrolled Device locks after this many idle minutes, 1 to 10 (ticket 14). */
+  deviceIdleMinutes: number;
 }
 
 interface Row {
@@ -36,10 +38,11 @@ interface Row {
   business_date: string;
   night_audit_from: string;
   night_audit_deadline: string;
+  device_idle_minutes: number;
 }
 
 const SELECT = `select p.id, p.name, p.legal_entity_id, l.name as legal_entity_name, p.country, p.time_zone, p.currency, p.created_at, p.refund_limit,
-                  to_char(p.business_date, 'YYYY-MM-DD') as business_date, to_char(p.night_audit_from, 'HH24:MI') as night_audit_from, to_char(p.night_audit_deadline, 'HH24:MI') as night_audit_deadline
+                  to_char(p.business_date, 'YYYY-MM-DD') as business_date, to_char(p.night_audit_from, 'HH24:MI') as night_audit_from, to_char(p.night_audit_deadline, 'HH24:MI') as night_audit_deadline, p.device_idle_minutes
                 from properties p join legal_entities l on l.id = p.legal_entity_id`;
 
 function toProperty(r: Row): Property {
@@ -56,6 +59,7 @@ function toProperty(r: Row): Property {
     businessDate: r.business_date,
     nightAuditFrom: r.night_audit_from,
     nightAuditDeadline: r.night_audit_deadline,
+    deviceIdleMinutes: r.device_idle_minutes,
   };
 }
 
@@ -108,4 +112,11 @@ export async function findProperty(pool: Pool, schema: string, id: string): Prom
     const { rows } = await tx.query<Row>(`${SELECT} where p.id = $1`, [id]);
     return rows[0] ? toProperty(rows[0]) : null;
   });
+}
+
+/** Minutes an enrolled Device of the property may sit idle before it locks: 1 to 10. */
+export async function setDeviceIdleMinutes(pool: Pool, schema: string, id: string, minutes: number): Promise<void> {
+  if (!(Number.isInteger(minutes) && minutes >= 1 && minutes <= 10)) throw new Error("Idle lock: 1 to 10 minutes");
+  const updated = await withTenant(pool, schema, (tx) => tx.query("update properties set device_idle_minutes = $2, updated_at = now() where id = $1", [id, minutes]));
+  if (!updated.rowCount) throw new Error("Property not found");
 }

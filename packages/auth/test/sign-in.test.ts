@@ -61,7 +61,7 @@ describe("tenant-scoped sign-in", () => {
     const cookie = cookieHeader(result.response);
     expect(cookie).toMatch(/session_token/);
 
-    const session = await getTenantSession(auth, headersFor("alpha", cookie), alpha.id);
+    const session = await getTenantSession(auth, pool, headersFor("alpha", cookie), alpha.id);
     expect(session?.user).toMatchObject({ email: "bob@example.com", username: "bob", name: "Bob", tenantId: alpha.id });
   });
 
@@ -69,7 +69,7 @@ describe("tenant-scoped sign-in", () => {
     const result = await signInToTenant(auth, pool, { tenantId: beta.id, login: "bob", password: "other bob password", headers: headersFor("beta") });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const session = await getTenantSession(auth, headersFor("beta", cookieHeader(result.response)), beta.id);
+    const session = await getTenantSession(auth, pool, headersFor("beta", cookieHeader(result.response)), beta.id);
     expect(session?.user.email).toBe("bob.beta@example.com");
   });
 
@@ -116,7 +116,7 @@ describe("tenant-scoped sign-in", () => {
     });
     if (!result.ok) throw new Error("sign-in failed");
     const cookie = cookieHeader(result.response);
-    expect(await getTenantSession(auth, headersFor("beta", cookie), beta.id)).toBeNull();
+    expect(await getTenantSession(auth, pool, headersFor("beta", cookie), beta.id)).toBeNull();
   });
 
   it("refuses the raw sign-in endpoint for a user of another tenant", async () => {
