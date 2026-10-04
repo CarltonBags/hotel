@@ -53,7 +53,7 @@ export async function reportRequestFrom(kindParam: string, p: ReportParams): Pro
       propertyIds: properties.map((x) => x.id),
       grain,
       byRoomType: one(p, "by") === "roomType",
-      compare: { previous: one(p, "pp") === "on", lastYear: one(p, "ly") === "on" },
+      compare: { previous: one(p, "pp") === "on", lastYear: one(p, "ly") === "on", budget: one(p, "bu") === "on", forecast: one(p, "fc") === "on" },
       ...(roomTypeId ? { roomTypeId } : {}),
       ...(isDate(one(p, "since")) ? { pickupSince: one(p, "since") } : {}),
       currency,
