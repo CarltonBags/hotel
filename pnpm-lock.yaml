@@ -136,6 +136,9 @@ importers:
       '@hoteloftware/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@hoteloftware/invoices':
+        specifier: workspace:*
+        version: link:../../packages/invoices
       '@hoteloftware/payments':
         specifier: workspace:*
         version: link:../../packages/payments

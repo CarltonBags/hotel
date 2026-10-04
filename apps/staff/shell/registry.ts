@@ -4,8 +4,19 @@
  * placeholder and name the ticket that builds them. Tickets add their modules
  * here; nothing else in the shell knows them.
  */
-import type { Action, PropertyAction } from "@hoteloftware/domain";
+import { REPORT_ACCESS, REPORT_KINDS, type Action, type PropertyAction, type ReportKind } from "@hoteloftware/domain";
 import type { MessageKey } from "@/i18n/messages";
+
+const REPORT_ICONS: Record<ReportKind, string> = {
+  occupancy: "ChartColumn",
+  pickup: "CalendarDays",
+  source_mix: "LayoutGrid",
+  cancellations: "LogOut",
+  revenue_by_code: "Receipt",
+  housekeeping: "Sparkles",
+  receivables: "FileText",
+  cash: "Wallet",
+};
 
 export type GroupId = "front_desk" | "lists" | "cash_billing" | "rates" | "guests" | "housekeeping" | "reports" | "settings";
 
@@ -75,7 +86,8 @@ export const MODULES: ModuleDef[] = [
   { id: "housekeeping_tasks", group: "housekeeping", label: "module.housekeeping_tasks", icon: "ClipboardCheck", hue: "#e0900b", href: "/housekeeping", requiresProperty: "assign_housekeeping" },
   soon("maintenance", "housekeeping", "module.maintenance", "Wrench", "#6b7280", 36),
   { id: "lost_found", group: "housekeeping", label: "module.lost_found", icon: "PackageSearch", hue: "#b98900", href: "/lost-found", requiresProperty: "view_lost_items" },
-  soon("reports", "reports", "module.reports", "ChartColumn", "#4f5bd5", 82),
+  // the fixed reports (ticket 82), each its own Workspace Tab
+  ...REPORT_KINDS.map((kind): ModuleDef => ({ id: `report_${kind}`, group: "reports", label: `module.report_${kind}`, icon: REPORT_ICONS[kind], hue: "#4f5bd5", href: `/reports/${kind}`, requiresProperty: REPORT_ACCESS[kind] })),
   { id: "night_audit_reports", group: "reports", label: "module.night_audit_reports", icon: "MoonStar", hue: "#7c5cff", href: "/night-audit/reports", requiresProperty: "view_night_audit_reports" },
   { id: "tourism_statistics", group: "reports", label: "module.tourism_statistics", icon: "ChartColumn", hue: "#0aa5a5", href: "/statistics", requiresProperty: "tourism_statistics" },
   { id: "audit_log", group: "reports", label: "module.audit_log", icon: "List", hue: "#4f5bd5", href: "/audit-log", requiresProperty: "view_audit_log" },
