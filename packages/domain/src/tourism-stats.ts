@@ -106,7 +106,8 @@ function austrianState(postal: string): string | null {
   const p = Number(postal.slice(0, 2));
   if (p < 20) return "at_wien";
   if (p < 40) return "at_noe";
-  if (p < 50) return "at_ooe";
+  // 52xx and 53xx (Braunau, Mattighofen) are Upper Austria
+  if (p < 50 || p === 52 || p === 53) return "at_ooe";
   if (p < 60) return "at_salzburg";
   if (p < 67) return "at_tirol";
   if (p < 70) return "at_vorarlberg";
@@ -134,7 +135,9 @@ region(49, 49, "de_nord");
 region(50, 53, "de_nrw");
 region(54, 56, "de_mitte");
 region(57, 59, "de_nrw");
-region(60, 67, "de_mitte");
+region(60, 62, "de_mitte");
+region(63, 63, "de_bayern");
+region(64, 67, "de_mitte");
 region(68, 79, "de_bw");
 region(80, 87, "de_bayern");
 region(88, 89, "de_bw");
@@ -209,6 +212,8 @@ export function countMonth(stays: StatsStay[], month: string): MonthCount {
   const out: MonthCount = { rows: {}, arrivals: 0, nights: 0 };
   for (const s of stays) {
     const nights = Math.max(0, Math.min(dayNumber(s.departure), dayNumber(to)) - Math.max(dayNumber(s.arrival), dayNumber(from)));
+    // a stay without a night (day use) counts neither as an arrival nor as nights
+    if (s.departure <= s.arrival) continue;
     const arrives = s.arrival >= from && s.arrival < to;
     if (!nights && !arrives) continue;
     const r = (out.rows[s.row] ??= { arrivals: 0, nights: 0 });

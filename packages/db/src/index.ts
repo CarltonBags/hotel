@@ -390,9 +390,10 @@ export {
   type ReceiptView,
 } from "./tenant/cash";
 export {
-  addPropertyClosure,
+  addClosedPeriod,
   dueTourismReport,
-  removePropertyClosure,
+  dueTourismReports,
+  removeClosedPeriod,
   setStatsExclusion,
   setStatsSettings,
   statsDeadline,

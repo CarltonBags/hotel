@@ -8,8 +8,8 @@ import { reservationScope } from "@/lib/reservation-scope";
 
 export async function statsExclusionAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation } = await reservationScope(field(formData, "reservationId"), "exclude_from_statistics");
-    await setStatsExclusion(pool(), schema, reservation.id, field(formData, "include") === "on" ? null : field(formData, "reason"));
+    const { schema, reservation, userId } = await reservationScope(field(formData, "reservationId"), "exclude_from_statistics");
+    await setStatsExclusion(pool(), schema, reservation.id, field(formData, "include") === "on" ? null : field(formData, "reason"), userId);
     revalidatePath(`/reservations/${reservation.id}`);
   });
 }

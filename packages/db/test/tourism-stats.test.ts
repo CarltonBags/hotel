@@ -13,7 +13,7 @@ import { createRatePlan } from "../src/tenant/rate-plans";
 import { setRates } from "../src/tenant/rates";
 import { createGuest } from "../src/tenant/guests";
 import { createBooking } from "../src/tenant/reservations";
-import { addPropertyClosure, dueTourismReport, setStatsExclusion, setStatsSettings, submitTourismReport, tourismReport } from "../src/tenant/tourism-stats";
+import { addClosedPeriod, dueTourismReport, setStatsExclusion, setStatsSettings, submitTourismReport, tourismReport } from "../src/tenant/tourism-stats";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -71,14 +71,14 @@ describe("tourism statistics", () => {
     await stay("Berlin", { country: null }, "2026-07-05", "2026-07-06", 1);
     refugee = await stay("Berlin", { country: "UA" }, "2026-07-01", "2026-07-31", 2);
     await stay("Berlin", { country: "FR" }, "2026-07-14", "2026-07-16", 2, [], "cancelled");
-    await setStatsExclusion(pool, s(), refugee, "Refugee accommodation");
+    await setStatsExclusion(pool, s(), refugee, "Refugee accommodation", fd);
     // Wien, July 2026
     await stay("Wien", { country: "DE", postal: "80331" }, "2026-07-02", "2026-07-04", 2);
     await stay("Wien", { country: "DE", postal: "10115" }, "2026-07-02", "2026-07-03", 1);
     await stay("Wien", { country: "DE" }, "2026-07-20", "2026-07-21", 1);
     await stay("Wien", { country: "AT", postal: "6900" }, "2026-07-08", "2026-07-10", 2);
     await stay("Wien", { country: "KZ" }, "2026-07-08", "2026-07-09", 1);
-    await addPropertyClosure(pool, s(), props.Wien!.id, { from: "2026-07-27", to: "2026-07-31", reason: "Renovation" }, fd);
+    await addClosedPeriod(pool, s(), props.Wien!.id, { from: "2026-07-27", to: "2026-07-31", reason: "Renovation" }, fd);
   });
 
   afterAll(async () => {
@@ -115,14 +115,15 @@ describe("tourism statistics", () => {
     expect(await submitTourismReport(pool, s(), props.Berlin!.id, "2026-07", fd)).toBe(1);
     await expect(pool.query(`update ${s()}.tourism_reports set data = '{}'`)).rejects.toThrow(/never changed/);
     // the refugee stay counted after all: the correction is version 2, version 1 stays as submitted
-    await setStatsExclusion(pool, s(), refugee, null);
+    await setStatsExclusion(pool, s(), refugee, null, fd);
     expect(await submitTourismReport(pool, s(), props.Berlin!.id, "2026-07", fd)).toBe(2);
     const { versions } = await tourismReport(pool, s(), props.Berlin!.id, "2026-07");
     expect(versions.map((v) => [v.version, v.data.totals.arrivals])).toEqual([
       [2, 10],
       [1, 8],
     ]);
-    await expect(submitTourismReport(pool, s(), props.Berlin!.id, "2026-09", fd)).rejects.toThrow(/once it has begun/);
+    // a month not yet over cannot be submitted
+    await expect(submitTourismReport(pool, s(), props.Berlin!.id, "2026-08", fd)).rejects.toThrow(/once it has ended/);
   });
 
   it("the reminder appears on the deadline day until the month is submitted", async () => {
@@ -134,5 +135,8 @@ describe("tourism statistics", () => {
     expect(await dueTourismReport(pool, s(), wien)).toEqual({ month: "2026-07", deadline: "2026-08-05" });
     await submitTourismReport(pool, s(), wien, "2026-07", fd);
     expect(await dueTourismReport(pool, s(), wien)).toBeNull();
+    // a month left behind is still reminded when the next one falls due
+    await bd(wien, "2026-10-06");
+    expect(await dueTourismReport(pool, s(), wien)).toEqual({ month: "2026-08", deadline: "2026-09-05" });
   });
 });

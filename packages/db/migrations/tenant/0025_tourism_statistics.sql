@@ -5,20 +5,22 @@ alter table properties add column stats_identity text not null default '';
 alter table properties add column stats_deadline_day integer not null default 5 constraint properties_stats_deadline_day_check check (stats_deadline_day between 1 and 28);
 
 -- days the property is closed (both days included); every other day is an opening day
-create table property_closures (
+create table closed_periods (
   id uuid primary key default gen_random_uuid(),
   property_id uuid not null references properties(id),
   from_date date not null,
   to_date date not null,
-  constraint property_closures_dates_check check (to_date >= from_date),
+  constraint closed_periods_dates_check check (to_date >= from_date),
   reason text not null default '',
   created_at timestamptz not null default clock_timestamp(),
   created_by text not null
 );
-create index property_closures_property_idx on property_closures(property_id, from_date);
+create index closed_periods_property_idx on closed_periods(property_id, from_date);
 
 -- a stay the statistics leave out (for example refugees, stays over a year), with the reason
 alter table reservations add column stats_excluded_reason text constraint reservations_stats_excluded_reason_check check (stats_excluded_reason is null or length(trim(stats_excluded_reason)) > 0);
+alter table reservations add column stats_excluded_by text;
+alter table reservations add column stats_excluded_at timestamptz;
 
 -- a monthly report as submitted: never changed; a correction is a new version
 create table tourism_reports (

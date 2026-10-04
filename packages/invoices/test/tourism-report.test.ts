@@ -20,7 +20,11 @@ describe("tourism statistics export", () => {
     expect(csv).toContain("NL;Niederlande;3;21");
     expect(csv).toContain("total;Insgesamt;5;25");
     // 25 rooms or more: room days on the German form
-    expect(csv).toContain("Angebotene Zimmertage / Room days offered;806");
+    expect(csv).toContain("(02) Angebotene Zimmertage / Room days offered;806");
+    // guest rooms on 31 July in the July report
+    expect(csv).toContain("(05) Angebotene Gästezimmer am 31. Juli / Guest rooms on 31 July;26");
+    // a formula in a name is never run by the spreadsheet
+    expect(tourismReportCsv({ ...doc, property: { name: "=HYPERLINK(1)", identity: "" } })).toContain("'=HYPERLINK(1)");
   });
 
   it("renders a PDF", async () => {

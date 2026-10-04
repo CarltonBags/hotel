@@ -34,6 +34,8 @@ describe("official tourism statistics", () => {
     // without a postal code the state or region cannot be told
     expect(statsRowFor("AT", "DE", null)).toBe("de_unknown_region");
     expect(statsRowFor("AT", "KZ", null)).toBe("cis");
+    expect(statsRowFor("AT", "AT", "5280")).toBe("at_ooe");
+    expect(statsRowFor("AT", "DE", "63739")).toBe("de_bayern");
   });
 
   it("counts persons: arrivals in the month and every night in it (the official example)", () => {
@@ -42,5 +44,7 @@ describe("official tourism statistics", () => {
     expect(countMonth(stays, "2026-07")).toEqual({ rows: { NL: { arrivals: 3, nights: 21 } }, arrivals: 3, nights: 21 });
     expect(countMonth(stays, "2026-08")).toEqual({ rows: { NL: { arrivals: 0, nights: 15 } }, arrivals: 0, nights: 15 });
     expect(countMonth(stays, "2026-09")).toEqual({ rows: {}, arrivals: 0, nights: 0 });
+    // day use without a night is not counted
+    expect(countMonth([{ arrival: "2026-07-10", departure: "2026-07-10", persons: 2, row: "NL" }], "2026-07").arrivals).toBe(0);
   });
 });

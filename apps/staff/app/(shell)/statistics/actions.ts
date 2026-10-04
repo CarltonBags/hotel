@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { addPropertyClosure, removePropertyClosure, setStatsSettings, submitTourismReport } from "@hoteloftware/db";
+import { addClosedPeriod, removeClosedPeriod, setStatsSettings, submitTourismReport } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { field, formAction, integerOrNull, type FormState } from "@/lib/form";
@@ -33,18 +33,18 @@ export async function statsSettingsAction(_prev: FormState, formData: FormData):
   });
 }
 
-export async function addClosureAction(_prev: FormState, formData: FormData): Promise<FormState> {
+export async function addClosedPeriodAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const { schema, propertyId, userId } = await scope(formData);
-    await addPropertyClosure(pool(), schema, propertyId, { from: field(formData, "from"), to: field(formData, "to"), reason: field(formData, "reason") }, userId);
+    await addClosedPeriod(pool(), schema, propertyId, { from: field(formData, "from"), to: field(formData, "to"), reason: field(formData, "reason") }, userId);
     revalidatePath(PATH);
   });
 }
 
-export async function removeClosureAction(_prev: FormState, formData: FormData): Promise<FormState> {
+export async function removeClosedPeriodAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const { schema, propertyId } = await scope(formData);
-    await removePropertyClosure(pool(), schema, propertyId, field(formData, "closureId"));
+    await removeClosedPeriod(pool(), schema, propertyId, field(formData, "closedPeriodId"));
     revalidatePath(PATH);
   });
 }

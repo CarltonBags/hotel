@@ -1,3 +1,4 @@
+import { csvCell } from "./csv";
 import { fonts } from "./fonts";
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from "@cantoo/pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
@@ -15,6 +16,7 @@ export interface TourismReportDocument {
   rows: { key: string; label: { de: string; en: string }; arrivals: number; nights: number }[];
   totals: { arrivals: number; nights: number };
   capacity: { bedPlaces: number; extraBeds: number; rooms: number; openingDays: number; roomDaysOffered: number; roomDaysOccupied: number; takingsPerPersonNight: number | null };
+  closedPeriods?: { from: string; to: string; reason: string }[];
   /** Set for a submitted version. */
   version?: number;
   submittedAt?: string;
@@ -25,13 +27,20 @@ const FORM = { DE: "Monatliche Beherbergungsstatistik (Fragebogen HOT)", AT: "N�
 /** The rows of the official form that the report fills: capacity first, then persons by residence. */
 function capacityRows(r: TourismReportDocument): [string, string][] {
   const c = r.capacity;
+  if (r.variant === "DE") {
+    // form HOT: beds offered (04) every month; guest rooms on 31 July (05) in the July report; room days (02, 03) from 25 rooms
+    const rows: [string, string][] = [["(04) Angebotene Schlafgelegenheiten am letzten Öffnungstag / Bed places", String(c.bedPlaces)]];
+    if (r.month.endsWith("-07")) rows.push(["(05) Angebotene Gästezimmer am 31. Juli / Guest rooms on 31 July", String(c.rooms)]);
+    if (c.rooms >= 25) rows.push(["(02) Angebotene Zimmertage / Room days offered", String(c.roomDaysOffered)], ["(03) Belegte Zimmertage / Room days occupied", String(c.roomDaysOccupied)]);
+    for (const x of r.closedPeriods ?? []) rows.push(["(08/09) Vorübergehend geschlossen / Temporarily closed", `${x.from} – ${x.to}`]);
+    return rows;
+  }
   const rows: [string, string][] = [
     ["Öffnungstage im Monat / Opening days", String(c.openingDays)],
     ["Angebotene Schlafgelegenheiten (letzter Öffnungstag) / Bed places", String(c.bedPlaces)],
     ["Zusatzbetten / Extra beds", String(c.extraBeds)],
     ["Gästezimmer / Guest rooms", String(c.rooms)],
   ];
-  if (r.variant === "DE" && c.rooms >= 25) rows.push(["Angebotene Zimmertage / Room days offered", String(c.roomDaysOffered)], ["Belegte Zimmertage / Room days occupied", String(c.roomDaysOccupied)]);
   if (r.variant === "CH") rows.push(["Belegte Zimmer (Zimmernächte) / Occupied rooms", String(c.roomDaysOccupied)], ["Ø Einnahmen pro Person und Nacht / Takings per person and night", c.takingsPerPersonNight === null ? "–" : c.takingsPerPersonNight.toFixed(2)]);
   return rows;
 }
@@ -92,10 +101,6 @@ export async function renderTourismReportPdf(r: TourismReportDocument, language:
   return pdf.save({ useObjectStreams: false });
 }
 
-const cell = (v: string | number) => {
-  const s = String(v);
-  return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
 
 /** The report as a spreadsheet file (CSV, semicolon separated, UTF-8 with BOM), in the form's order. */
 export function tourismReportCsv(r: TourismReportDocument): string {
@@ -112,5 +117,5 @@ export function tourismReportCsv(r: TourismReportDocument): string {
     ...r.rows.map((row) => [row.key, row.label.de, row.arrivals, row.nights]),
     ["total", "Insgesamt", r.totals.arrivals, r.totals.nights],
   ];
-  return `﻿${lines.map((l) => l.map(cell).join(";")).join("\r\n")}\r\n`;
+  return `﻿${lines.map((l) => l.map(csvCell).join(";")).join("\r\n")}\r\n`;
 }

@@ -13,7 +13,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ format: 
   const url = new URL(req.url);
   const month = url.searchParams.get("month") ?? "";
   const version = Number(url.searchParams.get("version") ?? "0");
-  if (!scope || !/^\d{4}-\d{2}$/.test(month)) return new Response("Choose a property and a month", { status: 400 });
+  if (!scope || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return new Response("Choose a property and a month", { status: 400 });
   try {
     await authorize("tourism_statistics", scope);
   } catch {

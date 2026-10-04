@@ -6,7 +6,7 @@ import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { fill } from "@/i18n/messages";
 import { ActionForm, Field } from "@/components/form-fields";
-import { addClosureAction, removeClosureAction, statsSettingsAction, submitReportAction } from "./actions";
+import { addClosedPeriodAction, removeClosedPeriodAction, statsSettingsAction, submitReportAction } from "./actions";
 
 /** Official tourism statistics of the property selected in the navbar, per calendar month (ticket 85). */
 export default async function StatisticsPage({ searchParams }: { searchParams: Promise<{ month?: string }> }) {
@@ -51,6 +51,14 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
   const section = "grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm";
   const c = current.capacity;
+  // what changed since the last submitted version: a correction is needed
+  const last = versions[0]?.data;
+  const changed = last
+    ? current.rows.filter((r) => {
+        const before = last.rows.find((x) => x.key === r.key);
+        return (before?.arrivals ?? 0) !== r.arrivals || (before?.nights ?? 0) !== r.nights;
+      })
+    : [];
   return (
     <div className="mx-auto grid max-w-4xl gap-6 p-6">
       <div className="flex flex-wrap items-end gap-3">
@@ -135,6 +143,21 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
             </tr>
           </tbody>
         </table>
+        {last && changed.length ? (
+          <div role="note" data-testid="changed" className="rounded-xl bg-warning/15 p-3">
+            <p className="font-medium">{fill(m["stats.changedSince"], { n: String(versions[0]!.version) })}</p>
+            <ul>
+              {changed.map((r) => {
+                const before = last.rows.find((x) => x.key === r.key);
+                return (
+                  <li key={r.key}>
+                    {r.label[lang]}: {before?.arrivals ?? 0} → {r.arrivals} · {before?.nights ?? 0} → {r.nights}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
         {current.incomplete.length ? (
           <div data-testid="incomplete">
             <h3 className="font-medium text-warning">{m["stats.incomplete"]}</h3>
@@ -165,7 +188,8 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
             </ul>
           </div>
         ) : null}
-        {month < thisMonth || month === thisMonth ? (
+        {/* a month is submitted once it is over */}
+        {month < thisMonth ? (
           <ActionForm action={submitReportAction} submitLabel={versions.length ? m["stats.correct"] : m["stats.submit"]} pendingLabel={m["action.saving"]} className="flex flex-wrap items-center gap-3">
             {hidden}
             <input type="hidden" name="month" value={month} />
@@ -202,22 +226,22 @@ export default async function StatisticsPage({ searchParams }: { searchParams: P
           <Field label={m["stats.identity"]} name="identity" defaultValue={settings.identity} />
           <Field label={m["stats.deadlineDay"]} name="deadlineDay" type="number" defaultValue={String(settings.deadlineDay)} />
         </ActionForm>
-        <h3 className="font-medium">{m["stats.closures"]}</h3>
+        <h3 className="font-medium">{m["stats.closedPeriods"]}</h3>
         <ul className="grid gap-1">
-          {settings.closures.map((x) => (
+          {settings.closedPeriods.map((x) => (
             <li key={x.id} className="flex items-center gap-3">
               <span>
                 {x.from} – {x.to}
                 {x.reason ? ` · ${x.reason}` : ""}
               </span>
-              <ActionForm action={removeClosureAction} submitLabel={m["tools.remove"]} className="inline">
+              <ActionForm action={removeClosedPeriodAction} submitLabel={m["tools.remove"]} className="inline">
                 {hidden}
-                <input type="hidden" name="closureId" value={x.id} />
+                <input type="hidden" name="closedPeriodId" value={x.id} />
               </ActionForm>
             </li>
           ))}
         </ul>
-        <ActionForm action={addClosureAction} submitLabel={m["stats.addClosure"]} pendingLabel={m["action.saving"]} className="flex flex-wrap items-end gap-2">
+        <ActionForm action={addClosedPeriodAction} submitLabel={m["stats.addClosedPeriod"]} pendingLabel={m["action.saving"]} className="flex flex-wrap items-end gap-2">
           {hidden}
           <Field label={m["tools.markerFrom"]} name="from" type="date" required />
           <Field label={m["tools.markerTo"]} name="to" type="date" />

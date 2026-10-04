@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { dueTourismReport, findProperty } from "@hoteloftware/db";
+import { dueTourismReports, findProperty } from "@hoteloftware/db";
 import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, type PropertyAction } from "@hoteloftware/domain";
 import { IdleLock } from "@/app/device/idle-lock";
 import { pool } from "@/lib/db";
@@ -23,14 +23,10 @@ export default async function ShellLayout({ children }: { children: React.ReactN
     .map((p) => ({ p, behind: daysBehind(p.businessDate, todayIn(p.timeZone)), overdue: auditOverdue({ businessDate: p.businessDate, timeZone: p.timeZone, windowFrom: p.nightAuditFrom, deadline: p.nightAuditDeadline }, now) }))
     .filter((x) => x.overdue || x.behind > 1);
   const m = shell.messages;
-  // the official statistics reminder (ticket 85): from the deadline day until the month is submitted
-  const dueStats = (
-    await Promise.all(
-      shell.properties
-        .filter((p) => (shell.scope === "all" || p.id === shell.scope) && can(actor, "tourism_statistics", p.id))
-        .map(async (p) => ({ p, due: await dueTourismReport(pool(), tenant.schemaName, p.id) })),
-    )
-  ).filter((x) => x.due);
+  // the official statistics reminder (ticket 85): from the deadline day until the month is submitted; one query for all properties in view
+  const statsProperties = shell.properties.filter((p) => (shell.scope === "all" || p.id === shell.scope) && can(actor, "tourism_statistics", p.id));
+  const dueByProperty = statsProperties.length ? await dueTourismReports(pool(), tenant.schemaName, statsProperties.map((p) => p.id)) : new Map<string, { month: string; deadline: string }>();
+  const dueStats = statsProperties.filter((p) => dueByProperty.has(p.id)).map((p) => ({ p, due: dueByProperty.get(p.id) }));
   const statsBanner = dueStats.length ? (
     <div role="alert" data-stats-reminder className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl bg-warning/20 px-4 py-2 text-sm print:hidden">
       {dueStats.map(({ p, due }) => (

@@ -633,6 +633,8 @@ export const reservations = pgTable(
     lateArrival: boolean("late_arrival").notNull().default(false),
     waitingForRoomSince: timestamp("waiting_for_room_since", { withTimezone: true }),
     statsExcludedReason: text("stats_excluded_reason"),
+    statsExcludedBy: text("stats_excluded_by"),
+    statsExcludedAt: timestamp("stats_excluded_at", { withTimezone: true }),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -1458,8 +1460,8 @@ export const receipts = pgTable(
   (t) => [unique("receipts_property_id_number_key").on(t.propertyId, t.number)],
 );
 
-export const propertyClosures = pgTable(
-  "property_closures",
+export const closedPeriods = pgTable(
+  "closed_periods",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
@@ -1469,7 +1471,7 @@ export const propertyClosures = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     createdBy: text("created_by").notNull(),
   },
-  (t) => [index("property_closures_property_idx").on(t.propertyId, t.fromDate), check("property_closures_dates_check", sql`${t.toDate} >= ${t.fromDate}`)],
+  (t) => [index("closed_periods_property_idx").on(t.propertyId, t.fromDate), check("closed_periods_dates_check", sql`${t.toDate} >= ${t.fromDate}`)],
 );
 
 export const tourismReports = pgTable(
@@ -1560,6 +1562,6 @@ export const tenantSchema = {
   cashMovements,
   receiptNumbers,
   receipts,
-  propertyClosures,
+  closedPeriods,
   tourismReports,
 };

@@ -333,6 +333,10 @@ _Avoid_: Room status, housekeeping status, HK code
 Whether a room is Vacant or Occupied, derived from reservations and never set by hand.
 _Avoid_: Room status, occupied flag
 
+**Closed Period**:
+Days a property is closed to guests (for example a renovation or the winter break); every other day is an opening day for the official statistics.
+_Avoid_: Closure, shutdown, off-season
+
 **Room Block**:
 A dated restriction on a room, either Out of Order or Out of Service, with a reason.
 _Avoid_: Closure, maintenance block, lock
