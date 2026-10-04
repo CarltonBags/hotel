@@ -249,3 +249,4 @@ export { AVAILABILITY_TARGET, INCIDENT_STATES, MAINTENANCE_NOTICE_DAYS, maintena
 export * from "./go-live";
 export * from "./reports";
 export * from "./report-text";
+export * from "./downtime";

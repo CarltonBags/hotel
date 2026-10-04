@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { dueTourismReports, findProperty, tenantLifecycle } from "@hoteloftware/db";
+import { dueTourismReports, findProperty, getDowntimeOptions, tenantLifecycle } from "@hoteloftware/db";
+import { OfflineDesk } from "@/shell/offline-desk";
+import { downtimeText } from "@/lib/downtime-text";
 import { isSupportConsoleUser } from "@/lib/support";
 import { endSupportAccessAction } from "./support/actions";
 import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, trialDaysLeft, type PropertyAction } from "@hoteloftware/domain";
@@ -66,6 +68,9 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       </form>
     </div>
   ) : null;
+  // the desk keeps the property's lists for an outage (ticket 86): one property in scope, a desk role there
+  const scoped = shell.properties.find((p) => p.id === shell.scope);
+  const deskProperty = scoped && can(actor, "use_downtime", scoped.id) ? scoped : null;
   // Test Mode (ticket 87): for everyone, until go-live
   const life = await tenantLifecycle(pool(), tenant.id);
   const daysLeft = life.trialEndsAt ? trialDaysLeft(life.trialEndsAt, now) : null;
@@ -107,6 +112,15 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       supportStaff={(await isSupportConsoleUser()) !== null}
     >
       {idleMinutes ? <IdleLock minutes={idleMinutes} /> : null}
+      {deskProperty ? (
+        <OfflineDesk
+          text={downtimeText(m)}
+          labels={{ banner: m["offline.banner"], since: m["offline.since"], age: m["offline.age"], disabled: m["offline.disabled"], none: m["offline.none"], reminder: m["offline.reminder"], print: m["offline.print"] }}
+          propertyId={deskProperty.id}
+          reminderAt={(await getDowntimeOptions(pool(), tenant.schemaName, deskProperty.id)).reminderAt}
+          timeZone={deskProperty.timeZone}
+        />
+      ) : null}
       {/* a front-office user with several properties picks the one they work in first */}
       {shell.frontOffice && !shell.scope && shell.propertyChoices.length > 1 ? <PropertyChooser /> : <Shell banner={banners}>{children}</Shell>}
     </ShellProvider>

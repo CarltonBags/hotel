@@ -429,3 +429,4 @@ export {
 export { logReportExport, runReport, type ReportRequest } from "./tenant/reports";
 export { createReportSchedule, deleteReportSchedule, dueReportSchedules, listReportSchedules, markReportScheduleSent, stopReportSchedule, type ReportSchedule, type ScheduleOptions } from "./tenant/report-schedules";
 export { queueMail, type OutgoingMail } from "./tenant/mail-outbox";
+export { catchUp, downtimeSet, emergencyReport, endOutage, getDowntimeOptions, listOutages, logOutage, setDowntimeOptions, type CatchUpInput, type DowntimeGuestRow, type DowntimeSet, type EmergencyReport, type Outage, type RoomRackRow } from "./tenant/downtime";
