@@ -44,7 +44,8 @@ export default async function CashPage({ searchParams }: { searchParams: Promise
       paidOutLimit={settings.paidOutLimit}
       rights={rights}
       shift={shift ? { ...shift, openedAt: shift.openedAt.toISOString() } : null}
-      registers={registers.map((r) => ({ id: r.id, name: r.name, active: r.active, balance: r.balance, openBy: r.openShift ? (users.find((u) => u.id === r.openShift!.userId)?.name ?? "?") : null }))}
+      // balances only for those who see every Cash Book: the desk's count is blind
+      registers={registers.map((r) => ({ id: r.id, name: r.name, active: r.active, balance: rights.manage ? r.balance : null, openBy: r.openShift ? (users.find((u) => u.id === r.openShift!.userId)?.name ?? "?") : null }))}
       book={book ? { registerId: book.registerId, name: book.name, balance: book.balance, ownShiftOnly: book.ownShiftOnly, rows: book.rows.map((r) => ({ ...r, at: r.at.toISOString(), byUser: users.find((u) => u.id === r.byUser)?.name ?? r.byUser })) } : null}
       language={language}
       m={m}

@@ -193,7 +193,7 @@ async function warningsIn(tx: PoolClient, p: PropertyRow): Promise<AuditWarnings
      order by b.confirmation_number`,
     [p.id, bd],
   )).rows.map((r) => ({ reservationId: r.reservation_id, confirmationNumber: r.confirmation_number, guestName: r.guest_name }));
-  // TODO(Arrived and Waiting for Room, open Shifts): with their tickets
+  // TODO(Arrived and Waiting for Room): with its ticket
   return { openBalances, expiringHolds, incompleteRegistrations, arrivalsWithoutRoom, openShifts: await openShiftsIn(tx, p.id) };
 }
 

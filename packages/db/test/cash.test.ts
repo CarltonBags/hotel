@@ -18,7 +18,7 @@ import { createBooking } from "../src/tenant/reservations";
 import { loadFolios, postServiceCharge } from "../src/tenant/folios";
 import { ApprovalRequired } from "../src/tenant/approvals";
 import { refundPayment, takePayment } from "../src/tenant/payments";
-import { cashBook, closeShiftWithReason, createCashRegister, listCashRegisters, myOpenShift, openShift, receiptByToken, receiptsOfReservation, recordCashMovement, setCashDesk, submitCloseCount } from "../src/tenant/cash";
+import { OpeningDifference, cashBook, closeShiftWithReason, createCashRegister, listCashRegisters, myOpenShift, openShift, receiptByToken, receiptsOfReservation, recordCashMovement, setCashDesk, submitCloseCount } from "../src/tenant/cash";
 import { nightAuditView } from "../src/tenant/night-audit";
 import { resetTestDatabase, testPool } from "./helpers";
 
@@ -38,6 +38,7 @@ describe("cash desk", () => {
   const asFd = () => ({ userId: fd, actor: { propertyRoles: [{ propertyId: berlin, role: "front_desk" as const }] } });
   const asPm = () => ({ userId: "user_pm", actor: { propertyRoles: [{ propertyId: berlin, role: "property_manager" as const }] } });
   const s = () => tenant.schemaName;
+  const PHOTO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const provider = new FakePaymentProvider();
   const fd = "user_frida";
   const today = todayIn("Europe/Berlin");
@@ -76,6 +77,7 @@ describe("cash desk", () => {
 
   it("refuses cash while the cash desk is off, and without an open Shift", async () => {
     await expect(takePayment(pool, s(), provider, { reservationId: res, tender: "cash", amount: 10 }, fd)).rejects.toThrow(/cash desk is off/);
+    await expect(setCashDesk(pool, s(), berlin, { enabled: true, tolerance: 5, paidOutLimit: 100, differenceAccount: "" })).rejects.toThrow(/cash-difference account/);
     await setCashDesk(pool, s(), berlin, { enabled: true, tolerance: 5, paidOutLimit: 100, differenceAccount: "1370" });
     front = await createCashRegister(pool, s(), berlin, "Front desk 1");
     bar = await createCashRegister(pool, s(), berlin, "Bar");
@@ -88,7 +90,15 @@ describe("cash desk", () => {
     await expect(openShift(pool, s(), { registerId: bar, count: {} }, asFd())).rejects.toThrow(/open Shift on another register/);
     const paid = await takePayment(pool, s(), provider, { reservationId: res, tender: "cash", amount: 120.5 }, fd);
     await refundPayment(pool, s(), provider, { paymentId: paid.id, amount: 20, reason: "Minibar item returned" }, asFrontDesk);
-    const book = await cashBook(pool, s(), front, asFd());
+    // the desk sees its movements but no balance before its blind count
+    const desk = await cashBook(pool, s(), front, asFd());
+    expect(desk.rows.map((r) => [r.kind, r.amount, r.balance])).toEqual([
+      ["float", 200, null],
+      ["payment", 120.5, null],
+      ["refund", -20, null],
+    ]);
+    expect(desk.balance).toBeNull();
+    const book = await cashBook(pool, s(), front, asPm());
     expect(book.rows.map((r) => [r.kind, r.amount, r.balance])).toEqual([
       ["float", 200, 200],
       ["payment", 120.5, 320.5],
@@ -99,16 +109,17 @@ describe("cash desk", () => {
     const receipts = await receiptsOfReservation(pool, s(), res);
     expect(Object.values(receipts).map((r) => r.number).sort()).toEqual([1, 2]);
     const receipt = await receiptByToken(pool, s(), receipts[paid.id]!.token);
-    expect(receipt).toMatchObject({ number: 1, amount: 120.5, tender: "cash", refund: false, guestName: "Aiko Tanaka", legalEntity: { name: "Alpha GmbH", vatId: "DE123456789" } });
+    expect(receipt).toMatchObject({ number: 1, amount: 120.5, tender: "cash", refund: false, guestName: "A. Tanaka", legalEntity: { name: "Alpha GmbH", vatId: "DE123456789" } });
     // Cash Book entries are never changed
     await expect(pool.query(`update ${s()}.cash_movements set amount = 0`)).rejects.toThrow(/never changed/);
   });
 
   it("a Paid-out above the property limit needs an Approval", async () => {
-    await recordCashMovement(pool, s(), { kind: "paid_out", registerId: front, amount: 30, reason: "Flowers", account: "4980" }, asFd());
-    await expect(recordCashMovement(pool, s(), { kind: "paid_out", registerId: front, amount: 150, reason: "Repair", account: "4800" }, asFd())).rejects.toBeInstanceOf(ApprovalRequired);
+    await expect(recordCashMovement(pool, s(), { kind: "paid_out", registerId: front, amount: 30, reason: "Flowers", account: "4980" }, asFd())).rejects.toThrow(/photo/);
+    await recordCashMovement(pool, s(), { kind: "paid_out", registerId: front, amount: 30, reason: "Flowers", account: "4980", photo: PHOTO }, asFd());
+    await expect(recordCashMovement(pool, s(), { kind: "paid_out", registerId: front, amount: 150, reason: "Repair", account: "4800", photo: PHOTO }, asFd())).rejects.toBeInstanceOf(ApprovalRequired);
     // a Property Manager approves on the same screen
-    await recordCashMovement(pool, s(), { kind: "paid_out", registerId: front, amount: 150, reason: "Repair", account: "4800" }, { ...asFd(), approverId: "user_pm" });
+    await recordCashMovement(pool, s(), { kind: "paid_out", registerId: front, amount: 150, reason: "Repair", account: "4800", photo: PHOTO }, { ...asFd(), approverId: "user_pm" });
     const book = await cashBook(pool, s(), front, asPm());
     expect(book.rows.slice(-2).map((r) => [r.kind, r.amount, r.approvedBy])).toEqual([
       ["paid_out", -30, null],
@@ -130,6 +141,9 @@ describe("cash desk", () => {
     // 120.50 expected; 110.00 counted
     const r = await submitCloseCount(pool, s(), { shiftId: shift.id, count: { "100": 1, "10": 1 } }, asFd());
     expect(r).toEqual({ expected: 120.5, counted: 110, difference: -10.5, needsReason: true, closed: false });
+    // counted for closing: no cash moves until it is closed
+    await expect(recordCashMovement(pool, s(), { kind: "tip_out", registerId: front, amount: 5, reason: "Anna" }, asFd())).rejects.toThrow(/counted for closing/);
+    await expect(recordCashMovement(pool, s(), { kind: "deposit", registerId: front, amount: 5, reason: "Bank" }, asPm())).rejects.toThrow(/counted for closing/);
     // the count stays as entered
     await expect(submitCloseCount(pool, s(), { shiftId: shift.id, count: { "100": 1, "20": 1, "0.5": 1 } }, asFd())).rejects.toThrow(/entered already/);
     await expect(closeShiftWithReason(pool, s(), { shiftId: shift.id, reason: " " }, asFd())).rejects.toThrow(/why/);
@@ -139,10 +153,15 @@ describe("cash desk", () => {
     expect(book.rows.at(-1)).toMatchObject({ kind: "difference", amount: -10.5, account: "1370", reason: "Change given wrongly" });
     expect(book.balance).toBe(110);
     expect(await myOpenShift(pool, s(), berlin, fd)).toBeNull();
+    // an opening count off by more than the tolerance needs a reason
+    await expect(openShift(pool, s(), { registerId: front, count: { "100": 1 } }, asFd())).rejects.toBeInstanceOf(OpeningDifference);
     // the next Shift starts from what is really there; within tolerance it closes at once
     await openShift(pool, s(), { registerId: front, count: { "100": 1, "10": 1 } }, asFd());
     const next = (await myOpenShift(pool, s(), berlin, fd))!;
     expect(await submitCloseCount(pool, s(), { shiftId: next.id, count: { "100": 1, "5": 1, "2": 1 } }, asFd())).toEqual({ expected: 110, counted: 107, difference: -3, needsReason: false, closed: true });
     expect((await nightAuditView(pool, s(), berlin)).warnings.openShifts).toEqual([]);
+    // a closed Shift and a Receipt stay as they are
+    await expect(pool.query(`update ${s()}.cash_shifts set reason = 'x' where id = $1`, [next.id])).rejects.toThrow(/not changed/);
+    await expect(pool.query(`update ${s()}.receipts set number = 99`)).rejects.toThrow(/never changed/);
   });
 });

@@ -90,3 +90,30 @@ create table receipts (
   emailed_to text,
   unique (property_id, number)
 );
+
+-- every movement carries the Business Date it was booked on, like payments and charges (ADR 0015)
+alter table cash_movements add column business_date date;
+create trigger cash_movements_business_date before insert on cash_movements for each row execute function stamp_business_date();
+alter table cash_movements alter column business_date set not null;
+
+-- a Receipt is never changed or deleted
+create function receipts_immutable() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' or (new.number, new.payment_id, new.property_id, new.token, new.issued_at, new.issued_by, new.register_id) is distinct from (old.number, old.payment_id, old.property_id, old.token, old.issued_at, old.issued_by, old.register_id) then
+    raise exception 'Receipts are never changed or deleted';
+  end if;
+  return new;
+end $$;
+create trigger receipts_immutable before update or delete on receipts for each row execute function receipts_immutable();
+
+-- a close count, once entered, stays as entered; a closed Shift does not change
+create function cash_shifts_fixed() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' or old.closed_at is not null
+     or (old.counted_at is not null and (new.counted_at, new.close_count, new.counted, new.expected, new.difference) is distinct from (old.counted_at, old.close_count, old.counted, old.expected, old.difference))
+     or (new.opened_at, new.opening_count, new.opening_float, new.register_id, new.user_id) is distinct from (old.opened_at, old.opening_count, old.opening_float, old.register_id, old.user_id) then
+    raise exception 'A counted or closed Shift is not changed';
+  end if;
+  return new;
+end $$;
+create trigger cash_shifts_fixed before update or delete on cash_shifts for each row execute function cash_shifts_fixed();

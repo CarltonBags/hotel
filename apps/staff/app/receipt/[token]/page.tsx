@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import QRCode from "qrcode";
 import { receiptByToken } from "@hoteloftware/db";
-import { formatCurrency } from "@hoteloftware/domain";
+import { formatCurrency, localeFor } from "@hoteloftware/domain";
 import { pool } from "@/lib/db";
 import { env } from "@/lib/env";
 import { currentTenant } from "@/lib/tenant";
@@ -24,6 +24,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
   const url = `${scheme}://${tenant.slug}.${env.appDomain}/receipt/${r.token}`;
   const qr = await QRCode.toString(url, { type: "svg", margin: 1 });
   const money = (n: number) => formatCurrency(n, r.currency, "de", r.legalEntity.country);
+  const locale = localeFor("de", r.legalEntity.country);
   const tender = r.tender === "cash" ? "Bar / Cash" : r.tender === "card_terminal" ? `Karte / Card${r.cardBrand ? ` ${r.cardBrand.toUpperCase()} •••• ${r.cardLast4}` : ""}` : r.tender;
   return (
     <main className="mx-auto grid max-w-sm gap-3 bg-white p-6 font-mono text-[13px] text-black print:p-0">
@@ -39,7 +40,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
       <p className="text-center font-bold" data-receipt-number={r.number}>
         {r.refund ? "Rückzahlung / Refund" : "Quittung / Receipt"} Nr. {r.number}
       </p>
-      <p className="text-center">{new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Berlin" }).format(r.issuedAt)}</p>
+      <p className="text-center">{new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short", timeZone: r.timeZone }).format(r.issuedAt)}</p>
       <dl className="grid grid-cols-2 gap-1">
         <dt>Gast / Guest</dt>
         <dd className="text-right">{r.guestName}</dd>

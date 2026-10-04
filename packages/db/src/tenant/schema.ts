@@ -1423,6 +1423,7 @@ export const cashMovements = pgTable(
     approvedBy: text("approved_by"),
     at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     byUser: text("by_user").notNull(),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [
     index("cash_movements_register_idx").on(t.registerId, t.at),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Camera, Lock, Unlock } from "lucide-react";
@@ -18,13 +18,13 @@ interface Props {
   paidOutLimit: number;
   rights: { handle: boolean; paidOut: boolean; manage: boolean };
   shift: { id: string; registerId: string; registerName: string; openedAt: string; openingFloat: number; count: { counted: number; expected: number; difference: number } | null } | null;
-  registers: { id: string; name: string; active: boolean; balance: number; openBy: string | null }[];
+  registers: { id: string; name: string; active: boolean; balance: number | null; openBy: string | null }[];
   book: {
     registerId: string;
     name: string;
-    balance: number;
+    balance: number | null;
     ownShiftOnly: boolean;
-    rows: { id: string; at: string; kind: CashMovementKind; amount: number; balance: number; reason: string; account: string; byUser: string; approvedBy: string | null; confirmationNumber: string | null; hasPhoto: boolean }[];
+    rows: { id: string; at: string; kind: CashMovementKind; amount: number; balance: number | null; reason: string; account: string; byUser: string; approvedBy: string | null; confirmationNumber: string | null; hasPhoto: boolean }[];
   } | null;
   language: Language;
   m: Messages;
@@ -94,11 +94,21 @@ export function CashDesk({ property, denominations, paidOutLimit, rights, shift,
 
   // opening
   const free = registers.filter((r) => r.active && !r.openBy);
-  const [registerId, setRegisterId] = useState(free[0]?.id ?? "");
+  const [picked, setRegisterId] = useState("");
+  // a register taken meanwhile falls back to the first free one
+  const registerId = free.some((r) => r.id === picked) ? picked : (free[0]?.id ?? "");
   const [openCount, setOpenCount] = useState<CashCount>({});
+  const [openingDifference, setOpeningDifference] = useState<string | null>(null);
+  const [openingReason, setOpeningReason] = useState("");
   // closing: the count first, the expected amount only after it
   const [closeCount, setCloseCount] = useState<CashCount>({});
   const [result, setResult] = useState<CloseResult | null>(shift?.count ? { ...shift.count, needsReason: true, closed: false } : null);
+  // a new Shift (or none) starts without the last one's count
+  useEffect(() => {
+    setResult(shift?.count ? { ...shift.count, needsReason: true, closed: false } : null);
+    setTab(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shift?.id]);
   const [reason, setReason] = useState("");
   // movements from the Shift
   const [tab, setTab] = useState<"paid_out" | "tip_out" | "close" | null>(null);
@@ -173,7 +183,26 @@ export function CashDesk({ property, denominations, paidOutLimit, rights, shift,
                 </label>
                 <p className="text-ink-60">{m["cash.countFloat"]}</p>
                 <CountGrid denominations={denominations} count={openCount} setCount={setOpenCount} money={money} m={m} />
-                <button type="button" disabled={pending || !registerId} onClick={() => run(() => openShiftAction(property.id, registerId, openCount), (r) => r.ok && setOpenCount({}))} className={`${primary} justify-self-start`}>
+                {openingDifference ? (
+                  <>
+                    <p className="text-danger">{openingDifference}</p>
+                    <input aria-label={m["cash.differenceReason"]} placeholder={m["cash.differenceReason"]} value={openingReason} onChange={(e) => setOpeningReason(e.target.value)} className={input} />
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={pending || !registerId || (!!openingDifference && !openingReason.trim())}
+                  onClick={() =>
+                    startTransition(async () => {
+                      const r = await openShiftAction(property.id, registerId, openCount, openingDifference ? openingReason : null);
+                      setNote(r.needsReason ? null : r);
+                      setOpeningDifference(r.needsReason ? (r.error ?? null) : null);
+                      if (r.ok) (setOpenCount({}), setOpeningReason(""));
+                      router.refresh();
+                    })
+                  }
+                  className={`${primary} justify-self-start`}
+                >
                   {m["cash.openShift"]}
                 </button>
               </>
@@ -219,7 +248,7 @@ export function CashDesk({ property, denominations, paidOutLimit, rights, shift,
                   {approval ? (
                     <ApprovalPrompt summary={approval} pending={pending} onRequest={() => movement({ mode: "request" })} onCredentials={(username, password) => movement({ mode: "credentials", username, password })} m={m} />
                   ) : null}
-                  <button type="button" disabled={pending || !amount || !why.trim() || (tab === "paid_out" && !account.trim())} onClick={() => movement()} className={`${primary} justify-self-start`}>
+                  <button type="button" disabled={pending || !amount || !why.trim() || (tab === "paid_out" && (!account.trim() || !photo))} onClick={() => movement()} className={`${primary} justify-self-start`}>
                     {m["cash.book"]}
                   </button>
                 </div>
@@ -297,7 +326,7 @@ export function CashDesk({ property, denominations, paidOutLimit, rights, shift,
                     {r.name}
                     {r.openBy ? <span className="text-xs text-ink-60"> · {fill(m["cash.openByName"], { name: r.openBy })}</span> : null}
                   </span>
-                  <span className="tabular-nums">{money(r.balance)}</span>
+                  <span className="tabular-nums">{r.balance !== null ? money(r.balance) : ""}</span>
                 </Link>
               </li>
             ))}
@@ -353,7 +382,7 @@ export function CashDesk({ property, denominations, paidOutLimit, rights, shift,
         <section aria-label={m["module.cash_book"]} className={box}>
           <h2 className="flex justify-between font-medium">
             <span>{book.ownShiftOnly ? fill(m["cash.bookOfShift"], { register: book.name }) : fill(m["cash.bookOf"], { register: book.name })}</span>
-            <span data-book-balance={book.balance}>{money(book.balance)}</span>
+            {book.balance !== null ? <span data-book-balance={book.balance}>{money(book.balance)}</span> : null}
           </h2>
           <table className="w-full text-left">
             <thead className="text-xs text-ink-60">
@@ -391,7 +420,7 @@ export function CashDesk({ property, denominations, paidOutLimit, rights, shift,
                   </td>
                   <td>{r.byUser}</td>
                   <td className={`text-right tabular-nums ${r.amount < 0 ? "text-danger" : ""}`}>{money(r.amount)}</td>
-                  <td className="text-right tabular-nums">{money(r.balance)}</td>
+                  <td className="text-right tabular-nums">{r.balance !== null ? money(r.balance) : "·"}</td>
                 </tr>
               ))}
             </tbody>

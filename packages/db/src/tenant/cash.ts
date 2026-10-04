@@ -40,6 +40,7 @@ export async function cashSettings(pool: Pool, schema: string, propertyId: strin
 export async function setCashDesk(pool: Pool, schema: string, propertyId: string, input: Omit<CashSettings, "currency">): Promise<void> {
   if (!isUuid(propertyId)) throw new Error("Property not found");
   if (!(input.tolerance >= 0) || !(input.paidOutLimit >= 0)) throw new Error("Tolerance and Paid-out limit are zero or more");
+  if (input.enabled && !input.differenceAccount.trim()) throw new Error("Give the cash-difference account the differences are booked to");
   await withTenant(pool, schema, async (tx) => {
     if (!input.enabled) {
       const open = await tx.query("select 1 from cash_shifts where property_id = $1 and closed_at is null limit 1", [propertyId]);
@@ -102,7 +103,7 @@ interface LockedRegister {
   name: string;
   active: boolean;
   balance: number;
-  openShift: { id: string; userId: string } | null;
+  openShift: { id: string; userId: string; counted: boolean } | null;
 }
 
 /** The register, locked: movements of one register are written one after the other. */
@@ -110,8 +111,8 @@ async function lockRegister(tx: PoolClient, registerId: string, propertyId?: str
   const r = (await tx.query<{ id: string; property_id: string; name: string; active: boolean }>("select id, property_id, name, active from cash_registers where id = $1 for update", [registerId])).rows[0];
   if (!r || (propertyId && r.property_id !== propertyId)) throw new Error("Register not found");
   const balance = Number((await tx.query<{ b: string }>("select coalesce(sum(amount), 0) as b from cash_movements where register_id = $1", [r.id])).rows[0]!.b);
-  const shift = (await tx.query<{ id: string; user_id: string }>("select id, user_id from cash_shifts where register_id = $1 and closed_at is null", [r.id])).rows[0];
-  return { id: r.id, propertyId: r.property_id, name: r.name, active: r.active, balance, openShift: shift ? { id: shift.id, userId: shift.user_id } : null };
+  const shift = (await tx.query<{ id: string; user_id: string; counted: boolean }>("select id, user_id, counted_at is not null as counted from cash_shifts where register_id = $1 and closed_at is null", [r.id])).rows[0];
+  return { id: r.id, propertyId: r.property_id, name: r.name, active: r.active, balance, openShift: shift ? { id: shift.id, userId: shift.user_id, counted: shift.counted } : null };
 }
 
 async function book(
@@ -156,7 +157,15 @@ export async function myOpenShift(pool: Pool, schema: string, propertyId: string
  * from what the Cash Book says is in the register, the difference is booked
  * (the first Shift of a new register books the float itself).
  */
-export async function openShift(pool: Pool, schema: string, input: { registerId: string; count: CashCount }, viewer: Viewer): Promise<string> {
+/** The opening count differs from the Cash Book by more than the tolerance: a reason is needed to open. */
+export class OpeningDifference extends Error {
+  constructor(readonly difference: number) {
+    super(`The count differs from the Cash Book by ${difference.toFixed(2)}; give the reason to open the Shift`);
+    this.name = "OpeningDifference";
+  }
+}
+
+export async function openShift(pool: Pool, schema: string, input: { registerId: string; count: CashCount; reason?: string | null }, viewer: Viewer): Promise<{ shiftId: string; difference: number }> {
   if (!isUuid(input.registerId)) throw new Error("Register not found");
   return withTenant(pool, schema, async (tx) => {
     const r = await lockRegister(tx, input.registerId);
@@ -168,6 +177,11 @@ export async function openShift(pool: Pool, schema: string, input: { registerId:
     const mine = await tx.query("select 1 from cash_shifts where property_id = $1 and user_id = $2 and closed_at is null", [r.propertyId, viewer.userId]);
     if (mine.rowCount) throw new Error("You have an open Shift on another register; close it first");
     const float = countTotal(settings.currency, input.count);
+    const first = !(await tx.query("select 1 from cash_movements where register_id = $1 limit 1", [r.id])).rowCount;
+    // like the close count, a difference above the tolerance needs a reason (the caller tells the Property Manager)
+    const difference = first ? 0 : roundMoney(float - r.balance);
+    const reason = String(input.reason ?? "").trim().slice(0, 300);
+    if (closeCount({ expected: r.balance, counted: float, tolerance: settings.tolerance }).needsReason && !first && !reason) throw new OpeningDifference(difference);
     const { rows } = await tx.query<{ id: string }>("insert into cash_shifts (register_id, property_id, user_id, opening_count, opening_float) values ($1, $2, $3, $4, $5) returning id", [
       r.id,
       r.propertyId,
@@ -176,12 +190,28 @@ export async function openShift(pool: Pool, schema: string, input: { registerId:
       float,
     ]);
     const shiftId = rows[0]!.id;
-    const first = !(await tx.query("select 1 from cash_movements where register_id = $1 limit 1", [r.id])).rowCount;
     if (first) await book(tx, { registerId: r.id, propertyId: r.propertyId, shiftId, kind: "float", amount: float, userId: viewer.userId, reason: "Opening float" });
-    else if (roundMoney(float - r.balance) !== 0)
-      await book(tx, { registerId: r.id, propertyId: r.propertyId, shiftId, kind: "difference", amount: float - r.balance, userId: viewer.userId, reason: "Opening count", account: settings.differenceAccount });
-    return shiftId;
+    else if (difference !== 0)
+      await book(tx, { registerId: r.id, propertyId: r.propertyId, shiftId, kind: "difference", amount: difference, userId: viewer.userId, reason: reason || "Opening count", account: settings.differenceAccount });
+    return { shiftId, difference };
   });
+}
+
+/**
+ * The user's open Shift, locked after its register (the order every cash
+ * writer takes): its count and close are decided one at a time.
+ */
+async function lockedShift(tx: PoolClient, shiftId: string, userId: string) {
+  const at = (await tx.query<{ register_id: string }>("select register_id from cash_shifts where id = $1", [shiftId])).rows[0];
+  if (!at) throw new Error("Shift not found");
+  const register = await lockRegister(tx, at.register_id);
+  const s = (await tx.query<{ id: string; register_id: string; property_id: string; user_id: string; counted_at: Date | null; closed_at: Date | null; difference: string | null }>(
+    "select id, register_id, property_id, user_id, counted_at, closed_at, difference from cash_shifts where id = $1 for update",
+    [shiftId],
+  )).rows[0]!;
+  if (s.user_id !== userId) throw new Error("Shift not found");
+  if (s.closed_at) throw new Error("The Shift is closed");
+  return { ...s, register };
 }
 
 export interface CloseResult {
@@ -205,14 +235,9 @@ async function closeShiftIn(tx: PoolClient, shift: { id: string; register_id: st
 export async function submitCloseCount(pool: Pool, schema: string, input: { shiftId: string; count: CashCount }, viewer: Viewer): Promise<CloseResult> {
   if (!isUuid(input.shiftId)) throw new Error("Shift not found");
   return withTenant(pool, schema, async (tx) => {
-    const s = (await tx.query<{ id: string; register_id: string; property_id: string; user_id: string; counted_at: Date | null; closed_at: Date | null }>(
-      "select id, register_id, property_id, user_id, counted_at, closed_at from cash_shifts where id = $1",
-      [input.shiftId],
-    )).rows[0];
-    if (!s || s.user_id !== viewer.userId) throw new Error("Shift not found");
-    if (s.closed_at) throw new Error("The Shift is closed");
+    const s = await lockedShift(tx, input.shiftId, viewer.userId);
     if (s.counted_at) throw new Error("The count is entered already; give the reason for the difference");
-    const r = await lockRegister(tx, s.register_id);
+    const r = s.register;
     const settings = await settingsOf(tx, s.property_id);
     const counted = countTotal(settings.currency, input.count);
     const verdict = closeCount({ expected: r.balance, counted, tolerance: settings.tolerance });
@@ -234,14 +259,9 @@ export async function closeShiftWithReason(pool: Pool, schema: string, input: { 
   const reason = input.reason.trim().slice(0, 300);
   if (!reason) throw new Error("Say why the count differs");
   return withTenant(pool, schema, async (tx) => {
-    const s = (await tx.query<{ id: string; register_id: string; property_id: string; user_id: string; counted_at: Date | null; closed_at: Date | null; difference: string | null }>(
-      "select id, register_id, property_id, user_id, counted_at, closed_at, difference from cash_shifts where id = $1 for update",
-      [input.shiftId],
-    )).rows[0];
-    if (!s || s.user_id !== viewer.userId) throw new Error("Shift not found");
-    if (s.closed_at) throw new Error("The Shift is closed");
+    const s = await lockedShift(tx, input.shiftId, viewer.userId);
     if (!s.counted_at) throw new Error("Count the register first");
-    const r = await lockRegister(tx, s.register_id);
+    const r = s.register;
     const settings = await settingsOf(tx, s.property_id);
     const difference = Number(s.difference);
     await closeShiftIn(tx, s, difference, reason, viewer, settings.differenceAccount);
@@ -285,11 +305,14 @@ export async function recordCashMovement(pool: Pool, schema: string, input: Cash
     const r = locked.get(input.registerId)!;
     const settings = await settingsOf(tx, r.propertyId);
     if (!settings.enabled) throw new Error("The cash desk is off at this property");
+    // once a Shift's close count is entered, no cash moves until it is closed
+    for (const x of locked.values()) if (x.openShift?.counted) throw new Error(`${x.name} is counted for closing; close the Shift first`);
     const base = { registerId: r.id, propertyId: r.propertyId, userId: viewer.userId, reason };
     if (input.kind === "paid_out" || input.kind === "tip_out") {
       if (!can(viewer.actor, input.kind === "paid_out" ? "paid_out" : "handle_cash", r.propertyId)) throw new Error("Not allowed");
       if (r.openShift?.userId !== viewer.userId) throw new Error(`Open your Shift on ${r.name} first`);
-      if (amount > r.balance) throw new Error(`Only ${r.balance.toFixed(2)} ${settings.currency} is in ${r.name}`);
+      // the desk does not learn the register's balance before its blind close count
+      if (amount > r.balance) throw new Error(`There is not that much cash in ${r.name}`);
       let approvedBy: string | null = null;
       let account = "";
       let photo = null;
@@ -297,6 +320,7 @@ export async function recordCashMovement(pool: Pool, schema: string, input: Cash
         account = String(input.account ?? "").trim().slice(0, 20);
         if (!account) throw new Error("Give the expense account");
         photo = decodePhoto(input.photo);
+        if (!photo) throw new Error("Take a photo of the receipt");
         if (paidOutNeedsApproval(amount, settings.paidOutLimit, can(viewer.actor, "paid_out_without_limit", r.propertyId)))
           approvedBy = await useApproval(
             tx,
@@ -335,23 +359,24 @@ export async function recordCashMovement(pool: Pool, schema: string, input: Cash
 export async function bookCashPaymentIn(tx: PoolClient, payment: { id: string; propertyId: string; amount: number }, userId: string): Promise<string> {
   const settings = await settingsOf(tx, payment.propertyId);
   if (!settings.enabled) throw new Error("The cash desk is off at this property");
-  const shift = (await tx.query<{ id: string; register_id: string; counted_at: Date | null }>(
-    "select id, register_id, counted_at from cash_shifts where property_id = $1 and user_id = $2 and closed_at is null",
-    [payment.propertyId, userId],
-  )).rows[0];
+  const shift = (await tx.query<{ id: string; register_id: string }>("select id, register_id from cash_shifts where property_id = $1 and user_id = $2 and closed_at is null", [payment.propertyId, userId])).rows[0];
   if (!shift) throw new Error("Open your Shift on a Cash Register to take or give back cash");
-  if (shift.counted_at) throw new Error("Your Shift is counted for closing; open a new one");
   const r = await lockRegister(tx, shift.register_id);
-  if (payment.amount < 0 && -payment.amount > r.balance) throw new Error(`Only ${r.balance.toFixed(2)} ${settings.currency} is in ${r.name}`);
+  // decided under the register's lock: the Shift may have been counted or closed meanwhile
+  if (r.openShift?.id !== shift.id) throw new Error("Open your Shift on a Cash Register to take or give back cash");
+  if (r.openShift.counted) throw new Error("Your Shift is counted for closing; close it and open a new one");
+  if (payment.amount < 0 && -payment.amount > r.balance) throw new Error(`There is not that much cash in ${r.name}`);
   await book(tx, { registerId: r.id, propertyId: payment.propertyId, shiftId: shift.id, kind: payment.amount > 0 ? "payment" : "refund", amount: payment.amount, userId, paymentId: payment.id });
   return r.id;
 }
 
 /** A Receipt for a desk payment, numbered without gaps per property, in the payment's transaction. */
 export async function issueReceiptIn(tx: PoolClient, payment: { id: string; propertyId: string }, registerId: string | null, userId: string): Promise<void> {
+  // one Receipt per payment; a number is taken only for a Receipt that is written
+  if ((await tx.query("select 1 from receipts where payment_id = $1", [payment.id])).rowCount) return;
   await tx.query("insert into receipt_numbers (property_id) values ($1) on conflict do nothing", [payment.propertyId]);
   const n = (await tx.query<{ last: number }>("update receipt_numbers set last = last + 1 where property_id = $1 returning last", [payment.propertyId])).rows[0]!.last;
-  await tx.query("insert into receipts (property_id, number, payment_id, register_id, token, issued_by) values ($1, $2, $3, $4, $5, $6) on conflict (payment_id) do nothing", [
+  await tx.query("insert into receipts (property_id, number, payment_id, register_id, token, issued_by) values ($1, $2, $3, $4, $5, $6)", [
     payment.propertyId,
     n,
     payment.id,
@@ -366,7 +391,8 @@ export interface CashBookRow {
   at: Date;
   kind: CashMovementKind;
   amount: number;
-  balance: number;
+  /** Running balance; null for the desk before its close count (the count is blind). */
+  balance: number | null;
   reason: string;
   account: string;
   byUser: string;
@@ -381,13 +407,13 @@ export interface CashBookRow {
  * A register's Cash Book with the running balance. The Property Manager and
  * Accounting see every register; the desk sees its own open Shift's part.
  */
-export async function cashBook(pool: Pool, schema: string, registerId: string, viewer: Viewer, options: { limit?: number } = {}): Promise<{ registerId: string; name: string; propertyId: string; balance: number; rows: CashBookRow[]; ownShiftOnly: boolean }> {
+export async function cashBook(pool: Pool, schema: string, registerId: string, viewer: Viewer, options: { limit?: number } = {}): Promise<{ registerId: string; name: string; propertyId: string; balance: number | null; rows: CashBookRow[]; ownShiftOnly: boolean }> {
   if (!isUuid(registerId)) throw new Error("Register not found");
   return withTenant(pool, schema, async (tx) => {
     const g = (await tx.query<{ id: string; name: string; property_id: string }>("select id, name, property_id from cash_registers where id = $1", [registerId])).rows[0];
     if (!g) throw new Error("Register not found");
     const all = can(viewer.actor, "manage_cash", g.property_id);
-    const own = !all ? (await tx.query<{ id: string }>("select id from cash_shifts where register_id = $1 and user_id = $2 and closed_at is null", [g.id, viewer.userId])).rows[0] : undefined;
+    const own = !all ? (await tx.query<{ id: string; counted: boolean }>("select id, counted_at is not null as counted from cash_shifts where register_id = $1 and user_id = $2 and closed_at is null", [g.id, viewer.userId])).rows[0] : undefined;
     if (!all && !own) throw new Error("Not allowed to see this Cash Book");
     const { rows } = await tx.query<{ id: string; at: Date; kind: CashMovementKind; amount: string; reason: string; account: string; by_user: string; approved_by: string | null; shift_id: string | null; payment_id: string | null; confirmation_number: string | null; has_photo: boolean }>(
       `select m.id, m.at, m.kind, m.amount, m.reason, m.account, m.by_user, m.approved_by, m.shift_id, m.payment_id, b.confirmation_number, m.receipt_photo is not null as has_photo
@@ -395,13 +421,13 @@ export async function cashBook(pool: Pool, schema: string, registerId: string, v
        where m.register_id = $1 order by m.at, m.id`,
       [g.id],
     );
-    const book = cashBookBalance(rows.map((r) => ({ kind: r.kind, amount: Number(r.amount) })));
-    const all_rows = rows.map((r, i) => ({
+    const running = cashBookBalance(rows.map((r) => ({ kind: r.kind, amount: Number(r.amount) })));
+    const allRows = rows.map((r, i) => ({
       id: r.id,
       at: r.at,
       kind: r.kind,
       amount: Number(r.amount),
-      balance: book.balances[i]!,
+      balance: running.balances[i]!,
       reason: r.reason,
       account: r.account,
       byUser: r.by_user,
@@ -411,8 +437,12 @@ export async function cashBook(pool: Pool, schema: string, registerId: string, v
       confirmationNumber: r.confirmation_number,
       hasPhoto: r.has_photo,
     }));
-    const shown = own ? all_rows.filter((r) => r.shiftId === own.id) : all_rows.slice(-(options.limit ?? 500));
-    return { registerId: g.id, name: g.name, propertyId: g.property_id, balance: book.balance, rows: shown, ownShiftOnly: !all };
+    if (own) {
+      // the desk sees its Shift's movements; balances only once its count is entered
+      const mine = allRows.filter((r) => r.shiftId === own.id).map((r) => (own.counted ? r : { ...r, balance: null }));
+      return { registerId: g.id, name: g.name, propertyId: g.property_id, balance: own.counted ? running.balance : null, rows: mine, ownShiftOnly: true };
+    }
+    return { registerId: g.id, name: g.name, propertyId: g.property_id, balance: running.balance, rows: allRows.slice(-(options.limit ?? 500)), ownShiftOnly: false };
   });
 }
 
@@ -460,11 +490,13 @@ export interface ReceiptView {
   cardLast4: string | null;
   refund: boolean;
   confirmationNumber: string;
+  /** Initial and surname: the Receipt may be opened by anyone holding its code. */
   guestName: string;
   token: string;
+  timeZone: string;
 }
 
-const RECEIPT_SELECT = `select rc.number, rc.issued_at, rc.token, pr.name as property_name, le.name as le_name, le.address_line1, le.postal_code, le.city, le.country, le.vat_id,
+const RECEIPT_SELECT = `select rc.number, rc.issued_at, rc.token, pr.name as property_name, pr.time_zone, le.name as le_name, le.address_line1, le.postal_code, le.city, le.country, le.vat_id,
     p.amount, p.currency, p.tender, p.card_brand, p.card_last4, p.refund_of is not null as refund, b.confirmation_number, g.first_name, g.last_name
   from receipts rc join payments p on p.id = rc.payment_id join properties pr on pr.id = rc.property_id join legal_entities le on le.id = pr.legal_entity_id
   join reservations r on r.id = p.reservation_id join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id`;
@@ -483,7 +515,8 @@ function toReceipt(r: Record<string, unknown>): ReceiptView {
     cardLast4: (r.card_last4 as string | null) ?? null,
     refund: r.refund as boolean,
     confirmationNumber: r.confirmation_number as string,
-    guestName: `${r.first_name as string} ${r.last_name as string}`.trim(),
+    guestName: `${String(r.first_name ?? "").slice(0, 1)}${r.first_name ? ". " : ""}${r.last_name as string}`.trim(),
+    timeZone: r.time_zone as string,
   };
 }
 

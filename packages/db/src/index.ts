@@ -373,6 +373,7 @@ export {
   listCashRegisters,
   myOpenShift,
   openShift,
+  OpeningDifference,
   receiptByToken,
   receiptsOfReservation,
   recordCashMovement,

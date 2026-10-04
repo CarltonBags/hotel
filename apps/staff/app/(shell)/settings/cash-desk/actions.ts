@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createCashRegister, setCashDesk, setCashRegisterActive } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
-import { decimalOrNull, field, flag, formAction, type FormState } from "@/lib/form";
+import { decimal, field, flag, formAction, type FormState } from "@/lib/form";
 
 /** The property's cash desk settings and its Cash Registers (Property Manager, ticket 50). */
 const PATH = "/settings/cash-desk";
@@ -15,8 +15,8 @@ export async function saveCashDeskAction(_prev: FormState, formData: FormData): 
     const { tenant } = await authorize("manage_cash_desk", propertyId);
     await setCashDesk(pool(), tenant.schemaName, propertyId, {
       enabled: flag(formData, "enabled"),
-      tolerance: decimalOrNull(formData, "tolerance") ?? 5,
-      paidOutLimit: decimalOrNull(formData, "paidOutLimit") ?? 100,
+      tolerance: decimal(formData, "tolerance"),
+      paidOutLimit: decimal(formData, "paidOutLimit"),
       differenceAccount: field(formData, "differenceAccount"),
     });
     revalidatePath(PATH);

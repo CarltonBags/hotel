@@ -337,13 +337,12 @@ export async function takePayment(
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning ${PAYMENT_COLUMNS}`,
       [folio.id, res.id, res.property_id, tender, amount, ctx.currency, viaProvider ? "pending" : "succeeded", viaProvider ? provider.name : null, reader, reference, userId, viaProvider ? null : new Date()],
     );
-    // cash goes into the Cash Book of the user's open Shift, with a Receipt
-    if (tender === "cash") {
-      const registerId = await bookCashPaymentIn(tx, { id: rows[0]!.id, propertyId: res.property_id, amount }, userId);
-      await issueReceiptIn(tx, { id: rows[0]!.id, propertyId: res.property_id }, registerId, userId);
-    }
+    // cash goes into the Cash Book of the user's open Shift
+    const registerId = tender === "cash" ? await bookCashPaymentIn(tx, { id: rows[0]!.id, propertyId: res.property_id, amount }, userId) : null;
     // money received now, before check-in: its Deposit Invoice in the same transaction
     if (!viaProvider) await depositIn(tx, rows[0]!.id, userId);
+    // the Receipt after the Deposit Invoice, the order a settling card payment takes too
+    if (tender === "cash") await issueReceiptIn(tx, { id: rows[0]!.id, propertyId: res.property_id }, registerId, userId);
     return { row: rows[0]!, ctx, reader };
   });
   if (!viaProvider) return toPayment(prepared.row);
@@ -502,6 +501,11 @@ export async function refundPayment(
   return sendRefund(pool, schema, provider, refund.id);
 }
 
+/** A card refund at the desk gets its Receipt once the provider confirms it. */
+async function refundReceipt(tx: PoolClient, row: PaymentRow): Promise<void> {
+  if (row.status === "succeeded" && row.tender === "card_terminal" && row.refund_of) await issueReceiptIn(tx, { id: row.id, propertyId: row.property_id }, null, row.posted_by);
+}
+
 /** Ask the provider for a pending refund (first time or again); the key changes only after a definite "not now". */
 async function sendRefund(pool: Pool, schema: string, provider: PaymentProvider, refundPaymentId: string): Promise<Payment> {
   const r = await withTenant(pool, schema, async (tx) => (await tx.query<PaymentRow & { provider_attempts: number }>(`select ${PAYMENT_COLUMNS}, provider_attempts from payments where id = $1`, [refundPaymentId])).rows[0]!);
@@ -514,17 +518,17 @@ async function sendRefund(pool: Pool, schema: string, provider: PaymentProvider,
       idempotencyKey: `refund:${r.id}:${r.provider_attempts}`,
     });
     const status: PaymentStatus = result.status === "succeeded" ? "succeeded" : result.status === "failed" ? "failed" : result.status === "insufficient_balance" ? "refund_pending_balance" : "pending";
-    return withTenant(pool, schema, async (tx) =>
-      toPayment(
-        (await tx.query<PaymentRow>(
-          `update payments set status = $2, provider_refund_id = coalesce(nullif($3, ''), provider_refund_id), error = $4,
-             provider_attempts = provider_attempts + case when $2 = 'refund_pending_balance' then 1 else 0 end,
-             settled_at = case when $2 = 'succeeded' then clock_timestamp() else null end
-           where id = $1 returning ${PAYMENT_COLUMNS}`,
-          [r.id, status, result.refundId, result.error],
-        )).rows[0]!,
-      ),
-    );
+    return withTenant(pool, schema, async (tx) => {
+      const row = (await tx.query<PaymentRow>(
+        `update payments set status = $2, provider_refund_id = coalesce(nullif($3, ''), provider_refund_id), error = $4,
+           provider_attempts = provider_attempts + case when $2 = 'refund_pending_balance' then 1 else 0 end,
+           settled_at = case when $2 = 'succeeded' then clock_timestamp() else null end
+         where id = $1 returning ${PAYMENT_COLUMNS}`,
+        [r.id, status, result.refundId, result.error],
+      )).rows[0]!;
+      await refundReceipt(tx, row);
+      return toPayment(row);
+    });
   } catch (err) {
     const f = failureOf(err);
     // a definite "no" fails the refund; no answer leaves it pending (and counted), to be sent again under the same key
@@ -542,9 +546,13 @@ export async function syncRefund(pool: Pool, schema: string, provider: PaymentPr
   const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id));
   const r = await provider.getRefund(ctx.accountId, refundId);
   if (r.status === "succeeded" || r.status === "failed") {
-    await withTenant(pool, schema, (tx) =>
-      tx.query("update payments set status = $2, error = $3, settled_at = case when $2 = 'succeeded' then clock_timestamp() else null end where id = $1 and status in ('pending', 'refund_pending_balance')", [p.id, r.status, r.error]),
-    );
+    await withTenant(pool, schema, async (tx) => {
+      const row = (await tx.query<PaymentRow>(
+        `update payments set status = $2, error = $3, settled_at = case when $2 = 'succeeded' then clock_timestamp() else null end where id = $1 and status in ('pending', 'refund_pending_balance') returning ${PAYMENT_COLUMNS}`,
+        [p.id, r.status, r.error],
+      )).rows[0];
+      if (row) await refundReceipt(tx, row);
+    });
   }
   return { propertyId: p.property_id };
 }
