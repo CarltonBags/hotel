@@ -4,7 +4,7 @@ import { TENDERS, captureAmount, folioBalance, holdExpiry, holdIncrementAllowed,
 /** Seams: balance after payments; what may still be refunded and who may; Card Hold validity and limits (payments research, ticket 27). */
 describe("payments", () => {
   it("knows the v1 desk tenders", () => {
-    expect(TENDERS).toEqual(["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect"]);
+    expect(TENDERS).toEqual(["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect", "cash"]);
   });
 
   it("balance is gross Charges less succeeded payments; refunds count back", () => {

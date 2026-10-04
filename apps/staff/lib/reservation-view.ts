@@ -1,5 +1,6 @@
 import { can, canAtAnyProperty, formatCurrency, registrationFields, registrationGaps, type Language, type RegistrationField } from "@hoteloftware/domain";
 import {
+  cashSettings,
   chargeHistory,
   findGuest,
   findProperty,
@@ -16,6 +17,7 @@ import {
   listTaxCodes,
   listTenantUsers,
   loadFolios,
+  receiptsOfReservation,
   type FixedCharge,
   type FolioView,
   type Guest,
@@ -76,6 +78,10 @@ export async function reservationView(id: string, options: { propertyId?: string
     rights.folio ? listFixedCharges(pool(), s, r.id) : Promise.resolve<FixedCharge[]>([]),
     rights.guests ? findGuest(pool(), s, r.primaryGuest.id) : Promise.resolve<Guest | null>(null),
   ]);
+  // cash at the desk (ticket 50): the property's cash desk on and the user handles cash; Receipts by payment
+  const [cash, receipts] = rights.folio
+    ? await Promise.all([cashSettings(pool(), s, r.propertyId).then((c) => c.enabled && at("handle_cash")), receiptsOfReservation(pool(), s, r.id)])
+    : [false, {} as Record<string, { number: number; token: string }>];
   const [cityTaxRule, cityTaxExemptions] = await Promise.all([getCityTaxRule(pool(), s, r.propertyId), listCityTaxExemptions(pool(), s, r.id)]);
   const [readers, holds, invoices] = rights.folio
     ? await Promise.all([listTerminalReaders(pool(), s, r.propertyId), listCardHolds(pool(), s, r.id), listInvoices(pool(), s, r.id)])
@@ -141,6 +147,8 @@ export async function reservationView(id: string, options: { propertyId?: string
       testMode: provider.testMode,
       currency,
       folios: folios.folios.map((f) => ({ id: f.id, number: f.number, billToName: f.billToName, gross: f.totals.gross, balance: f.balance, payments: f.payments })),
+      receipts,
+      cash,
       holds,
       /** Open amount on the guest's own folios, what a hold capture takes by default. */
       guestBalance: folios.folios.filter((f) => f.billTo === "guest").reduce((sum, f) => sum + f.balance, 0),

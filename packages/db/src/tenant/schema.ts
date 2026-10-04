@@ -59,6 +59,10 @@ export const properties = pgTable(
     hkLinenEvery: integer("hk_linen_every").default(3),
     hkShiftMinutes: integer("hk_shift_minutes").notNull().default(480),
     deviceIdleMinutes: integer("device_idle_minutes").notNull().default(2),
+    cashDesk: boolean("cash_desk").notNull().default(false),
+    cashTolerance: numeric("cash_tolerance", { precision: 12, scale: 2 }).notNull().default("5.00"),
+    paidOutLimit: numeric("paid_out_limit", { precision: 12, scale: 2 }).notNull().default("100.00"),
+    cashDifferenceAccount: text("cash_difference_account").notNull().default(""),
   },
   (t) => [
     index("properties_legal_entity_idx").on(t.legalEntityId),
@@ -67,6 +71,8 @@ export const properties = pgTable(
     check("properties_hk_stayover_rhythm_check", sql`${t.hkStayoverRhythm} in ('daily', 'every_2', 'every_3', 'on_request')`),
     check("properties_hk_linen_every_check", sql`${t.hkLinenEvery} > 0`),
     check("properties_hk_shift_minutes_check", sql`${t.hkShiftMinutes} > 0`),
+    check("properties_cash_tolerance_check", sql`${t.cashTolerance} >= 0`),
+    check("properties_paid_out_limit_check", sql`${t.paidOutLimit} >= 0`),
   ],
 );
 
@@ -871,7 +877,7 @@ export const payments = pgTable(
     index("payments_folio_idx").on(t.folioId),
     index("payments_reservation_idx").on(t.reservationId),
     index("payments_intent_idx").on(t.providerIntentId).where(sql`${t.providerIntentId} is not null`),
-    check("payments_tender_check", sql`${t.tender} in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect')`),
+    check("payments_tender_check", sql`${t.tender} in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect', 'cash')`),
     check("payments_amount_check", sql`${t.amount} <> 0`),
     check("payments_status_check", sql`${t.status} in ('pending', 'succeeded', 'failed', 'refund_pending_balance')`),
     check("payments_refund_check", sql`(${t.refundOf} is null) = (${t.amount} > 0)`),
@@ -1129,7 +1135,7 @@ export const approvals = pgTable(
   (t) => [
     index("approvals_property_idx").on(t.propertyId, t.requestedAt.desc()),
     index("approvals_match_idx").on(t.kind, t.subjectKey, t.requestedBy).where(sql`${t.status} = 'approved'`),
-    check("approvals_kind_check", sql`${t.kind} in ('refund_over_limit', 'price_below_floor', 'complimentary')`),
+    check("approvals_kind_check", sql`${t.kind} in ('refund_over_limit', 'price_below_floor', 'complimentary', 'paid_out_over_limit')`),
     check("approvals_status_check", sql`${t.status} in ('pending', 'approved', 'rejected', 'used')`),
     check("approvals_decided_check", sql`(${t.status} = 'pending') = (${t.decidedBy} is null)`),
     check("approvals_used_check", sql`(${t.status} = 'used') = (${t.usedAt} is not null)`),
@@ -1361,6 +1367,92 @@ export const eventMarkers = pgTable(
   ],
 );
 
+export const cashRegisters = pgTable(
+  "cash_registers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    name: text("name").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [unique("cash_registers_property_id_name_key").on(t.propertyId, t.name), check("cash_registers_name_check", sql`length(trim(${t.name})) between 1 and 60`)],
+);
+
+export const cashShifts = pgTable(
+  "cash_shifts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    registerId: uuid("register_id").notNull().references(() => cashRegisters.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    userId: text("user_id").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    openingCount: jsonb("opening_count").notNull(),
+    openingFloat: numeric("opening_float", { precision: 12, scale: 2 }).notNull(),
+    countedAt: timestamp("counted_at", { withTimezone: true }),
+    closeCount: jsonb("close_count"),
+    counted: numeric("counted", { precision: 12, scale: 2 }),
+    expected: numeric("expected", { precision: 12, scale: 2 }),
+    difference: numeric("difference", { precision: 12, scale: 2 }),
+    reason: text("reason"),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("cash_shifts_open_register_idx").on(t.registerId).where(sql`${t.closedAt} is null`),
+    uniqueIndex("cash_shifts_open_user_idx").on(t.propertyId, t.userId).where(sql`${t.closedAt} is null`),
+    check("cash_shifts_count_check", sql`(${t.countedAt} is null) = (${t.counted} is null) and (${t.counted} is null) = (${t.expected} is null)`),
+    check("cash_shifts_closed_check", sql`${t.closedAt} is null or ${t.countedAt} is not null`),
+  ],
+);
+
+export const cashMovements = pgTable(
+  "cash_movements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    registerId: uuid("register_id").notNull().references(() => cashRegisters.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    shiftId: uuid("shift_id").references(() => cashShifts.id),
+    kind: text("kind").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    paymentId: uuid("payment_id").references(() => payments.id),
+    counterpartRegisterId: uuid("counterpart_register_id").references(() => cashRegisters.id),
+    reason: text("reason").notNull().default(""),
+    account: text("account").notNull().default(""),
+    receiptPhoto: bytea("receipt_photo"),
+    receiptPhotoType: text("receipt_photo_type"),
+    approvedBy: text("approved_by"),
+    at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    byUser: text("by_user").notNull(),
+    businessDate: date("business_date").notNull(),
+  },
+  (t) => [
+    index("cash_movements_register_idx").on(t.registerId, t.at),
+    index("cash_movements_shift_idx").on(t.shiftId),
+    check("cash_movements_kind_check", sql`${t.kind} in ('float', 'payment', 'refund', 'paid_out', 'deposit', 'change_in', 'transfer_out', 'transfer_in', 'tip_out', 'difference')`),
+  ],
+);
+
+export const receiptNumbers = pgTable("receipt_numbers", {
+  propertyId: uuid("property_id").primaryKey().references(() => properties.id),
+  last: integer("last").notNull().default(0),
+});
+
+export const receipts = pgTable(
+  "receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    number: integer("number").notNull(),
+    paymentId: uuid("payment_id").notNull().unique().references(() => payments.id),
+    registerId: uuid("register_id").references(() => cashRegisters.id),
+    token: text("token").notNull().unique(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    issuedBy: text("issued_by").notNull(),
+    emailedTo: text("emailed_to"),
+  },
+  (t) => [unique("receipts_property_id_number_key").on(t.propertyId, t.number)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1426,4 +1518,9 @@ export const tenantSchema = {
   lostItems,
   phoneChanges,
   eventMarkers,
+  cashRegisters,
+  cashShifts,
+  cashMovements,
+  receiptNumbers,
+  receipts,
 };

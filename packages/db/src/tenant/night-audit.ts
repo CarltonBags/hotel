@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { openShiftsIn, type OpenShiftInfo } from "./cash";
 import {
   auditOpen,
   auditOverdue,
@@ -55,6 +56,8 @@ export interface AuditWarnings {
   expiringHolds: { reservationId: string; confirmationNumber: string; guestName: string; amount: number; expiresAt: string }[];
   incompleteRegistrations: { reservationId: string; confirmationNumber: string; guestName: string; missing: string[] }[];
   arrivalsWithoutRoom: { reservationId: string; confirmationNumber: string; guestName: string }[];
+  /** Shifts still open on a Cash Register (ticket 50). */
+  openShifts: OpenShiftInfo[];
 }
 
 export interface NightAuditView {
@@ -190,8 +193,8 @@ async function warningsIn(tx: PoolClient, p: PropertyRow): Promise<AuditWarnings
      order by b.confirmation_number`,
     [p.id, bd],
   )).rows.map((r) => ({ reservationId: r.reservation_id, confirmationNumber: r.confirmation_number, guestName: r.guest_name }));
-  // TODO(Arrived and Waiting for Room, open Shifts): with their tickets
-  return { openBalances, expiringHolds, incompleteRegistrations, arrivalsWithoutRoom };
+  // TODO(Arrived and Waiting for Room): with its ticket
+  return { openBalances, expiringHolds, incompleteRegistrations, arrivalsWithoutRoom, openShifts: await openShiftsIn(tx, p.id) };
 }
 
 /** Where the property's Night Audit stands: the Business Date, the window, the decisions so far and what is left. */

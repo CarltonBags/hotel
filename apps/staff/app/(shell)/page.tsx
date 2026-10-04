@@ -171,7 +171,7 @@ async function Workspace({ property, list, selected }: { property: Awaited<Retur
             }}
             actionsProps={view.actionsProps}
             folioProps={view.folioProps}
-            paymentsProps={{ ...paymentProps(view), folios: view.payments.folios, rights: { take: view.rights.takePayments, refund: view.rights.refunds } }}
+            paymentsProps={{ ...paymentProps(view), folios: view.payments.folios, cash: view.payments.cash, receipts: view.payments.receipts, rights: { take: view.rights.takePayments, refund: view.rights.refunds } }}
             holdsProps={{ ...paymentProps(view), holds: view.payments.holds, balance: view.payments.guestBalance, canTake: view.rights.takePayments }}
             invoicesProps={{ reservationId: view.r.id, invoices: view.invoices, openFolios: view.openFolios, canIssue: view.rights.issueInvoices, canCorrect: view.rights.correctInvoices, currency }}
             checkOutProps={view.canCheckOut ? { reservationId: view.r.id, canOverride: view.rights.overrideCheckOut, currency } : null}

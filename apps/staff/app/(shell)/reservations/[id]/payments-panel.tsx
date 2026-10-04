@@ -105,10 +105,15 @@ function ReaderSelect({ readers, value, onChange, m }: { readers: { readerId: st
 export function PaymentsPanel({
   folios,
   rights,
+  cash,
+  receipts,
   ...c
 }: Common & {
   folios: { id: string; number: number; billToName: string; gross: number; balance: number; payments: Payment[] }[];
   rights: { take: boolean; refund: boolean };
+  /** The cash desk is on and this user handles cash (ticket 50). */
+  cash: boolean;
+  receipts: Record<string, { number: number; token: string }>;
 }) {
   const { reservationId, propertyId, readers, testMode, currency, m } = c;
   const money = (v: number) => formatCurrency(v, currency.code, currency.language, currency.country);
@@ -167,6 +172,11 @@ export function PaymentsPanel({
                   {p.error ? ` · ${p.error}` : ""}
                 </span>
                 <span className={`tabular-nums ${p.status === "failed" ? "line-through" : ""}`}>{money(p.amount)}</span>
+                {receipts[p.id] ? (
+                  <a href={`/receipt/${receipts[p.id]!.token}`} target="_blank" rel="noreferrer" data-receipt={receipts[p.id]!.number} className="text-xs text-accent underline">
+                    {fill(m["cash.receiptN"], { n: String(receipts[p.id]!.number) })}
+                  </a>
+                ) : null}
                 {p.status === "pending" && !p.refundOf ? (
                   <span className="flex gap-1">
                     {testMode ? (
@@ -239,7 +249,7 @@ export function PaymentsPanel({
           <label className="grid gap-1">
             <span className="text-ink-80">{m["pay.tender"]}</span>
             <select value={tender} onChange={(e) => setTender(e.target.value)} className={input}>
-              {DESK_TENDERS.map((t) => (
+              {DESK_TENDERS.filter((t) => t !== "cash" || cash).map((t) => (
                 <option key={t} value={t}>
                   {m[`pay.tender.${t}`]}
                 </option>

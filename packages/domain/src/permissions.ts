@@ -141,6 +141,17 @@ export const PROPERTY_ACTIONS = {
   post_minibar: ["property_manager", "front_desk", "housekeeping_supervisor", "housekeeper"],
   /** Housekeeping Notes on a reservation for floor staff. */
   manage_housekeeping_notes: ["property_manager", "front_desk", "housekeeping_supervisor"],
+  /** Matrix "Open and close a Shift at the desk; take cash, refund cash" (desk cash, ticket 50). */
+  handle_cash: ["property_manager", "front_desk"],
+  /** Matrix "Paid-out": Front Desk up to the property limit, above it with Approval. */
+  paid_out: ["property_manager", "front_desk"],
+  paid_out_without_limit: ["property_manager"],
+  /** Matrix "Bank deposit, transfer between registers; view all Cash Books". */
+  manage_cash: ["property_manager", "accounting"],
+  /** The cash desk page: the desk for its own Shift, Property Manager and Accounting for every register. */
+  view_cash_desk: ["property_manager", "front_desk", "accounting"],
+  /** The property's cash desk: on or off, Cash Registers, tolerance and Paid-out limit. */
+  manage_cash_desk: ["property_manager"],
   /** Enrol and revoke Devices of the property, choose who signs in on them (Property Manager). */
   manage_devices: ["property_manager"],
   /** Create Housekeeper users, reset their PIN and unlock them (amendment "Shared-device login"); the Property Manager for every user. */

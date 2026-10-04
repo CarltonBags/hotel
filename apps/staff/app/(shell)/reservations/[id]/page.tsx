@@ -219,7 +219,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
       ) : null}
       {folio ? (
         <div className="grid items-start gap-4 lg:grid-cols-2">
-          <PaymentsPanel {...paymentProps(v)} folios={v.payments.folios} rights={{ take: rights.takePayments, refund: rights.refunds }} m={m} />
+          <PaymentsPanel {...paymentProps(v)} folios={v.payments.folios} cash={v.payments.cash} receipts={v.payments.receipts} rights={{ take: rights.takePayments, refund: rights.refunds }} m={m} />
           <CardHoldsPanel {...paymentProps(v)} holds={v.payments.holds} balance={v.payments.guestBalance} canTake={rights.takePayments} m={m} />
         </div>
       ) : null}
