@@ -103,6 +103,17 @@ export function UserMenu() {
           >
             {t("shell.account")}
           </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              openModule("help_centre");
+              setOpen(false);
+            }}
+            className={row}
+          >
+            {t("module.help_centre")}
+          </button>
           <form action={signOut}>
             <button type="submit" role="menuitem" className={row}>
               {t("shell.signOut")}

@@ -4,6 +4,12 @@ function required(name: string): string {
   return v;
 }
 
+/** The address of a tenant's subdomain. */
+export function tenantUrl(slug: string, path = "/"): string {
+  const scheme = env.authUrl.startsWith("https") ? "https" : "http";
+  return `${scheme}://${slug}.${env.appDomain}${path}`;
+}
+
 export const env = {
   get databaseUrl() {
     return required("DATABASE_URL");
@@ -16,5 +22,16 @@ export const env = {
   },
   get authUrl() {
     return required("BETTER_AUTH_URL");
+  },
+  /** The platform's own tenant: its users listed as support staff may open customers' tenants (ticket 93). */
+  get platformSlug() {
+    return process.env.PLATFORM_TENANT_SLUG ?? "platform";
+  },
+  /** Support contacts shown in the help centre (ticket 93); set them for production. */
+  get supportEmail() {
+    return process.env.SUPPORT_EMAIL ?? "support@hoteloftware.eu";
+  },
+  get supportPhone() {
+    return process.env.SUPPORT_PHONE ?? "";
   },
 };

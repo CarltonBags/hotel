@@ -405,3 +405,21 @@ export {
   type TourismReportData,
   type TourismReportVersion,
 } from "./tenant/tourism-stats";
+export {
+  addSupportStaff,
+  endSupportAccess,
+  isSupportStaff,
+  listSupportAccesses,
+  listTenantsForSupport,
+  redeemSupportHandoff,
+  reportIncident,
+  scheduleMaintenance,
+  startSupportAccess,
+  statusPage,
+  supportSessionFor,
+  updateIncident,
+  type Incident,
+  type StatusPage,
+  type SupportAccessEntry,
+  type SupportSession,
+} from "./control/support";

@@ -221,6 +221,8 @@ export interface TenantSession {
   session: { id: string; expiresAt: Date };
   /** Signed in by PIN on this Device (ticket 14); null for a password session. */
   device: DeviceSession | null;
+  /** A support access of the platform's staff (ticket 93): the session acts with Tenant Admin rights, logged with its reason. */
+  support?: { accessId: string; reason: string } | null;
 }
 
 /**

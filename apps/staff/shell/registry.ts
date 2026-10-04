@@ -23,6 +23,8 @@ export interface ModuleDef {
   requires?: Action;
   /** Property-level action the user must hold at at least one property to see the item. */
   requiresProperty?: PropertyAction;
+  /** Only the platform's support staff (ticket 93). */
+  requiresSupportStaff?: boolean;
 }
 
 export const GROUPS: { id: GroupId; label: MessageKey; icon: string }[] = [
@@ -90,6 +92,9 @@ export const MODULES: ModuleDef[] = [
   { id: "settings_payments", group: "settings", label: "module.settings_payments", icon: "CreditCard", hue: "#635bff", href: "/settings/payments", requiresProperty: "manage_payment_settings" },
   { id: "settings_city_tax", group: "settings", label: "module.settings_city_tax", icon: "Landmark", hue: "#b98900", href: "/settings/city-tax", requiresProperty: "manage_property_settings" },
   { id: "settings_rooms", group: "settings", label: "module.settings_rooms", icon: "BedDouble", hue: "#0aa5a5", href: "/settings/rooms", requiresProperty: "manage_property_settings" },
+  { id: "settings_support_access", group: "settings", label: "module.settings_support_access", icon: "ShieldCheck", hue: "#4f5bd5", href: "/settings/support-access", requires: "view_support_accesses" },
+  { id: "help_centre", group: "settings", label: "module.help_centre", icon: "LifeBuoy", hue: "#0aa5a5", href: "/help" },
+  { id: "support_console", group: "settings", label: "module.support_console", icon: "Headset", hue: "#e2552b", href: "/support", requiresSupportStaff: true },
   { id: "settings_account", group: "settings", label: "module.settings_account", icon: "UserCog", hue: "#6b7280", href: "/settings/account" },
 ];
 

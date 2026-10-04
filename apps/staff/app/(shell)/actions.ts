@@ -13,6 +13,7 @@ const YEAR = 60 * 60 * 24 * 365;
 
 export async function savePinnedTabs(scope: string, tabs: PinnedTab[]): Promise<void> {
   const { principal, properties } = await loadShell();
+  if (principal.session.support) return;
   if (scope !== "all" && !properties.some((p) => p.id === scope)) return;
   const seen = new Set<string>();
   const clean = tabs
@@ -26,7 +27,7 @@ export async function savePinnedTabs(scope: string, tabs: PinnedTab[]): Promise<
 /** Add or remove one module from the user's Quick Access, from the Main Menu. */
 export async function toggleQuickAccess(moduleId: string): Promise<void> {
   const shell = await loadShell();
-  if (!MODULE_BY_ID.has(moduleId)) return;
+  if (!MODULE_BY_ID.has(moduleId) || shell.principal.session.support) return;
   const current = (await getPreferences(pool(), shell.principal.session.user.id)).quickAccess ?? shell.quickAccess;
   const next = current.includes(moduleId) ? current.filter((id) => id !== moduleId) : [...current, moduleId].slice(0, 8);
   await setPreferences(pool(), shell.principal.session.user.id, { quickAccess: next });
