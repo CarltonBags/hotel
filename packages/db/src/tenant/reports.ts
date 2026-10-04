@@ -556,6 +556,12 @@ async function cashReport(tx: PoolClient, req: ReportRequest, props: PropertyInf
   };
 }
 
+/** Every currency other than the report's needs its rate stated, whether or not the period holds amounts in it. */
+function checkRates(req: ReportRequest, props: PropertyInfo[], currency: string): void {
+  if (req.kind === "housekeeping") return;
+  for (const c of new Set(props.map((p) => p.currency))) convertAmount(0, c, currency, req.rates ?? {});
+}
+
 /** One of the fixed reports as a table. The caller has checked the report's right at every property asked for. */
 export async function runReport(pool: Pool, schema: string, req: ReportRequest): Promise<ReportTable> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(req.from) || !/^\d{4}-\d{2}-\d{2}$/.test(req.to) || req.to < req.from) throw new Error("Choose a date range");
@@ -563,11 +569,14 @@ export async function runReport(pool: Pool, schema: string, req: ReportRequest):
   if (req.roomTypeId && !isUuid(req.roomTypeId)) throw new Error("Room type not found");
   if (req.kind === "receivables") {
     const props = await withTenant(pool, schema, (tx) => propertiesOf(tx, req.propertyIds));
-    return receivablesReport(pool, schema, req, props, req.currency ?? props[0]!.currency);
+    const currency = req.currency ?? props[0]!.currency;
+    checkRates(req, props, currency);
+    return receivablesReport(pool, schema, req, props, currency);
   }
   return withTenant(pool, schema, async (tx) => {
     const props = await propertiesOf(tx, req.propertyIds);
     const currency = req.currency ?? props[0]!.currency;
+    checkRates(req, props, currency);
     switch (req.kind) {
       case "occupancy":
         return occupancyReport(tx, req, props, currency);

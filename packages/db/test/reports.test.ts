@@ -113,6 +113,8 @@ describe("fixed reports", () => {
   it("a consolidated report converts CHF at the stated rate and keeps a line per property", async () => {
     await book(zurich, addDays(monthStart, 3), 1);
     await expect(runReport(pool, s(), req({ propertyIds: [berlin, zurich], currency: "EUR" }))).rejects.toThrow(/rate for CHF/);
+    // also when the period holds no CHF amount: the report states its base either way
+    await expect(runReport(pool, s(), req({ kind: "cash", propertyIds: [berlin, zurich], currency: "EUR" }))).rejects.toThrow(/rate for CHF/);
     const t = await runReport(pool, s(), req({ propertyIds: [berlin, zurich], currency: "EUR", rates: { CHF: 1.06 } }));
     const line = (label: string) => t.rows.find((x) => x.cells.label === label)!.cells;
     expect(line("Zürich")).toMatchObject({ occupied: 1, netRoomRevenue: 106 });
