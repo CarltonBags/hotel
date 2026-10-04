@@ -1632,6 +1632,43 @@ export const registrationPersons = pgTable(
   ],
 );
 
+export const budgets = pgTable(
+  "budgets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    year: integer("year").notNull(),
+    version: text("version").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text("updated_by").notNull(),
+  },
+  (t) => [
+    check("budgets_year_check", sql`${t.year} between 2000 and 2100`),
+    check("budgets_version_check", sql`${t.version} in ('budget', 'forecast')`),
+    unique("budgets_key").on(t.propertyId, t.year, t.version),
+  ],
+);
+
+export const budgetMonths = pgTable(
+  "budget_months",
+  {
+    budgetId: uuid("budget_id").notNull().references(() => budgets.id, { onDelete: "cascade" }),
+    month: integer("month").notNull(),
+    occupancy: numeric("occupancy", { precision: 5, scale: 2 }).notNull(),
+    adr: numeric("adr", { precision: 12, scale: 2 }).notNull(),
+    netRoomRevenue: numeric("net_room_revenue", { precision: 14, scale: 2 }).notNull(),
+    totalRevenue: numeric("total_revenue", { precision: 14, scale: 2 }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.budgetId, t.month] }),
+    check("budget_months_month_check", sql`${t.month} between 1 and 12`),
+    check("budget_months_occupancy_check", sql`${t.occupancy} between 0 and 100`),
+    check("budget_months_adr_check", sql`${t.adr} >= 0`),
+    check("budget_months_nrr_check", sql`${t.netRoomRevenue} >= 0`),
+    check("budget_months_total_check", sql`${t.totalRevenue} >= ${t.netRoomRevenue}`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1710,4 +1747,6 @@ export const tenantSchema = {
   propertyOutages,
   registrations,
   registrationPersons,
+  budgets,
+  budgetMonths,
 };

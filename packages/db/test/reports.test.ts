@@ -19,6 +19,7 @@ import { checkIn } from "../src/tenant/folios";
 import { createCityTaxRule } from "../src/tenant/city-tax";
 import { createRoomBlock } from "../src/tenant/room-state";
 import { runReport, type ReportRequest } from "../src/tenant/reports";
+import { getBudget, setBudget } from "../src/tenant/budget";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -121,6 +122,23 @@ describe("fixed reports", () => {
     expect(line("Berlin")).toMatchObject({ occupied: 10, netRoomRevenue: 1000 });
     expect(total(t)).toMatchObject({ occupied: 11, netRoomRevenue: 1106 });
     expect(t.notes.join(" ")).toContain("1 CHF = 1.06 EUR");
+  });
+
+  it("actual against Budget and Forecast: the month's figures spread to its days add back up to the month", async () => {
+    const year = Number(monthStart.slice(0, 4));
+    const month = Number(monthStart.slice(5, 7));
+    await setBudget(pool, s(), berlin, { year, version: "budget", months: [{ month, occupancy: 50, adr: 100, netRoomRevenue: 9000.55, totalRevenue: 12000 }] }, pm);
+    await setBudget(pool, s(), berlin, { year, version: "forecast", months: [{ month, occupancy: 40, adr: 95, netRoomRevenue: 8000, totalRevenue: 10000 }] }, pm);
+    await expect(setBudget(pool, s(), berlin, { year, version: "budget", months: [{ month, occupancy: 120, adr: 1, netRoomRevenue: 1, totalRevenue: 2 }] }, pm)).rejects.toThrow(/occupancy/);
+    expect((await getBudget(pool, s(), berlin, year, "budget")).months).toHaveLength(1);
+    const t = await runReport(pool, s(), req({ grain: "week", compare: { previous: false, lastYear: false, budget: true, forecast: true } }));
+    const tot = total(t);
+    const available = 8 * days;
+    expect(tot).toMatchObject({ netRoomRevenue_budget: 9000.55, totalRevenue_budget: 12000, netRoomRevenue_forecast: 8000, totalRevenue_forecast: 10000 });
+    expect(tot.occupancy_budget).toBe(Math.round((Math.round(0.5 * available) / available) * 1000) / 10);
+    // the weeks of the month add up to the month's budget
+    const weeks = t.rows.filter((r) => !r.emphasis);
+    expect(Math.round(weeks.reduce((sum, r) => sum + Number(r.cells.netRoomRevenue_budget ?? 0), 0) * 100) / 100).toBe(9000.55);
   });
 
   it("every report kind runs and ends in a total line", async () => {

@@ -456,3 +456,4 @@ export {
   type TabletPerson,
   type TabletState,
 } from "./tenant/registration";
+export { getBudget, setBudget } from "./tenant/budget";

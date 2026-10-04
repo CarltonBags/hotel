@@ -87,6 +87,12 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
             <label className="flex items-center gap-1">
               <input type="checkbox" name="ly" defaultChecked={request.compare.lastYear} /> {m["reports.compareLastYear"]}
             </label>
+            <label className="flex items-center gap-1">
+              <input type="checkbox" name="bu" defaultChecked={request.compare.budget} /> {m["reports.compareBudget"]}
+            </label>
+            <label className="flex items-center gap-1">
+              <input type="checkbox" name="fc" defaultChecked={request.compare.forecast} /> {m["reports.compareForecast"]}
+            </label>
           </>
         ) : null}
         {request.kind === "pickup" ? (

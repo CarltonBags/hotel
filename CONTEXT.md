@@ -497,6 +497,10 @@ _Avoid_: Booking pace, gain
 The planned monthly figures a property enters for a year, against which reports show variance.
 _Avoid_: Forecast, plan, target
 
+**Forecast**:
+The revised Budget of a year, entered beside the original as the year goes on; reports compare against either.
+_Avoid_: Reforecast, outlook, projection
+
 ## Groups
 
 **Group**:

@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import {
+  BUDGET_VERSIONS,
   LAST_YEAR_SHIFT,
   REPORT_TEXT,
   REPORT_TITLES,
@@ -11,6 +12,7 @@ import {
   lastYearPeriod,
   occupancyRows,
   percentOf,
+  periodOf,
   previousPeriod,
   roundMoney,
   type Grain,
@@ -22,6 +24,8 @@ import {
   type ReportTable,
 } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
+import { ACTIVE, NET, NIGHT_REVENUE, nightsOf, perDate } from "./nights";
+import { budgetDaysIn } from "./budget";
 import { listReceivables } from "./receivables";
 import { withTenant } from "./with-tenant";
 
@@ -40,7 +44,8 @@ export interface ReportRequest {
   grain: Grain;
   /** Occupancy by room type instead of by period. */
   byRoomType?: boolean;
-  compare: { previous: boolean; lastYear: boolean };
+  /** Occupancy and revenue also compares with the Budget and the Forecast (ticket 83). */
+  compare: { previous: boolean; lastYear: boolean; budget?: boolean; forecast?: boolean };
   /** Pickup: the day the gain or loss is counted from. */
   pickupSince?: string;
   /** The report currency; default the first property's. */
@@ -69,77 +74,6 @@ async function propertiesOf(tx: PoolClient, ids: string[]): Promise<PropertyInfo
   return rows.map((r) => ({ id: r.id, name: r.name, currency: r.currency.trim(), timeZone: r.time_zone, today: r.today }));
 }
 
-const ACTIVE = "('confirmed', 'checked_in', 'checked_out')";
-/** A Charge's amount without VAT. */
-const NET = "(c.amount / (1 + c.tax_rate / 100))";
-
-/**
- * Revenue per reservation and night: posted Charges (Corrections count with
- * the component and origin they correct), and for stays not yet checked in the room
- * and Service components on the books, net at the Tax Code's rate that night.
- */
-const NIGHT_REVENUE = `
-  select c.reservation_id, c.service_date as date,
-    sum(case when c.category = 'accommodation' and coalesce(o.origin, c.origin) <> 'fee' and coalesce(o.component, c.component) = 'room' then ${NET} else 0 end) as room,
-    sum(case when coalesce(o.origin, c.origin) = 'fee' then ${NET} else 0 end) as fees,
-    sum(case when c.category <> 'city_tax' then ${NET} else 0 end) as total
-  from charges c left join charges o on o.id = c.corrects
-  where c.property_id = $1 and c.voided_at is null and c.service_date between $2 and $3 and c.reservation_id is not null
-  group by 1, 2
-  union all
-  select n.reservation_id, n.date,
-    sum(case when n.kind = 'room' then n.amount / (1 + coalesce(tr.rate, 0) / 100) else 0 end) as room,
-    0 as fees,
-    sum(n.amount / (1 + coalesce(tr.rate, 0) / 100)) as total
-  from reservation_night_components n
-  join reservations r on r.id = n.reservation_id and r.status = 'confirmed'
-  join rate_plans rp on rp.id = r.rate_plan_id
-  -- the room component is the Rate Plan's accommodation Service
-  join services s on s.id = coalesce(n.service_id, rp.accommodation_service_id)
-  left join lateral (select t.rate from tax_code_rates t where t.tax_code_id = s.tax_code_id and t.valid_from <= n.date order by t.valid_from desc limit 1) tr on true
-  where r.property_id = $1 and n.date between $2 and $3
-  group by 1, 2`;
-
-/** Nights of one property, per date (and room type): Available Rooms, occupied rooms and revenue. */
-async function nightsOf(tx: PoolClient, propertyId: string, range: { from: string; to: string }, roomTypeId: string | null): Promise<(NightFigures & { roomTypeId: string; roomType: string })[]> {
-  const { rows } = await tx.query<{ date: string; room_type_id: string; room_type: string; available: number; occupied: number; room: string | null; fees: string | null; total: string | null }>(
-    `with d as (select generate_series($2::date, $3::date, interval '1 day')::date as date),
-     rev as (${NIGHT_REVENUE}),
-     rev_by as (select rev.date, r.room_type_id, sum(rev.room) as room, sum(rev.fees) as fees, sum(rev.total) as total from rev join reservations r on r.id = rev.reservation_id group by 1, 2)
-     select to_char(d.date, 'YYYY-MM-DD') as date, rt.id as room_type_id, rt.name as room_type,
-       (select count(*) from rooms x where x.room_type_id = rt.id
-          and not exists (select 1 from room_blocks b where b.room_id = x.id and b.kind = 'out_of_order' and b.from_date <= d.date and b.to_date > d.date))::int as available,
-       (select count(*) from reservation_nights rn join reservations r on r.id = rn.reservation_id
-          where r.room_type_id = rt.id and rn.date = d.date and r.status in ${ACTIVE})::int as occupied,
-       rb.room, rb.fees, rb.total
-     from d cross join room_types rt
-     left join rev_by rb on rb.date = d.date and rb.room_type_id = rt.id
-     where rt.property_id = $1 and ($4::uuid is null or rt.id = $4)
-     order by 1, rt.name`,
-    [propertyId, range.from, range.to, roomTypeId],
-  );
-  return rows.map((r) => ({
-    date: r.date,
-    roomTypeId: r.room_type_id,
-    roomType: r.room_type,
-    available: r.available,
-    occupied: r.occupied,
-    netRoomRevenue: roundMoney(Number(r.room ?? 0)),
-    fees: roundMoney(Number(r.fees ?? 0)),
-    totalRevenue: roundMoney(Number(r.total ?? 0)),
-  }));
-}
-
-/** Sum the room types of each date into one night. */
-function perDate(nights: NightFigures[]): NightFigures[] {
-  const m = new Map<string, NightFigures>();
-  for (const n of nights) {
-    const x = m.get(n.date) ?? { date: n.date, available: 0, occupied: 0, netRoomRevenue: 0, fees: 0, totalRevenue: 0 };
-    m.set(n.date, { date: n.date, available: x.available + n.available, occupied: x.occupied + n.occupied, netRoomRevenue: x.netRoomRevenue + n.netRoomRevenue, fees: x.fees + n.fees, totalRevenue: x.totalRevenue + n.totalRevenue });
-  }
-  return [...m.values()];
-}
-
 const t = (req: ReportRequest, key: keyof typeof REPORT_TEXT) => REPORT_TEXT[key][req.language];
 
 function baseNotes(req: ReportRequest, props: PropertyInfo[], currency: string): string[] {
@@ -164,6 +98,7 @@ const KPI_COLUMNS: [keyof Kpis, keyof typeof REPORT_TEXT, ReportColumn["kind"]][
   ["totalRevenue", "totalRevenue", "money"],
 ];
 const COMPARED: (keyof Kpis)[] = ["occupancy", "adr", "revpar", "netRoomRevenue"];
+const BUDGET_COMPARED = [["occupancy"], ["adr"], ["netRoomRevenue"], ["totalRevenue"]] as const;
 
 async function occupancyReport(tx: PoolClient, req: ReportRequest, props: PropertyInfo[], currency: string): Promise<ReportTable> {
   const rates = req.rates ?? {};
@@ -217,6 +152,29 @@ async function occupancyReport(tx: PoolClient, req: ReportRequest, props: Proper
   rows.push({ cells: cells(t(req, "total"), kpis(all), previous ? kpis(previous) : undefined, lastYear ? kpis(lastYear) : undefined), emphasis: true });
   const notes = [...baseNotes(req, props, currency), t(req, "baseAvailable")];
   if (req.compare.previous || req.compare.lastYear) notes.push(t(req, "lastYearNote"));
+  // against the Budget and the Forecast, spread to days: per period, per property, in total (not per room type)
+  for (const version of BUDGET_VERSIONS.filter((v) => req.compare[v] && !req.byRoomType)) {
+    for (const [k] of BUDGET_COMPARED) columns.push({ key: `${k}_${version}`, label: `${t(req, KPI_COLUMNS.find((c) => c[0] === k)![1])} ${t(req, version)}`, kind: KPI_COLUMNS.find((c) => c[0] === k)![2] });
+    const days = (await Promise.all(props.map(async (p) => (await budgetDaysIn(tx, p.id, version, range)).map((d) => ({ ...d, propertyId: p.id, netRoomRevenue: convertAmount(d.netRoomRevenue, p.currency, currency, rates), totalRevenue: convertAmount(d.totalRevenue, p.currency, currency, rates) }))))).flat();
+    const avail = (pred: (n: (typeof all)[number], date: string) => boolean) => all.filter((n) => pred(n, n.date)).reduce((s, n) => s + n.available, 0);
+    const figures = (ds: typeof days, available: number) => {
+      const occupied = ds.reduce((s, d) => s + d.occupiedRooms, 0);
+      const nrr = roundMoney(ds.reduce((s, d) => s + d.netRoomRevenue, 0));
+      return { occupancy: percentOf(occupied, available), adr: occupied ? roundMoney(nrr / occupied) : null, netRoomRevenue: ds.length ? nrr : null, totalRevenue: ds.length ? roundMoney(ds.reduce((s, d) => s + d.totalRevenue, 0)) : null };
+    };
+    const propertyOf = new Map(own.flatMap(({ p, nights }) => nights.map((n) => [n.roomTypeId, p.id] as const)));
+    for (const row of rows) {
+      const label = String(row.cells.label);
+      const prop = props.find((p) => p.name === label);
+      const f = label === t(req, "total")
+        ? figures(days, avail(() => true))
+        : prop
+          ? figures(days.filter((d) => d.propertyId === prop.id), avail((n) => propertyOf.get(n.roomTypeId) === prop.id))
+          : figures(days.filter((d) => periodOf(d.date, req.grain) === label), avail((_n, date) => periodOf(date, req.grain) === label));
+      for (const [k] of BUDGET_COMPARED) row.cells[`${k}_${version}`] = f[k] ?? null;
+    }
+    notes.push(t(req, "budgetNote"));
+  }
   return { title: REPORT_TITLES.occupancy[req.language], notes, columns, rows };
 }
 
