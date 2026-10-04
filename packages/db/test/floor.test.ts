@@ -110,7 +110,7 @@ describe("phone view", () => {
     await publishHousekeeping(pool, s(), berlin, asSup);
     const mine = await floorDay(pool, s(), berlin, asAnna);
     const stay = mine.tasks.find((t) => t.roomNumber === "102" && t.kind === "stayover")!;
-    expect(stay).toMatchObject({ section: "1st floor", guest: { surname: "Tanaka", people: 2, departure: day(6), vip: false } });
+    expect(stay).toMatchObject({ started: false, section: "1st floor", guest: { surname: "Tanaka", people: 2, departure: day(6), vip: false } });
     expect(stay.notes).toEqual([{ code: "feather_allergy", text: null }, { code: null, text: "Extra towels" }]);
     expect(mine.tasks.map((t) => `${t.roomNumber}:${t.kind}`).sort()).toEqual(["101:departure", "102:linen", "102:stayover"]);
   });
@@ -145,6 +145,17 @@ describe("phone view", () => {
     const now = (await floorDay(pool, s(), berlin, asAnna)).tasks.find((t) => t.id === lin.id)!;
     expect((await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "task", taskId: lin.id, step: "declined", seen: now.version }, asAnna)).outcome).toBe("applied");
     expect((await floorDay(pool, s(), berlin, asAnna)).tasks.find((t) => t.id === lin.id)).toMatchObject({ status: "skipped", skipReason: "declined" });
+  });
+
+  it("a guest now waiting does not undo the housekeeper's work; a supervisor's step from the phone still wins", async () => {
+    const stay = (await floorDay(pool, s(), berlin, asAnna)).tasks.find((t) => t.kind === "stayover")!;
+    // the front desk marks the guest waiting while the phone is offline: not a change to the work
+    await pool.query(`update ${s()}.housekeeping_tasks set priority = true, changed = true where id = $1`, [stay.id]);
+    expect((await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "task", taskId: stay.id, step: "start", seen: stay.version }, asAnna)).outcome).toBe("applied");
+    // the supervisor finishes it from her own phone; Anna's older offline step loses
+    expect((await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "task", taskId: stay.id, step: "done", seen: stay.version }, asSup)).outcome).toBe("applied");
+    const late = await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "task", taskId: stay.id, step: "declined", seen: stay.version }, asAnna);
+    expect(late.outcome).toBe("conflict");
   });
 
   it("posts the minibar as Charges to the stay in the room, once", async () => {

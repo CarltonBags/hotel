@@ -17,8 +17,10 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request): Promise<Response> {
   const tenant = await currentTenant();
   if (!tenant) return new Response(null, { status: 404 });
+  // ten changes with a photo each at most; the phone sends in batches of ten
+  if (Number(request.headers.get("content-length") ?? "0") > 25_000_000) return new Response(null, { status: 413 });
   const body = (await request.json().catch(() => null)) as { key?: unknown; changes?: unknown } | null;
-  if (!body || !Array.isArray(body.changes) || body.changes.length > 50) return new Response(null, { status: 400 });
+  if (!body || !Array.isArray(body.changes) || body.changes.length > 10) return new Response(null, { status: 400 });
 
   let userId: string;
   let propertyId: string;
@@ -47,7 +49,13 @@ export async function POST(request: Request): Promise<Response> {
       results.push({ id, outcome: "refused", message: err instanceof Error ? err.message : "Bad change" });
       continue;
     }
-    results.push({ id, ...(await applyPhoneChange(pool(), tenant.schemaName, propertyId, op, { userId, actor })) });
+    try {
+      results.push({ id, ...(await applyPhoneChange(pool(), tenant.schemaName, propertyId, op, { userId, actor })) });
+    } catch (err) {
+      // a database failure on one change must not hold back the others or be retried for ever
+      console.error(err);
+      results.push({ id, outcome: "refused", message: "Could not be saved" });
+    }
   }
   return Response.json({ results }, { headers: { "cache-control": "no-store" } });
 }

@@ -324,8 +324,13 @@ export async function issueChangeKey(pool: Pool, deviceId: string, userId: strin
   return key;
 }
 
-/** Whose changes a key carries, if it is valid for this Device. */
+/** Whose changes a key carries, if it is valid for this Device and the user may still sign in on it. */
 export async function changeKeyUser(pool: Pool, deviceId: string, key: string): Promise<string | null> {
-  const r = (await pool.query<{ user_id: string }>("select user_id from control.device_change_keys where key_hash = $1 and device_id = $2 and expires_at > now()", [hash(key), deviceId])).rows[0];
+  const r = (await pool.query<{ user_id: string }>(
+    `select k.user_id from control.device_change_keys k join control.devices d on d.id = k.device_id
+     where k.key_hash = $1 and k.device_id = $2 and k.expires_at > now() and d.revoked_at is null
+       and (d.owner_user_id = k.user_id or exists (select 1 from control.device_users u where u.device_id = d.id and u.user_id = k.user_id))`,
+    [hash(key), deviceId],
+  )).rows[0];
   return r?.user_id ?? null;
 }

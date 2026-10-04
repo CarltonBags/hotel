@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BedDouble, Camera, ChevronRight, CircleAlert, Hourglass, Languages, Layers, Lock, LogIn, LogOut, Minus, PackageSearch, Plus, Sparkles, Star, TriangleAlert, Wrench, X } from "lucide-react";
-import { FLOOR_LANGUAGES, LOST_PICKS, PROBLEM_PICKS, URGENCIES, floorSections, isRtl, type FloorLanguage, type LostPick, type PhoneOp, type ProblemPick, type Urgency } from "@hoteloftware/domain";
+import { Accessibility, Baby, BedDouble, BedSingle, Camera, CameraOff, ChevronRight, CircleAlert, Clock, Feather, Gift, Hourglass, Languages, Layers, Lock, LogIn, LogOut, Minus, PackageSearch, PawPrint, Plus, Sparkles, Star, StickyNote, Wrench, X } from "lucide-react";
+import { FLOOR_LANGUAGES, LOST_PICKS, PROBLEM_PICKS, URGENCIES, floorSections, isRtl, type FloorLanguage, type HousekeepingNoteCode, type LostPick, type PhoneOp, type ProblemPick, type Urgency } from "@hoteloftware/domain";
 import type { FloorDay, FloorIssue, FloorTask, PhoneChangeOutcome } from "@hoteloftware/db";
 import { FLOOR_LANGUAGE_NAMES, fillFloor, type FloorKey, type FloorMessages } from "@/i18n/floor";
 import { lockDeviceAction } from "@/app/device/actions";
 import { setFloorLanguageAction } from "./actions";
-import { load, save } from "./store";
+import { load, save, update } from "./store";
 
 /** A change waiting to send, with the key that says whose it is. */
 interface Pending {
@@ -23,6 +23,20 @@ const KIND_STYLE: Record<FloorTask["kind"], { Icon: typeof LogOut; tone: string 
   linen: { Icon: Layers, tone: "bg-[#ece6ff] text-[#7c5cff]" },
   clean: { Icon: Sparkles, tone: "bg-[#fdf1d8] text-[#b98900]" },
 };
+
+/** The property's fixed list of Housekeeping Notes, each with its icon and colour. */
+const NOTE_STYLE: Record<HousekeepingNoteCode, { Icon: typeof LogOut; tone: string }> = {
+  feather_allergy: { Icon: Feather, tone: "text-danger" },
+  baby_cot: { Icon: Baby, tone: "text-[#0aa5a5]" },
+  extra_bed: { Icon: BedSingle, tone: "text-[#0071e3]" },
+  welcome_gift: { Icon: Gift, tone: "text-[#e0457b]" },
+  late_checkout: { Icon: Clock, tone: "text-warning" },
+  pet: { Icon: PawPrint, tone: "text-[#b98900]" },
+  accessibility: { Icon: Accessibility, tone: "text-[#7c5cff]" },
+};
+
+/** A batch the server takes at once; photos make changes large. */
+const BATCH = 10;
 
 /**
  * The phone view (ticket 35, variant A "List by section"): the user's rooms
@@ -55,16 +69,12 @@ export function FloorApp(props: {
 
   // keep the day and the change key on the phone for the time without connection
   useEffect(() => {
-    // opened without a connection (page from the service worker): the day as last kept on the phone
-    if (!navigator.onLine) void load<FloorDay>(`day:${userId}`).then((kept) => kept && setDay(kept));
-    else void save(`day:${userId}`, props.initial);
-    if (props.changeKey) void save(`key:${userId}`, props.changeKey);
     void load<Pending[]>("outbox").then((p) => setPending(p ?? []));
-  }, [userId, props.initial, props.changeKey]);
+  }, []);
 
-  const storePending = useCallback((next: Pending[]) => {
-    setPending(next);
-    void save("outbox", next);
+  /** Keep the day as the phone shows it, for opening without a connection. */
+  const keepDay = useCallback((next: FloorDay) => {
+    void update<{ day?: FloorDay } & Record<string, unknown>>("boot", (b) => ({ ...(b ?? {}), day: next }));
   }, []);
 
   const refresh = useCallback(async () => {
@@ -73,57 +83,59 @@ export function FloorApp(props: {
       if (!res.ok) return;
       const fresh = (await res.json()) as FloorDay;
       setDay(fresh);
-      void save(`day:${userId}`, fresh);
+      keepDay(fresh);
     } catch {
       // offline: the kept day stays
     }
-  }, [userId]);
+  }, [keepDay]);
 
-  /** Send what waits, oldest first, each under its own user's key. */
+  /** Send what waits, oldest first, each under its own user's key, a few at a time. */
   const flush = useCallback(async () => {
     if (sending.current) return;
     const queue = (await load<Pending[]>("outbox")) ?? [];
     if (!queue.length) return;
     sending.current = true;
+    const done = new Set<string>();
     try {
-      const done = new Set<string>();
       const groups = new Map<string, Pending[]>();
       for (const p of queue) groups.set(p.key ?? `session:${p.userId}`, [...(groups.get(p.key ?? `session:${p.userId}`) ?? []), p]);
-      for (const [, list] of groups) {
-        const mine = list[0]!.key === null && list[0]!.userId !== userId;
-        if (mine) continue; // made without a key by someone else: wait until they are signed in again
-        const res = await fetch("/api/floor/changes", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ key: list[0]!.key, changes: list.map((p) => p.op) }),
-        });
-        if (!res.ok) {
-          if (res.status === 403 || res.status === 400) {
-            // the key ran out or the Device was revoked: these cannot be sent any more
+      for (const list of groups.values()) {
+        // made without a key by someone else (no enrolled Device): waits until they are signed in again
+        const notMine = list[0]!.key === null && list[0]!.userId !== userId;
+        if (notMine) continue;
+        for (let i = 0; i < list.length; i += BATCH) {
+          const batch = list.slice(i, i + BATCH);
+          const res = await fetch("/api/floor/changes", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ key: batch[0]!.key, changes: batch.map((p) => p.op) }),
+          });
+          if (res.status === 403) {
+            // the key ran out or the Device was revoked: these can no longer be sent under their user
             for (const p of list) done.add(p.op.id);
             setNotices((n) => [...n, t("refused", { message: String(res.status) })]);
+            break;
           }
-          continue;
-        }
-        const { results } = (await res.json()) as { results: ({ id: string } & PhoneChangeOutcome)[] };
-        for (const r of results) {
-          done.add(r.id);
-          const op = list.find((p) => p.op.id === r.id)?.op;
-          if (r.outcome === "conflict" && op?.kind === "task") {
-            const task = dayRef.current.tasks.find((x) => x.id === op.taskId);
-            setNotices((n) => [...n, t("conflict", { room: task?.roomNumber ?? "" })]);
-          } else if (r.outcome === "refused") setNotices((n) => [...n, t("refused", { message: r.message })]);
+          if (!res.ok) break; // try again later
+          const { results } = (await res.json()) as { results: ({ id: string } & PhoneChangeOutcome)[] };
+          for (const r of results) {
+            done.add(r.id);
+            const op = batch.find((p) => p.op.id === r.id)?.op;
+            if (r.outcome === "conflict" && op?.kind === "task") {
+              const task = dayRef.current.tasks.find((x) => x.id === op.taskId);
+              setNotices((n) => [...n, t("conflict", { room: task?.roomNumber ?? "" })]);
+            } else if (r.outcome === "refused") setNotices((n) => [...n, t("refused", { message: r.message })]);
+          }
         }
       }
-      const left = ((await load<Pending[]>("outbox")) ?? []).filter((p) => !done.has(p.op.id));
-      storePending(left);
-      if (done.size) await refresh();
     } catch {
       // still offline
     } finally {
+      if (done.size) setPending(await update<Pending[]>("outbox", (q) => (q ?? []).filter((p) => !done.has(p.op.id))));
       sending.current = false;
     }
-  }, [refresh, storePending, t, userId]);
+    if (done.size) await refresh();
+  }, [refresh, t, userId]);
 
   useEffect(() => {
     const up = () => {
@@ -157,26 +169,26 @@ export function FloorApp(props: {
   /** Keep a change on the phone, show it at once, send it when possible. */
   const record = useCallback(
     async (op: PhoneOp, local?: (d: FloorDay) => FloorDay) => {
-      const queue = ((await load<Pending[]>("outbox")) ?? []).concat({ op, key: props.changeKey, userId });
-      storePending(queue);
+      setPending(await update<Pending[]>("outbox", (q) => [...(q ?? []), { op, key: props.changeKey, userId }]));
       if (local) {
         setDay((d) => {
           const next = local(d);
-          void save(`day:${userId}`, next);
+          keepDay(next);
           return next;
         });
       }
       if (navigator.onLine) void flush();
     },
-    [flush, props.changeKey, storePending, userId],
+    [flush, keepDay, props.changeKey, userId],
   );
 
   const newOp = () => ({ id: crypto.randomUUID(), at: new Date().toISOString() });
   const taskStep = (task: FloorTask, step: "start" | "done" | "undo" | "declined" | "dnd") => {
-    const status: FloorTask["status"] = step === "start" ? "in_progress" : step === "done" ? "done" : step === "undo" ? "in_progress" : "skipped";
+    const STATUS_AFTER: Record<typeof step, FloorTask["status"]> = { start: "in_progress", done: "done", undo: task.started ? "in_progress" : "open", declined: "skipped", dnd: "skipped" };
+    const status = STATUS_AFTER[step];
     void record({ ...newOp(), kind: "task", taskId: task.id, step, seen: task.version }, (d) => ({
       ...d,
-      tasks: d.tasks.map((x) => (x.id === task.id ? { ...x, status, skipReason: step === "declined" || step === "dnd" ? step : null, doneBy: step === "start" || step === "undo" ? (step === "undo" ? null : x.doneBy) : userId } : x)),
+      tasks: d.tasks.map((x) => (x.id === task.id ? { ...x, status, started: x.started || step === "start", skipReason: step === "declined" || step === "dnd" ? step : null, doneBy: step === "start" || step === "undo" ? (step === "undo" ? null : x.doneBy) : userId } : x)),
     }));
   };
 
@@ -383,6 +395,7 @@ function RoomSheet(props: {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [form, setForm] = useState<null | "problem" | "lost">(null);
   const [photo, setPhoto] = useState<string | undefined>();
+  const [noPhoto, setNoPhoto] = useState(false);
   const [pick, setPick] = useState<string>("");
   const [urgency, setUrgency] = useState<Urgency>("today");
   const [note, setNote] = useState("");
@@ -392,7 +405,7 @@ function RoomSheet(props: {
   const counted = Object.entries(counts).filter(([, n]) => n > 0);
   const big = "flex h-16 flex-col items-center justify-center gap-1 rounded-2xl font-medium";
   const small = "flex h-14 flex-col items-center justify-center gap-1 rounded-2xl bg-surface-2 text-sm";
-  const reset = () => (setForm(null), setPhoto(undefined), setPick(""), setNote(""), setUrgency("today"));
+  const reset = () => (setForm(null), setPhoto(undefined), setNoPhoto(false), setPick(""), setNote(""), setUrgency("today"));
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={props.onClose}>
       <div role="dialog" aria-label={task.roomNumber} onClick={(e) => e.stopPropagation()} className="mx-auto grid max-h-[90dvh] w-full max-w-md gap-3 overflow-y-auto rounded-t-3xl bg-canvas p-4 pb-8">
@@ -412,12 +425,15 @@ function RoomSheet(props: {
           </button>
         </div>
 
-        {task.notes.map((n, i) => (
-          <p key={i} className="flex items-center gap-2 rounded-2xl bg-surface p-3 text-sm">
-            <TriangleAlert className="size-4 shrink-0 text-warning" />
-            {n.code ? t(`hknote.${n.code}`) : n.text}
-          </p>
-        ))}
+        {task.notes.map((n, i) => {
+          const { Icon, tone } = n.code ? NOTE_STYLE[n.code] : { Icon: StickyNote, tone: "text-ink-60" };
+          return (
+            <p key={i} className="flex items-center gap-2 rounded-2xl bg-surface p-3 text-sm">
+              <Icon className={`size-5 shrink-0 ${tone}`} />
+              {n.code ? t(`hknote.${n.code}`) : n.text}
+            </p>
+          );
+        })}
 
         <div className="grid grid-cols-2 gap-2">
           {working ? (
@@ -486,6 +502,14 @@ function RoomSheet(props: {
               <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => e.target.files?.[0] && void shrink(e.target.files[0]).then(setPhoto)} />
             </label>
             {photo ? <img src={photo} alt="" className="max-h-40 rounded-xl object-cover" /> : null}
+            {/* photo first; only then the quick picks (or on purpose without one) */}
+            {!photo && !noPhoto ? (
+              <button type="button" onClick={() => setNoPhoto(true)} className="flex items-center justify-center gap-2 text-sm text-ink-60">
+                <CameraOff className="size-4" /> {t("noPhoto")}
+              </button>
+            ) : null}
+            {photo || noPhoto ? (
+            <>
             <div className="flex flex-wrap gap-2">
               {(form === "problem" ? PROBLEM_PICKS : LOST_PICKS).map((p) => (
                 <button key={p} type="button" aria-pressed={pick === p} onClick={() => setPick(p)} className={`rounded-full px-3 py-2 text-sm ${pick === p ? "bg-accent text-white" : "bg-surface-2"}`}>
@@ -503,6 +527,8 @@ function RoomSheet(props: {
               </div>
             ) : null}
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("note")} className="h-11 rounded-xl border border-ink-10 bg-surface-2 px-3" />
+            </>
+            ) : null}
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={reset} className="h-12 rounded-full bg-surface-2">
                 {t("cancel")}

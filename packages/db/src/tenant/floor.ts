@@ -26,6 +26,8 @@ export interface FloorTask {
   kind: TaskKind;
   minutes: number;
   status: "open" | "in_progress" | "done" | "skipped";
+  /** Begun at some point: an Undo returns it to in progress, else to open. */
+  started: boolean;
   skipReason: "declined" | "dnd" | null;
   priority: boolean;
   changed: boolean;
@@ -79,10 +81,10 @@ export async function floorDay(pool: Pool, schema: string, propertyId: string, v
         : (
             await tx.query<{
               id: string; version: number; room_id: string; number: string; section: string | null; kind: TaskKind; minutes: number; status: FloorTask["status"]; skip_reason: FloorTask["skipReason"];
-              priority: boolean; changed: boolean; assignee_id: string | null; done_by: string | null; reservation_id: string | null;
+              priority: boolean; changed: boolean; assignee_id: string | null; done_by: string | null; reservation_id: string | null; started: boolean;
               last_name: string | null; adults: number | null; children: number | null; departure: string | null; vip: boolean | null;
             }>(
-              `select t.id, t.version, t.room_id, m.number, s.name as section, t.kind, t.minutes, t.status, t.skip_reason, t.priority, t.changed, t.assignee_id, t.done_by, t.reservation_id,
+              `select t.id, t.version, t.room_id, m.number, s.name as section, t.kind, t.minutes, t.status, t.skip_reason, t.priority, t.changed, t.assignee_id, t.done_by, t.reservation_id, t.started_at is not null as started,
                  g.last_name, r.adults, cardinality(r.child_ages) as children, to_char(r.departure, 'YYYY-MM-DD') as departure, g.vip
                from housekeeping_tasks t join rooms m on m.id = t.room_id left join sections s on s.id = m.section_id
                left join reservations r on r.id = t.reservation_id left join guests g on g.id = r.primary_guest_id
@@ -111,6 +113,7 @@ export async function floorDay(pool: Pool, schema: string, propertyId: string, v
         kind: t.kind,
         minutes: t.minutes,
         status: t.status,
+        started: t.started,
         skipReason: t.skip_reason,
         priority: t.priority,
         changed: t.changed,
@@ -155,8 +158,8 @@ export async function applyPhoneChange(pool: Pool, schema: string, propertyId: s
       const before = (await tx.query<{ user_id: string; outcome: PhoneChangeOutcome["outcome"]; message: string }>("select user_id, outcome, message from phone_changes where id = $1", [op.id])).rows[0]!;
       return before.user_id === viewer.userId ? { outcome: before.outcome, message: before.message } : { outcome: "refused", message: "Change already received" };
     }
-    // changes from the phone do not count as someone else's change to the task
-    await tx.query("select set_config('hoteloftware.phone_change', 'on', true)");
+    // a task's own housekeeper working it from the phone is not someone else's change to it
+    await tx.query("select set_config('hoteloftware.phone_change', $1, true)", [viewer.userId]);
     await tx.query("savepoint phone_change");
     let result: PhoneChangeOutcome;
     try {

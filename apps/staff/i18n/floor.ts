@@ -32,6 +32,7 @@ const T = {
   "problem": ["Störung melden", "Report problem", "Zgłoś problem", "Raportează o problemă", "Съобщи за проблем", "Prijavi kvar", "Hiba bejelentése", "Arıza bildir", "Повідомити про несправність", "الإبلاغ عن عطل"],
   "lost": ["Fundsache", "Lost and found", "Rzecz znaleziona", "Obiect găsit", "Намерена вещ", "Izgubljeno-nađeno", "Talált tárgy", "Kayıp eşya", "Знахідка", "مفقودات"],
   "photo": ["Foto aufnehmen", "Take photo", "Zrób zdjęcie", "Fă o fotografie", "Снимай", "Fotografiraj", "Fotó készítése", "Fotoğraf çek", "Зробити фото", "التقط صورة"],
+  "noPhoto": ["Ohne Foto weiter", "Continue without photo", "Dalej bez zdjęcia", "Continuă fără fotografie", "Продължи без снимка", "Nastavi bez fotografije", "Tovább fotó nélkül", "Fotoğrafsız devam et", "Продовжити без фото", "المتابعة بدون صورة"],
   "save": ["Speichern", "Save", "Zapisz", "Salvează", "Запази", "Spremi", "Mentés", "Kaydet", "Зберегти", "حفظ"],
   "cancel": ["Abbrechen", "Cancel", "Anuluj", "Renunță", "Отказ", "Odustani", "Mégse", "İptal", "Скасувати", "إلغاء"],
   "close": ["Schließen", "Close", "Zamknij", "Închide", "Затвори", "Zatvori", "Bezárás", "Kapat", "Закрити", "إغلاق"],

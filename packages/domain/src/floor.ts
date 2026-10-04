@@ -59,7 +59,7 @@ export type PhoneOp = { id: string; at: string } & (
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TASK_STEPS = ["start", "done", "undo", "declined", "dnd"] as const;
-/** A photo as a data URL of a JPEG or PNG, at most about 4 MB. */
+/** A photo as a data URL of a JPEG or PNG, at most about 1.5 MB (the phone shrinks it to a few hundred KB). */
 const PHOTO = /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/;
 
 function oneOf<T extends string>(list: readonly T[], v: unknown, what: string): T {
@@ -75,7 +75,7 @@ function text(v: unknown): string {
 }
 function photo(v: unknown): string | undefined {
   if (v === undefined || v === null || v === "") return undefined;
-  if (typeof v !== "string" || v.length > 5_600_000 || !PHOTO.test(v)) throw new Error("Bad photo");
+  if (typeof v !== "string" || v.length > 2_000_000 || !PHOTO.test(v)) throw new Error("Bad photo");
   return v;
 }
 

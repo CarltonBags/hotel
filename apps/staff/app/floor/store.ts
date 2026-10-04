@@ -1,7 +1,9 @@
 /**
- * What the phone keeps (ticket 35): the day's tasks and the changes waiting
- * to send, in IndexedDB, encrypted with a key the browser cannot hand out
- * (AES-GCM, non-extractable). A revoked Device wipes it all. Client only.
+ * What the phone keeps (ticket 35): the last user's day and the changes
+ * waiting to send, in IndexedDB, encrypted with a key the browser cannot
+ * hand out (AES-GCM, non-extractable). That protects the data at rest (a
+ * copied disk or browser profile), not from someone using the app in this
+ * browser. A revoked Device wipes it all. Client only.
  */
 const DB = "hs-floor";
 
@@ -55,4 +57,17 @@ export async function load<T>(name: string): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+let chain: Promise<unknown> = Promise.resolve();
+
+/** Read, change and write one entry, one change after the other, so two quick taps never overwrite each other. */
+export function update<T>(name: string, change: (current: T | null) => T): Promise<T> {
+  const next = chain.then(async () => {
+    const value = change(await load<T>(name));
+    await save(name, value);
+    return value;
+  });
+  chain = next.catch(() => undefined);
+  return next;
 }

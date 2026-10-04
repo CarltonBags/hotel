@@ -1,14 +1,16 @@
 -- The phone view for floor staff (ticket 35): versions for offline changes, Housekeeping Notes,
 -- the minibar, Maintenance Issues and Lost and Found as reported from the phone.
 
--- A task's version goes up with every change not made from the housekeeper's phone, so a change
--- made offline against an older version loses to the supervisor's newer one.
+-- A task's version goes up with every change to its work not made by its own housekeeper from the
+-- phone (the setting names the user sending phone changes), so a change made offline against an
+-- older version loses to the supervisor's newer one. Priority and the Changed mark are not work:
+-- a guest now waiting does not undo the housekeeper's Done.
 alter table housekeeping_tasks add column version integer not null default 0;
 create function housekeeping_tasks_version() returns trigger language plpgsql set search_path from current as $$
 begin
-  if coalesce(current_setting('hoteloftware.phone_change', true), '') <> 'on'
-     and (new.status, new.assignee_id, new.kind, new.priority, new.note, new.minutes, new.changed)
-         is distinct from (old.status, old.assignee_id, old.kind, old.priority, old.note, old.minutes, old.changed) then
+  if coalesce(current_setting('hoteloftware.phone_change', true), '') is distinct from coalesce(old.assignee_id, '-')
+     and (new.status, new.assignee_id, new.kind, new.note, new.minutes)
+         is distinct from (old.status, old.assignee_id, old.kind, old.note, old.minutes) then
     new.version := old.version + 1;
   end if;
   return new;

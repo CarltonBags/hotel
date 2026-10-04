@@ -23,6 +23,10 @@ _Avoid_: Override, manager PIN, authorisation
 The reduced view of a reservation shown to housekeeping and maintenance staff: room, surname, stay dates, guest count and housekeeping notes.
 _Avoid_: Limited view, housekeeping view
 
+**Phone View**:
+What Housekeepers, Housekeeping Supervisors and Maintenance work with on a phone: the day's rooms by Section with a room sheet, or the Maintenance queue; it keeps working without a connection and sends changes later under the user who made them.
+_Avoid_: Mobile app, floor app
+
 **Legal Entity**:
 A company owned by a tenant that issues invoices; every property belongs to exactly one legal entity, which carries the VAT ID, bank details and invoice numbering.
 _Avoid_: Company, billing entity, GmbH
