@@ -628,7 +628,7 @@ async function build(tx: PoolClient, req: ReportRequest, props: PropertyInfo[], 
 }
 
 /** Log an export of a report: who, which, where, how, how many rows. */
-export async function logReportExport(pool: Pool, schema: string, entry: { userId: string; kind: ReportKind; propertyIds: string[]; format: "csv" | "pdf" | "mail"; rowCount: number }): Promise<void> {
+export async function logReportExport(pool: Pool, schema: string, entry: { userId: string; /** a fixed report's kind, "builder:<data set>" or "raw:<data set>" */ kind: string; propertyIds: string[]; format: "csv" | "pdf" | "mail"; rowCount: number }): Promise<void> {
   await withTenant(pool, schema, (tx) =>
     tx.query("insert into report_exports (user_id, kind, property_ids, format, row_count) values ($1, $2, $3, $4, $5)", [entry.userId, entry.kind, entry.propertyIds, entry.format, entry.rowCount]),
   );
