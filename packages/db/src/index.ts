@@ -389,3 +389,18 @@ export {
   type OpenShiftInfo,
   type ReceiptView,
 } from "./tenant/cash";
+export {
+  addPropertyClosure,
+  dueTourismReport,
+  removePropertyClosure,
+  setStatsExclusion,
+  setStatsSettings,
+  statsDeadline,
+  statsExclusionOf,
+  statsSettings,
+  submitTourismReport,
+  tourismReport,
+  type StatsSettings,
+  type TourismReportData,
+  type TourismReportVersion,
+} from "./tenant/tourism-stats";

@@ -63,6 +63,8 @@ export const properties = pgTable(
     cashTolerance: numeric("cash_tolerance", { precision: 12, scale: 2 }).notNull().default("5.00"),
     paidOutLimit: numeric("paid_out_limit", { precision: 12, scale: 2 }).notNull().default("100.00"),
     cashDifferenceAccount: text("cash_difference_account").notNull().default(""),
+    statsIdentity: text("stats_identity").notNull().default(""),
+    statsDeadlineDay: integer("stats_deadline_day").notNull().default(5),
   },
   (t) => [
     index("properties_legal_entity_idx").on(t.legalEntityId),
@@ -73,6 +75,7 @@ export const properties = pgTable(
     check("properties_hk_shift_minutes_check", sql`${t.hkShiftMinutes} > 0`),
     check("properties_cash_tolerance_check", sql`${t.cashTolerance} >= 0`),
     check("properties_paid_out_limit_check", sql`${t.paidOutLimit} >= 0`),
+    check("properties_stats_deadline_day_check", sql`${t.statsDeadlineDay} between 1 and 28`),
   ],
 );
 
@@ -629,6 +632,7 @@ export const reservations = pgTable(
     cityTaxPassOn: text("city_tax_pass_on"),
     lateArrival: boolean("late_arrival").notNull().default(false),
     waitingForRoomSince: timestamp("waiting_for_room_since", { withTimezone: true }),
+    statsExcludedReason: text("stats_excluded_reason"),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -637,6 +641,7 @@ export const reservations = pgTable(
     check("reservations_dates_check", sql`${t.departure} > ${t.arrival}`),
     check("reservations_adults_check", sql`${t.adults} >= 1`),
     check("reservations_status_check", sql`${t.status} in ('confirmed', 'checked_in', 'checked_out', 'cancelled', 'no_show')`),
+    check("reservations_stats_excluded_reason_check", sql`${t.statsExcludedReason} is null or length(trim(${t.statsExcludedReason})) > 0`),
     check("reservations_fee_status_check", sql`${t.cancellationFeeStatus} in ('open', 'confirmed', 'waived')`),
     check("reservations_fee_pair_check", sql`(${t.cancellationFee} is null) = (${t.cancellationFeeStatus} is null)`),
     check("reservations_city_tax_pass_on_check", sql`${t.cityTaxPassOn} in ('on_top', 'absorbed')`),
@@ -1453,6 +1458,38 @@ export const receipts = pgTable(
   (t) => [unique("receipts_property_id_number_key").on(t.propertyId, t.number)],
 );
 
+export const propertyClosures = pgTable(
+  "property_closures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    fromDate: date("from_date").notNull(),
+    toDate: date("to_date").notNull(),
+    reason: text("reason").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [index("property_closures_property_idx").on(t.propertyId, t.fromDate), check("property_closures_dates_check", sql`${t.toDate} >= ${t.fromDate}`)],
+);
+
+export const tourismReports = pgTable(
+  "tourism_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    month: char("month", { length: 7 }).notNull(),
+    version: integer("version").notNull(),
+    data: jsonb("data").notNull(),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    submittedBy: text("submitted_by").notNull(),
+  },
+  (t) => [
+    unique("tourism_reports_property_id_month_version_key").on(t.propertyId, t.month, t.version),
+    check("tourism_reports_month_check", sql`${t.month} ~ '^\\d{4}-(0[1-9]|1[0-2])$'`),
+    check("tourism_reports_version_check", sql`${t.version} >= 1`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1523,4 +1560,6 @@ export const tenantSchema = {
   cashMovements,
   receiptNumbers,
   receipts,
+  propertyClosures,
+  tourismReports,
 };

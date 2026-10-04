@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { findProperty } from "@hoteloftware/db";
+import { dueTourismReport, findProperty } from "@hoteloftware/db";
 import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, type PropertyAction } from "@hoteloftware/domain";
 import { IdleLock } from "@/app/device/idle-lock";
 import { pool } from "@/lib/db";
@@ -23,6 +23,27 @@ export default async function ShellLayout({ children }: { children: React.ReactN
     .map((p) => ({ p, behind: daysBehind(p.businessDate, todayIn(p.timeZone)), overdue: auditOverdue({ businessDate: p.businessDate, timeZone: p.timeZone, windowFrom: p.nightAuditFrom, deadline: p.nightAuditDeadline }, now) }))
     .filter((x) => x.overdue || x.behind > 1);
   const m = shell.messages;
+  // the official statistics reminder (ticket 85): from the deadline day until the month is submitted
+  const dueStats = (
+    await Promise.all(
+      shell.properties
+        .filter((p) => (shell.scope === "all" || p.id === shell.scope) && can(actor, "tourism_statistics", p.id))
+        .map(async (p) => ({ p, due: await dueTourismReport(pool(), tenant.schemaName, p.id) })),
+    )
+  ).filter((x) => x.due);
+  const statsBanner = dueStats.length ? (
+    <div role="alert" data-stats-reminder className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl bg-warning/20 px-4 py-2 text-sm print:hidden">
+      {dueStats.map(({ p, due }) => (
+        <span key={p.id}>
+          {shell.properties.length > 1 ? `${p.name}: ` : ""}
+          {fill(m["stats.due"], { month: due!.month, deadline: due!.deadline })}
+        </span>
+      ))}
+      <Link href="/statistics" className="font-medium underline">
+        {m["module.tourism_statistics"]}
+      </Link>
+    </div>
+  ) : null;
   const banner = late.length ? (
     <div role="alert" className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl bg-danger/15 px-4 py-2 text-sm print:hidden">
       {late.map(({ p, behind }) => (
@@ -35,6 +56,12 @@ export default async function ShellLayout({ children }: { children: React.ReactN
         {m["na.run"]}
       </Link>
     </div>
+  ) : null;
+  const banners = banner || statsBanner ? (
+    <>
+      {banner}
+      {statsBanner}
+    </>
   ) : null;
   return (
     <ShellProvider
@@ -54,7 +81,7 @@ export default async function ShellLayout({ children }: { children: React.ReactN
     >
       {idleMinutes ? <IdleLock minutes={idleMinutes} /> : null}
       {/* a front-office user with several properties picks the one they work in first */}
-      {shell.frontOffice && !shell.scope && shell.propertyChoices.length > 1 ? <PropertyChooser /> : <Shell banner={banner}>{children}</Shell>}
+      {shell.frontOffice && !shell.scope && shell.propertyChoices.length > 1 ? <PropertyChooser /> : <Shell banner={banners}>{children}</Shell>}
     </ShellProvider>
   );
 }
