@@ -30,6 +30,8 @@ export const REPORT_TEXT = {
   lastYear: { en: "LY", de: "VJ" },
   budget: { en: "Budget", de: "Budget" },
   forecast: { en: "Forecast", de: "Forecast" },
+  variance: { en: "Net Room Revenue vs", de: "Netto-Logisumsatz ggü." },
+  budgetNotByRoomType: { en: "Budget and Forecast are planned per property, not per room type: compare them by period.", de: "Budget und Forecast gelten je Betrieb, nicht je Zimmerkategorie: Vergleich nach Zeitraum." },
   budgetNote: { en: "Budget and Forecast: the months entered, spread over the days by last year's weekday pattern; occupancy against this period's Available Rooms.", de: "Budget und Forecast: die erfassten Monate, nach dem Wochentagsmuster des Vorjahres auf die Tage verteilt; Belegung gegen die verfügbaren Zimmer dieses Zeitraums." },
   previous: { en: "PP", de: "VP" },
   baseAvailable: { en: "Available Rooms: all rooms minus those Out of Order that night (Out of Service included). Amounts net of VAT, by Service Date; City Tax excluded.", de: "Verfügbare Zimmer: alle Zimmer abzüglich der in der Nacht gesperrten (Out of Order); Out of Service zählt mit. Beträge netto, nach Leistungsdatum; ohne City-Tax." },

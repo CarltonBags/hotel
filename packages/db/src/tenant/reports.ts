@@ -17,7 +17,6 @@ import {
   roundMoney,
   type Grain,
   type Kpis,
-  type NightFigures,
   type ReportColumn,
   type ReportKind,
   type ReportRow,
@@ -98,7 +97,8 @@ const KPI_COLUMNS: [keyof Kpis, keyof typeof REPORT_TEXT, ReportColumn["kind"]][
   ["totalRevenue", "totalRevenue", "money"],
 ];
 const COMPARED: (keyof Kpis)[] = ["occupancy", "adr", "revpar", "netRoomRevenue"];
-const BUDGET_COMPARED = [["occupancy"], ["adr"], ["netRoomRevenue"], ["totalRevenue"]] as const;
+const BUDGET_COMPARED = ["occupancy", "adr", "netRoomRevenue", "totalRevenue"] as const;
+const kpiColumn = (k: keyof Kpis) => KPI_COLUMNS.find((c) => c[0] === k)!;
 
 async function occupancyReport(tx: PoolClient, req: ReportRequest, props: PropertyInfo[], currency: string): Promise<ReportTable> {
   const rates = req.rates ?? {};
@@ -117,7 +117,7 @@ async function occupancyReport(tx: PoolClient, req: ReportRequest, props: Proper
   const lastYear = req.compare.lastYear ? (await load(ly)).flatMap((x) => x.nights) : null;
   const columns: ReportColumn[] = [{ key: "label", label: req.byRoomType ? t(req, "roomType") : t(req, "period"), kind: "text" }, ...KPI_COLUMNS.map(([key, label, kind]) => ({ key, label: t(req, label), kind }))];
   for (const [flag, suffix] of [[req.compare.previous, "previous"], [req.compare.lastYear, "lastYear"]] as const) {
-    if (flag) for (const k of COMPARED) columns.push({ key: `${k}_${suffix}`, label: `${t(req, KPI_COLUMNS.find((c) => c[0] === k)![1])} ${t(req, suffix)}`, kind: KPI_COLUMNS.find((c) => c[0] === k)![2] });
+    if (flag) for (const k of COMPARED) columns.push({ key: `${k}_${suffix}`, label: `${t(req, kpiColumn(k)[1])} ${t(req, suffix)}`, kind: kpiColumn(k)[2] });
   }
   const cells = (label: string, k: Kpis, p?: Kpis, l?: Kpis): ReportRow["cells"] => ({
     label,
@@ -137,7 +137,7 @@ async function occupancyReport(tx: PoolClient, req: ReportRequest, props: Proper
     const prevNights = previous ? { nights: perDate(previous), shift: prev.shift } : undefined;
     const lyNights = lastYear ? { nights: perDate(lastYear), shift: ly.shift } : undefined;
     for (const r of occupancyRows(perDate(all), req.grain, { ...(prevNights ? { previous: prevNights } : {}), ...(lyNights ? { lastYear: lyNights } : {}) })) {
-      rows.push({ cells: cells(r.period, r, r.previous, r.lastYear) });
+      rows.push({ cells: cells(r.period, r, r.previous, r.lastYear), ref: `period:${r.period}` });
     }
   }
   // one line per property beside the consolidated total
@@ -146,33 +146,44 @@ async function occupancyReport(tx: PoolClient, req: ReportRequest, props: Proper
       // a property's room types are its own: they pick its nights out of the comparisons
       const roomTypes = new Set(nights.map((n) => n.roomTypeId));
       const mine = (ns: typeof all | null) => (ns ? kpis(ns.filter((n) => roomTypes.has(n.roomTypeId))) : undefined);
-      rows.push({ cells: cells(p.name, kpis(nights), mine(previous), mine(lastYear)), emphasis: true });
+      rows.push({ cells: cells(p.name, kpis(nights), mine(previous), mine(lastYear)), emphasis: true, ref: `property:${p.id}` });
     }
   }
-  rows.push({ cells: cells(t(req, "total"), kpis(all), previous ? kpis(previous) : undefined, lastYear ? kpis(lastYear) : undefined), emphasis: true });
+  rows.push({ cells: cells(t(req, "total"), kpis(all), previous ? kpis(previous) : undefined, lastYear ? kpis(lastYear) : undefined), emphasis: true, ref: "total" });
   const notes = [...baseNotes(req, props, currency), t(req, "baseAvailable")];
   if (req.compare.previous || req.compare.lastYear) notes.push(t(req, "lastYearNote"));
-  // against the Budget and the Forecast, spread to days: per period, per property, in total (not per room type)
-  for (const version of BUDGET_VERSIONS.filter((v) => req.compare[v] && !req.byRoomType)) {
-    for (const [k] of BUDGET_COMPARED) columns.push({ key: `${k}_${version}`, label: `${t(req, KPI_COLUMNS.find((c) => c[0] === k)![1])} ${t(req, version)}`, kind: KPI_COLUMNS.find((c) => c[0] === k)![2] });
-    const days = (await Promise.all(props.map(async (p) => (await budgetDaysIn(tx, p.id, version, range)).map((d) => ({ ...d, propertyId: p.id, netRoomRevenue: convertAmount(d.netRoomRevenue, p.currency, currency, rates), totalRevenue: convertAmount(d.totalRevenue, p.currency, currency, rates) }))))).flat();
+  // the Budget is planned per property: not by room type, nor for one room type alone
+  const perProperty = !req.byRoomType && !req.roomTypeId;
+  if (!perProperty && (req.compare.budget || req.compare.forecast)) notes.push(t(req, "budgetNotByRoomType"));
+  // against the Budget and the Forecast, spread to days: per period, per property, in total
+  const versions = BUDGET_VERSIONS.filter((v) => req.compare[v] && perProperty);
+  const spreads = await Promise.all(props.map(async (p) => ({ p, byVersion: await budgetDaysIn(tx, p.id, versions, range) })));
+  for (const version of versions) {
+    for (const k of BUDGET_COMPARED) columns.push({ key: `${k}_${version}`, label: `${t(req, kpiColumn(k)[1])} ${t(req, version)}`, kind: kpiColumn(k)[2] });
+    const days = spreads.flatMap(({ p, byVersion }) => byVersion[version].map((d) => ({ ...d, propertyId: p.id, netRoomRevenue: convertAmount(d.netRoomRevenue, p.currency, currency, rates), totalRevenue: convertAmount(d.totalRevenue, p.currency, currency, rates) })));
     const avail = (pred: (n: (typeof all)[number], date: string) => boolean) => all.filter((n) => pred(n, n.date)).reduce((s, n) => s + n.available, 0);
     const figures = (ds: typeof days, available: number) => {
       const occupied = ds.reduce((s, d) => s + d.occupiedRooms, 0);
       const nrr = roundMoney(ds.reduce((s, d) => s + d.netRoomRevenue, 0));
-      return { occupancy: percentOf(occupied, available), adr: occupied ? roundMoney(nrr / occupied) : null, netRoomRevenue: ds.length ? nrr : null, totalRevenue: ds.length ? roundMoney(ds.reduce((s, d) => s + d.totalRevenue, 0)) : null };
+      // the Average Daily Rate as entered, weighted by the room nights of each month in the period
+      const adr = occupied ? roundMoney(ds.reduce((s, d) => s + d.adr * d.occupiedRooms, 0) / occupied) : null;
+      return { occupancy: percentOf(occupied, available), adr, netRoomRevenue: ds.length ? nrr : null, totalRevenue: ds.length ? roundMoney(ds.reduce((s, d) => s + d.totalRevenue, 0)) : null };
     };
     const propertyOf = new Map(own.flatMap(({ p, nights }) => nights.map((n) => [n.roomTypeId, p.id] as const)));
     for (const row of rows) {
-      const label = String(row.cells.label);
-      const prop = props.find((p) => p.name === label);
-      const f = label === t(req, "total")
-        ? figures(days, avail(() => true))
-        : prop
-          ? figures(days.filter((d) => d.propertyId === prop.id), avail((n) => propertyOf.get(n.roomTypeId) === prop.id))
-          : figures(days.filter((d) => periodOf(d.date, req.grain) === label), avail((_n, date) => periodOf(date, req.grain) === label));
-      for (const [k] of BUDGET_COMPARED) row.cells[`${k}_${version}`] = f[k] ?? null;
+      const [kind, id] = (row.ref ?? "").split(/:(.*)/s);
+      const f =
+        kind === "total"
+          ? figures(days, avail(() => true))
+          : kind === "property"
+            ? figures(days.filter((d) => d.propertyId === id), avail((n) => propertyOf.get(n.roomTypeId) === id))
+            : figures(days.filter((d) => periodOf(d.date, req.grain) === id), avail((_n, date) => periodOf(date, req.grain) === id));
+      for (const k of BUDGET_COMPARED) row.cells[`${k}_${version}`] = f[k] ?? null;
+      // the variance: actual Net Room Revenue against the plan, in percent
+      const actualNrr = Number(row.cells.netRoomRevenue ?? 0);
+      row.cells[`variance_${version}`] = f.netRoomRevenue ? Math.round(((actualNrr - f.netRoomRevenue) / f.netRoomRevenue) * 1000) / 10 : null;
     }
+    columns.push({ key: `variance_${version}`, label: `${t(req, "variance")} ${t(req, version)}`, kind: "percent" });
     notes.push(t(req, "budgetNote"));
   }
   return { title: REPORT_TITLES.occupancy[req.language], notes, columns, rows };

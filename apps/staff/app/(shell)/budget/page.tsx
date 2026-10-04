@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getBudget } from "@hoteloftware/db";
-import { BUDGET_VERSIONS, type BudgetVersion } from "@hoteloftware/domain";
+import { BUDGET_VERSIONS, can, type BudgetVersion } from "@hoteloftware/domain";
 import { ActionForm } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -20,7 +20,8 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
       </div>
     );
   }
-  const { tenant } = await requireAllowed("manage_budget", property.id);
+  const { tenant, actor } = await requireAllowed("view_budget", property.id);
+  const canEdit = can(actor, "manage_budget", property.id);
   const q = await searchParams;
   const thisYear = Number(property.businessDate.slice(0, 4));
   const year = Number(q.year) >= 2000 && Number(q.year) <= 2100 ? Number(q.year) : thisYear;
@@ -36,31 +37,8 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
     </>
   );
   const monthName = (n: number) => new Intl.DateTimeFormat(shell.language === "de" ? "de-DE" : "en-GB", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, n - 1, 1)));
-  return (
-    <div className="mx-auto grid max-w-5xl gap-4 p-6">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex-1">
-          <h1 className="text-xl font-medium">
-            {m["module.budget"]} <span className="text-ink-60">· {property.name}</span>
-          </h1>
-          <p className="text-sm text-ink-60">{m["budget.help"]}</p>
-        </div>
-        <nav className="flex gap-1 text-sm">
-          {[year - 1, year, year + 1].map((y) => (
-            <Link key={y} href={`/budget?year=${y}&version=${version}`} className={`rounded-full px-3 py-1 ${y === year ? "bg-ink text-canvas" : "bg-surface-2"}`}>
-              {y}
-            </Link>
-          ))}
-        </nav>
-        <nav className="flex gap-1 text-sm">
-          {BUDGET_VERSIONS.map((v) => (
-            <Link key={v} href={`/budget?year=${year}&version=${v}`} className={`rounded-full px-3 py-1 ${v === version ? "bg-ink text-canvas" : "bg-surface-2"}`} data-version={v}>
-              {m[`budget.version.${v}`]}
-            </Link>
-          ))}
-        </nav>
-      </div>
-      <ActionForm action={saveBudgetAction} submitLabel={m["action.save"]} className="grid gap-3">
+  const figures = (
+    <>
         {hidden}
         <table className="w-full rounded-2xl bg-surface-2 text-sm" data-budget-table>
           <thead className="text-xs text-ink-60">
@@ -87,7 +65,7 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
                     ] as const
                   ).map(([k, v]) => (
                     <td key={k} className="p-1 text-right">
-                      <input name={`${k}_${n}`} inputMode="decimal" defaultValue={v ?? ""} className={input} aria-label={`${monthName(n)} ${m[`budget.${k === "nrr" ? "nrr" : k}`]}`} />
+                      <input name={`${k}_${n}`} inputMode="decimal" defaultValue={v ?? ""} readOnly={!canEdit} className={input} aria-label={`${monthName(n)} ${m[`budget.${k === "nrr" ? "nrr" : k}`]}`} />
                     </td>
                   ))}
                 </tr>
@@ -96,12 +74,47 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
           </tbody>
         </table>
         {updatedAt ? <p className="text-xs text-ink-60">{m["budget.updated"]} {updatedAt.toISOString().slice(0, 16).replace("T", " ")}</p> : null}
-      </ActionForm>
+    </>
+  );
+  return (
+    <div className="mx-auto grid max-w-5xl gap-4 p-6">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex-1">
+          <h1 className="text-xl font-medium">
+            {m["module.budget"]} <span className="text-ink-60">· {property.name}</span>
+          </h1>
+          <p className="text-sm text-ink-60">{m["budget.help"]}</p>
+        </div>
+        <nav className="flex gap-1 text-sm">
+          {[year - 1, year, year + 1].map((y) => (
+            <Link key={y} href={`/budget?year=${y}&version=${version}`} className={`rounded-full px-3 py-1 ${y === year ? "bg-ink text-canvas" : "bg-surface-2"}`}>
+              {y}
+            </Link>
+          ))}
+        </nav>
+        <nav className="flex gap-1 text-sm">
+          {BUDGET_VERSIONS.map((v) => (
+            <Link key={v} href={`/budget?year=${year}&version=${v}`} className={`rounded-full px-3 py-1 ${v === version ? "bg-ink text-canvas" : "bg-surface-2"}`} data-version={v}>
+              {m[`budget.version.${v}`]}
+            </Link>
+          ))}
+        </nav>
+      </div>
+      {/* Accounting sees the figures; Property Manager and Revenue change them */}
+      {canEdit ? (
+        <ActionForm action={saveBudgetAction} submitLabel={m["action.save"]} className="grid gap-3">
+          {figures}
+        </ActionForm>
+      ) : (
+        figures
+      )}
+      {canEdit ? (
       <ActionForm action={importBudgetAction} submitLabel={m["budget.import"]} className="flex flex-wrap items-center gap-3 rounded-2xl bg-surface-2 p-4 text-sm">
         {hidden}
         <input type="file" name="file" accept=".csv,text/csv" />
         <span className="text-xs text-ink-60">{m["budget.importHelp"]}</span>
       </ActionForm>
+      ) : null}
     </div>
   );
 }

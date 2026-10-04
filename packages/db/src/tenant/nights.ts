@@ -1,7 +1,8 @@
 import type { PoolClient } from "pg";
 import { roundMoney, type NightFigures } from "@hoteloftware/domain";
 
-/** Night figures of a property (ticket 82): shared by the fixed reports and the Budget's spreading (ticket 83). */
+// Night figures of a property (ticket 82): shared by the fixed reports and the Budget's spreading (ticket 83).
+
 export const ACTIVE = "('confirmed', 'checked_in', 'checked_out')";
 /** A Charge's amount without VAT. */
 export const NET = "(c.amount / (1 + c.tax_rate / 100))";

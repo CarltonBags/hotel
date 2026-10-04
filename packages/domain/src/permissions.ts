@@ -170,7 +170,9 @@ export const PROPERTY_ACTIONS = {
   view_revenue_reports: ["property_manager", "accounting", "revenue"],
   /** Housekeeping performance. */
   view_housekeeping_reports: ["property_manager", "housekeeping_supervisor"],
-  /** Enter or import the Budget and Forecast (ticket 83). */
+  /** See the Budget and Forecast ("builder and budget for Property Manager, Accounting and Revenue"). */
+  view_budget: ["property_manager", "accounting", "revenue"],
+  /** Enter or import the Budget and Forecast (ticket 83: "by Property Manager or Revenue"). */
   manage_budget: ["property_manager", "revenue"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */
   manage_payment_settings: ["property_manager"],

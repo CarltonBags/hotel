@@ -32,12 +32,16 @@ export type Grain = (typeof GRAINS)[number];
 export const SCHEDULE_FREQUENCIES = ["daily", "weekly", "monthly"] as const;
 export type ScheduleFrequency = (typeof SCHEDULE_FREQUENCIES)[number];
 
+/** Monday 0 … Sunday 6. */
+export function dayOfWeek(date: string): number {
+  return (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7;
+}
+
 /** The period a date falls in: the day, the week (from its Monday) or the month. */
 export function periodOf(date: string, grain: Grain): string {
   if (grain === "day") return date;
   if (grain === "month") return date.slice(0, 7);
-  const weekday = (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7;
-  return addDays(date, -weekday);
+  return addDays(date, -dayOfWeek(date));
 }
 
 /** Same period last year, weekdays aligned: 52 weeks back. */
@@ -185,6 +189,8 @@ export interface ReportRow {
   cells: Record<string, string | number | null>;
   /** A total or a property's subtotal. */
   emphasis?: boolean;
+  /** What the line stands for ("period:2026-10", "property:<id>", "total"), never its label: labels can repeat. */
+  ref?: string;
 }
 export interface ReportTable {
   title: string;

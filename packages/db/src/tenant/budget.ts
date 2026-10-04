@@ -20,8 +20,8 @@ function checkMonths(months: BudgetMonth[]): void {
   }
 }
 
-/** Enter (or replace) a property's Budget or Forecast for a year: the months given; months left out stay as they were. */
-export async function setBudget(pool: Pool, schema: string, propertyId: string, input: { year: number; version: BudgetVersion; months: BudgetMonth[] }, userId: string): Promise<void> {
+/** Enter (or replace) a property's Budget or Forecast for a year: the months given, the months to clear; others stay as they were. */
+export async function setBudget(pool: Pool, schema: string, propertyId: string, input: { year: number; version: BudgetVersion; months: BudgetMonth[]; clear?: number[] }, userId: string): Promise<void> {
   if (!isUuid(propertyId)) throw new Error("Property not found");
   if (!BUDGET_VERSIONS.includes(input.version)) throw new Error("Budget or Forecast");
   if (!Number.isInteger(input.year) || input.year < 2000 || input.year > 2100) throw new Error("Choose a year");
@@ -32,6 +32,7 @@ export async function setBudget(pool: Pool, schema: string, propertyId: string, 
        on conflict (property_id, year, version) do update set updated_at = now(), updated_by = excluded.updated_by returning id`,
       [propertyId, input.year, input.version, userId],
     );
+    if (input.clear?.length) await tx.query("delete from budget_months where budget_id = $1 and month = any($2::int[])", [rows[0]!.id, input.clear]);
     for (const m of input.months) {
       await tx.query(
         `insert into budget_months (budget_id, month, occupancy, adr, net_room_revenue, total_revenue) values ($1, $2, $3, $4, $5, $6)
@@ -59,27 +60,35 @@ async function budgetIn(tx: PoolClient, propertyId: string, year: number, versio
 }
 
 /**
- * The Budget (or Forecast) of the days from..to, spread from its months: room
- * nights from occupancy × Available Rooms, all three by last year's weekday
- * pattern of Net Room Revenue (of room nights where it had none). Months
- * without figures give no days.
+ * The Budget and Forecast of the days from..to, spread from their months:
+ * room nights from occupancy × Available Rooms, all three by last year's
+ * weekday pattern of Net Room Revenue (of room nights where it had none) and
+ * the day's Available Rooms. Months without figures give no days. Two night
+ * queries for the whole span, shared by both versions.
  */
-export async function budgetDaysIn(tx: PoolClient, propertyId: string, version: BudgetVersion, range: { from: string; to: string }): Promise<BudgetDay[]> {
-  const out: BudgetDay[] = [];
-  let cursor = `${range.from.slice(0, 7)}-01`;
-  const budgets = new Map<number, BudgetMonth[]>();
-  while (cursor <= range.to) {
+export async function budgetDaysIn(tx: PoolClient, propertyId: string, versions: readonly BudgetVersion[], range: { from: string; to: string }): Promise<Record<BudgetVersion, BudgetDay[]>> {
+  const out: Record<BudgetVersion, BudgetDay[]> = { budget: [], forecast: [] };
+  if (!versions.length) return out;
+  const spanFrom = `${range.from.slice(0, 7)}-01`;
+  const lastMonth = daysOfMonth(Number(range.to.slice(0, 4)), Number(range.to.slice(5, 7)));
+  const spanTo = lastMonth.at(-1)!;
+  const actual = new Map(perDate(await nightsOf(tx, propertyId, { from: spanFrom, to: spanTo }, null)).map((n) => [n.date, n]));
+  const lastYear = perDate(await nightsOf(tx, propertyId, { from: addDays(spanFrom, -LAST_YEAR_SHIFT), to: addDays(spanTo, -LAST_YEAR_SHIFT) }, null));
+  const plans = new Map<string, BudgetMonth[]>();
+  for (let cursor = spanFrom; cursor <= spanTo; ) {
     const year = Number(cursor.slice(0, 4));
     const month = Number(cursor.slice(5, 7));
-    if (!budgets.has(year)) budgets.set(year, (await budgetIn(tx, propertyId, year, version)).months);
-    const m = budgets.get(year)!.find((x) => x.month === month);
     const days = daysOfMonth(year, month);
-    if (m) {
-      const actual = perDate(await nightsOf(tx, propertyId, { from: days[0]!, to: days.at(-1)! }, null));
-      const lastYear = perDate(await nightsOf(tx, propertyId, { from: addDays(days[0]!, -LAST_YEAR_SHIFT), to: addDays(days.at(-1)!, -LAST_YEAR_SHIFT) }, null));
-      const byRevenue = lastYear.some((n) => n.netRoomRevenue > 0);
-      const weights = weekdayWeights(lastYear.map((n) => ({ date: n.date, value: byRevenue ? n.netRoomRevenue : n.occupied })));
-      for (const d of spreadMonth(year, m, Object.fromEntries(actual.map((n) => [n.date, n.available])), weights)) if (d.date >= range.from && d.date <= range.to) out.push(d);
+    // last year's same weeks: the days 364 back from this month's
+    const ly = lastYear.filter((n) => n.date >= addDays(days[0]!, -LAST_YEAR_SHIFT) && n.date <= addDays(days.at(-1)!, -LAST_YEAR_SHIFT));
+    const byRevenue = ly.some((n) => n.netRoomRevenue > 0);
+    const weights = weekdayWeights(ly.map((n) => ({ date: n.date, value: byRevenue ? n.netRoomRevenue : n.occupied })));
+    const available = Object.fromEntries(days.map((d) => [d, actual.get(d)?.available ?? 0]));
+    for (const version of versions) {
+      const key = `${year}:${version}`;
+      if (!plans.has(key)) plans.set(key, (await budgetIn(tx, propertyId, year, version)).months);
+      const m = plans.get(key)!.find((x) => x.month === month);
+      if (m) for (const d of spreadMonth(year, m, available, weights)) if (d.date >= range.from && d.date <= range.to) out[version].push(d);
     }
     cursor = addDays(days.at(-1)!, 1);
   }

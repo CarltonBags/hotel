@@ -35,6 +35,19 @@ describe("budget import", () => {
     ]);
   });
 
+  it("German thousands with a point: 12.000 is twelve thousand", () => {
+    expect(parseBudgetCsv("2027-01;50;110;12.000;14.500,5", 2027).months[0]).toMatchObject({ netRoomRevenue: 12000, totalRevenue: 14500.5 });
+  });
+
+  it("a day without Available Rooms gets no room nights and no revenue", () => {
+    const days = daysOfMonth(2026, 11);
+    const available = Object.fromEntries(days.map((d) => [d, d <= "2026-11-10" ? 0 : 20]));
+    const spread = spreadMonth(2026, { month: 11, occupancy: 50, adr: 100, netRoomRevenue: 20_000, totalRevenue: 25_000 }, available, weekdayWeights([]));
+    expect(spread.filter((d) => d.date <= "2026-11-10").every((d) => d.occupiedRooms === 0 && d.netRoomRevenue === 0)).toBe(true);
+    expect(spread.every((d) => d.occupiedRooms <= (available[d.date] ?? 0))).toBe(true);
+    expect(Math.round(spread.reduce((s, d) => s + d.netRoomRevenue, 0) * 100) / 100).toBe(20_000);
+  });
+
   it("names every bad line: wrong year, bad month, out-of-range occupancy, twice, negative", () => {
     const r = parseBudgetCsv("2026-01,50,100,1,2\n2027-13,50,100,1,2\n2027-03,120,100,1,2\n2027-04,50,100,1,2\n2027-04,50,100,1,2\n2027-05,50,-1,1,2\n", 2027);
     expect(r.errors).toEqual(["line 1: 2026-01 is not in 2027", "line 2: no month 13", "line 3: occupancy between 0 and 100", "line 5: 2027-04 twice", "line 6: figures as numbers, not negative"]);

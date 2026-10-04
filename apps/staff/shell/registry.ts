@@ -87,7 +87,7 @@ export const MODULES: ModuleDef[] = [
   { id: "housekeeping_tasks", group: "housekeeping", label: "module.housekeeping_tasks", icon: "ClipboardCheck", hue: "#e0900b", href: "/housekeeping", requiresProperty: "assign_housekeeping" },
   soon("maintenance", "housekeeping", "module.maintenance", "Wrench", "#6b7280", 36),
   { id: "lost_found", group: "housekeeping", label: "module.lost_found", icon: "PackageSearch", hue: "#b98900", href: "/lost-found", requiresProperty: "view_lost_items" },
-  { id: "budget", group: "reports", label: "module.budget", icon: "Landmark", hue: "#1a9d5a", href: "/budget", requiresProperty: "manage_budget" },
+  { id: "budget", group: "reports", label: "module.budget", icon: "Landmark", hue: "#1a9d5a", href: "/budget", requiresProperty: "view_budget" },
   // the fixed reports (ticket 82), each its own Workspace Tab
   ...REPORT_KINDS.map((kind): ModuleDef => ({ id: `report_${kind}`, group: "reports", label: `module.report_${kind}`, icon: REPORT_ICONS[kind], hue: "#4f5bd5", href: `/reports/${kind}`, requiresProperty: REPORT_ACCESS[kind] })),
   { id: "night_audit_reports", group: "reports", label: "module.night_audit_reports", icon: "MoonStar", hue: "#7c5cff", href: "/night-audit/reports", requiresProperty: "view_night_audit_reports" },
