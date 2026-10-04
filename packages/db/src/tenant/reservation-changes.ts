@@ -13,12 +13,17 @@ import {
   type QuoteReason,
   type ReservationChangeAction,
   type StayShape,
+  isReady,
+  preferredFeatures,
+  type Cleanliness,
+  type RoomBlockKind,
 } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
 import { followStay, syncStayCharges } from "./folios";
 import { REASON_TEXT, loadQuoteData, quoteFor, writeNights } from "./reservations";
 import { withTenant } from "./with-tenant";
+import { assertNotOutOfOrder, markDirty, roomOfNight } from "./room-state";
 
 /**
  * Changes to a Reservation after booking ("Reservation and inventory domain
@@ -401,6 +406,8 @@ async function writeSegments(tx: PoolClient, r: ResRow, segs: AssignmentSegment[
     const room = await tx.query("select 1 from rooms where id = $1 and room_type_id = $2", [s.roomId, r.room_type_id]);
     if (!room.rowCount && !(typeFrom && s.to <= typeFrom)) throw new Error("The room must be of the reservation's room type");
     if (await roomTaken(tx, s.roomId, s.from, s.to, r.id)) throw new Error("The room is taken by another reservation on those nights");
+    // nights already slept keep their room whatever happened to it since
+    if (!(typeFrom && s.to <= typeFrom)) await assertNotOutOfOrder(tx, s.roomId, typeFrom && s.from < typeFrom ? typeFrom : s.from, s.to);
   }
   await tx.query("delete from room_assignments where reservation_id = $1", [r.id]);
   for (const s of segs) await tx.query("insert into room_assignments (reservation_id, room_id, from_date, to_date) values ($1, $2, $3, $4)", [r.id, s.roomId, s.from, s.to]);
@@ -469,9 +476,12 @@ export async function moveRoomInHouse(pool: Pool, schema: string, id: string, us
     if (newType !== r.room_type_id) await changeIn(tx, id, userId, { roomTypeId: newType }, { inHouseFrom: fromNight, force: options.force });
     const res = await loadForChange(tx, id);
     const before = await segments(tx, res.id);
+    const vacated = await roomOfNight(tx, res.id, fromNight);
     const after = splitAssignment(before, roomId, fromNight);
     await writeSegments(tx, res, after, fromNight);
     await logChange(tx, res.id, userId, "move_room", { rooms: before }, { rooms: after });
+    // the room the guest leaves needs cleaning (a move from tonight: the guest slept there)
+    if (vacated && vacated !== roomId && fromNight === today) await markDirty(tx, [vacated], "room_move", userId);
   });
 }
 
@@ -490,6 +500,17 @@ export interface RoomChoice {
   free: boolean;
   /** Who holds it when taken: confirmation number and guest. */
   occupiedBy: string | null;
+  cleanliness: Cleanliness;
+  /** Ready for a guest now (Inspected, or Clean where the property does not inspect). */
+  ready: boolean;
+  /** A Housekeeping Task on it today: when it will be ready. */
+  taskStatus: string | null;
+  /** Room Blocks on the nights asked for; Out of Order makes the room unavailable. */
+  blocks: { kind: RoomBlockKind; from: string; to: string; reason: string }[];
+  /** Features of the room the guest's preferences mention. */
+  preferred: string[];
+  /** The next stay assigned to the room after this one: a later forced move shows. */
+  nextStay: { confirmationNumber: string; arrival: string } | null;
 }
 
 /**
@@ -516,35 +537,71 @@ export async function listRoomChoices(pool: Pool, schema: string, id: string, op
       floor: string;
       section: string | null;
       features: string[];
+      feature_codes: string[];
       bed_places: number;
       occupied_by: string | null;
+      cleanliness: Cleanliness;
+      inspection_required: boolean;
+      task_status: string | null;
+      next_stay: { confirmationNumber: string; arrival: string } | null;
     }>(
-      `select m.id, m.number, m.name, m.room_type_id, t.code as type_code, m.floor, sec.name as section, m.bed_places,
+      `select m.id, m.number, m.name, m.room_type_id, t.code as type_code, m.floor, sec.name as section, m.bed_places, m.cleanliness, p.inspection_required,
          coalesce((select array_agg(f.name order by f.name) from room_feature_assignments fa join room_features f on f.id = fa.feature_id where fa.room_id = m.id), '{}') as features,
+         coalesce((select array_agg(f.code order by f.name) from room_feature_assignments fa join room_features f on f.id = fa.feature_id where fa.room_id = m.id), '{}') as feature_codes,
+         (select h.status from housekeeping_tasks h where h.room_id = m.id and h.business_date = p.business_date order by h.created_at limit 1) as task_status,
+         (select json_build_object('confirmationNumber', b.confirmation_number, 'arrival', to_char(a.from_date, 'YYYY-MM-DD')) from room_assignments a
+            join reservations x on x.id = a.reservation_id join bookings b on b.id = x.booking_id
+           where a.room_id = m.id and a.from_date >= $3 and x.status = any($5::text[]) and x.id <> $4 order by a.from_date limit 1) as next_stay,
          (select b.confirmation_number || ' · ' || g.last_name from room_assignments a
             join reservations x on x.id = a.reservation_id join bookings b on b.id = x.booking_id join guests g on g.id = x.primary_guest_id
            where a.room_id = m.id and a.from_date < $3 and a.to_date > $2 and x.status = any($5::text[]) and x.id <> $4
            order by a.from_date limit 1) as occupied_by
-       from rooms m join room_types t on t.id = m.room_type_id left join sections sec on sec.id = m.section_id
+       from rooms m join room_types t on t.id = m.room_type_id join properties p on p.id = m.property_id left join sections sec on sec.id = m.section_id
        where m.property_id = $6 and (m.room_type_id = $1 or $7)
          and not exists (select 1 from room_assignments own where own.room_id = m.id and own.reservation_id = $4 and own.from_date < $3 and own.to_date > $2)
        order by m.room_type_id <> $1, m.number`,
       [r.room_type_id, start, r.departure, r.id, OCCUPYING_STATUSES, r.property_id, inHouse],
     );
-    const choices = rows.map((x) => ({
-      id: x.id,
-      number: x.number,
-      name: x.name,
-      roomTypeId: x.room_type_id,
-      roomTypeCode: x.type_code,
-      floor: x.floor,
-      section: x.section,
-      features: x.features,
-      bedPlaces: x.bed_places,
-      free: x.occupied_by === null,
-      occupiedBy: x.occupied_by,
-    }));
-    return [...choices.filter((c) => c.free), ...choices.filter((c) => !c.free)];
+    const blocks = (await tx.query<{ room_id: string; kind: RoomBlockKind; from_date: string; to_date: string; reason: string }>(
+      `select room_id, kind, to_char(from_date, 'YYYY-MM-DD') as from_date, to_char(to_date, 'YYYY-MM-DD') as to_date, reason from room_blocks
+       where room_id = any($1::uuid[]) and from_date < $3 and to_date > $2 order by from_date`,
+      [rows.map((x) => x.id), start, r.departure],
+    )).rows;
+    // the guest's preferences, matched against the rooms' features (by name or code)
+    const preferences = (await tx.query<{ preferences: string }>("select g.preferences from reservations x join guests g on g.id = x.primary_guest_id where x.id = $1", [r.id])).rows[0]?.preferences ?? "";
+    const choices: RoomChoice[] = rows.map((x) => {
+      const own = blocks.filter((b) => b.room_id === x.id);
+      const outOfOrder = own.some((b) => b.kind === "out_of_order");
+      return {
+        id: x.id,
+        number: x.number,
+        name: x.name,
+        roomTypeId: x.room_type_id,
+        roomTypeCode: x.type_code,
+        floor: x.floor,
+        section: x.section,
+        features: x.features,
+        bedPlaces: x.bed_places,
+        free: x.occupied_by === null && !outOfOrder,
+        occupiedBy: x.occupied_by,
+        cleanliness: x.cleanliness,
+        ready: isReady(x.cleanliness, x.inspection_required),
+        taskStatus: x.task_status,
+        blocks: own.map((b) => ({ kind: b.kind, from: b.from_date, to: b.to_date, reason: b.reason })),
+        preferred: preferredFeatures(preferences, x.features.map((name, i) => ({ name, code: x.feature_codes[i] ?? "" }))).map((f) => f.name),
+        nextStay: x.next_stay,
+      };
+    });
+    // free rooms first; among them those the guest's preferences match best, then the stay's own room type
+    const rank = (c: RoomChoice) => [c.free ? 0 : 1, -c.preferred.length, c.roomTypeId === r.room_type_id ? 0 : 1] as const;
+    return choices
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => {
+        const x = rank(a.c);
+        const y = rank(b.c);
+        return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || a.i - b.i;
+      })
+      .map((x) => x.c);
   });
 }
 
@@ -561,6 +618,7 @@ export async function listFreeRooms(pool: Pool, schema: string, id: string, from
          and not exists (select 1 from room_assignments a join reservations x on x.id = a.reservation_id
                          where a.room_id = m.id and a.from_date < $3 and a.to_date > $2 and x.status = any($5::text[]) and x.id <> $4)
          and not exists (select 1 from room_assignments own where own.room_id = m.id and own.reservation_id = $4 and own.from_date < $3 and own.to_date > $2)
+         and not exists (select 1 from room_blocks ob where ob.room_id = m.id and ob.kind = 'out_of_order' and ob.from_date < $3 and ob.to_date > $2)
        order by m.room_type_id <> $1, m.number`,
       [r.room_type_id, start, r.departure, id, OCCUPYING_STATUSES, options.anyType === true, r.property_id],
     );

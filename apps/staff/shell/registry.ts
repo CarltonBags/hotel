@@ -69,7 +69,7 @@ export const MODULES: ModuleDef[] = [
   { id: "guests", group: "guests", label: "module.guests", icon: "User", hue: "#7c5cff", href: "/guests", requiresProperty: "view_guests" },
   { id: "companies", group: "guests", label: "module.companies", icon: "Building", hue: "#6b7280", href: "/companies", requiresProperty: "view_companies" },
   soon("guest_inbox", "guests", "module.guest_inbox", "MessageCircle", "#0aa5a5", 42),
-  soon("housekeeping", "housekeeping", "module.housekeeping", "Sparkles", "#e0900b", 33),
+  { id: "housekeeping", group: "housekeeping", label: "module.housekeeping", icon: "Sparkles", hue: "#e0900b", href: "/rooms", requiresProperty: "view_rooms" },
   soon("housekeeping_tasks", "housekeeping", "module.housekeeping_tasks", "ClipboardCheck", "#e0900b", 34),
   soon("maintenance", "housekeeping", "module.maintenance", "Wrench", "#6b7280", 36),
   soon("lost_found", "housekeeping", "module.lost_found", "PackageSearch", "#b98900", 35),

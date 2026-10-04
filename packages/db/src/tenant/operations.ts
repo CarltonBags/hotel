@@ -153,7 +153,7 @@ export interface TodaySummary {
   /** Reservations sleeping in the house tonight. */
   staying: number;
   rooms: number;
-  /** Occupancy (figure) tonight, percent. TODO(housekeeping tickets): exclude Out of Order rooms from the rooms counted. */
+  /** Occupancy (figure) tonight, percent, of the rooms available (Out of Order excluded). */
   occupancy: number;
 }
 
@@ -166,7 +166,8 @@ export async function todaySummary(pool: Pool, schema: string, propertyId: strin
          (select count(*)::int from reservations r where r.property_id = $1 and ${rule("departures", "$2")}) as departures,
          (select count(*)::int from reservations r where r.property_id = $1 and ${rule("inHouse", "$2")}) as in_house,
          (select count(*)::int from reservations r where r.property_id = $1 and ${rule("staying", "$2")}) as staying,
-         (select count(*)::int from rooms where property_id = $1) as rooms`,
+         (select count(*)::int from rooms m where m.property_id = $1
+            and not exists (select 1 from room_blocks b where b.room_id = m.id and b.kind = 'out_of_order' and b.from_date <= $2::date and b.to_date > $2::date)) as rooms`,
       [propertyId, date],
     );
     const r = rows[0]!;

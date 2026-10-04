@@ -121,6 +121,14 @@ export const PROPERTY_ACTIONS = {
   run_night_audit: ["property_manager", "front_desk"],
   /** Matrix "Run Night Audit": Accounting views the result; reports kept under Reports. */
   view_night_audit_reports: ["property_manager", "accounting"],
+  /** Matrix "Room Block: Out of Service". */
+  manage_out_of_service: ["property_manager", "front_desk", "housekeeping_supervisor", "maintenance"],
+  /** Matrix "Room Block: Out of Order". */
+  manage_out_of_order: ["property_manager", "housekeeping_supervisor", "maintenance"],
+  /** Matrix "Generate, assign, publish Housekeeping Tasks; Sections". */
+  assign_housekeeping: ["property_manager", "housekeeping_supervisor"],
+  /** Matrix "View Cleanliness and Room Blocks" (a Housekeeper only own rooms: roomViewScope). */
+  view_rooms: ["property_manager", "front_desk", "housekeeping_supervisor", "housekeeper", "maintenance"],
   /** Matrix "Financial reports, City Tax report". */
   view_financial_reports: ["property_manager", "accounting"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */

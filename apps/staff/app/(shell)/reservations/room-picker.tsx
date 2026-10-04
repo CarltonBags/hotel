@@ -6,9 +6,11 @@ import type { RoomChoice } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 
 /**
- * Rooms as cards: number and name, room type, floor and section, features.
- * Taken rooms show who holds them and cannot be picked. A filter narrows by
- * number, type or feature.
+ * Rooms as cards: number and name, room type, floor and section, features
+ * (those the guest's preferences mention marked, and such rooms first),
+ * Cleanliness and readiness, Room Blocks, and the next stay in the room.
+ * Taken and Out of Order rooms cannot be picked. A filter narrows by number,
+ * type or feature.
  */
 export function RoomPicker({ choices, selected, onSelect, m }: { choices: RoomChoice[]; selected: string; onSelect: (id: string) => void; m: Messages }) {
   const [q, setQ] = useState("");
@@ -56,13 +58,24 @@ export function RoomPicker({ choices, selected, onSelect, m }: { choices: RoomCh
               {c.features.length ? (
                 <span className="flex flex-wrap gap-1">
                   {c.features.map((f) => (
-                    <span key={f} className="rounded-full bg-accent/10 px-1.5 text-accent">
+                    <span key={f} className={`rounded-full px-1.5 ${c.preferred.includes(f) ? "bg-success/20 font-medium text-success" : "bg-accent/10 text-accent"}`}>
+                      {c.preferred.includes(f) ? "★ " : ""}
                       {f}
                     </span>
                   ))}
                 </span>
               ) : null}
-              {!c.free ? <span className="text-danger">{fill(m["rooms.takenBy"], { who: c.occupiedBy ?? "" })}</span> : null}
+              <span className={c.ready ? "text-success" : "text-warning"}>
+                {m[`rooms.cleanliness.${c.cleanliness}`]}
+                {!c.ready && c.taskStatus ? ` · ${m[`rooms.task.${c.taskStatus as "open"}`] ?? c.taskStatus}` : ""}
+              </span>
+              {c.blocks.map((b, i) => (
+                <span key={i} className={b.kind === "out_of_order" ? "text-danger" : "text-warning"}>
+                  {m[`rooms.block.${b.kind}`]} {b.from}–{b.to} · {b.reason}
+                </span>
+              ))}
+              {c.nextStay ? <span className="text-ink-60">{fill(m["rooms.nextStay"], { conf: c.nextStay.confirmationNumber, date: c.nextStay.arrival })}</span> : null}
+              {c.occupiedBy ? <span className="text-danger">{fill(m["rooms.takenBy"], { who: c.occupiedBy })}</span> : null}
             </button>
           </li>
         ))}

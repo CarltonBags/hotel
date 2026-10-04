@@ -15,6 +15,7 @@ import { postNoShowFee } from "./folios";
 import { loadGuest } from "./guests";
 import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
+import { markDirty } from "./room-state";
 
 /**
  * Night Audit (ticket 32, decided in "Night audit and business date"): the
@@ -306,9 +307,19 @@ export async function closeNightAudit(
       [propertyId, p.business_date, userId, JSON.stringify(view.decisions), JSON.stringify(report), pdf, closedAt],
     );
 
+    // occupied rooms need cleaning; so does a room whose block ends with tonight
+    const occupiedRooms = (await tx.query<{ room_id: string }>(
+      `select a.room_id from room_assignments a join reservations r on r.id = a.reservation_id
+       where r.property_id = $1 and r.status = 'checked_in' and a.from_date <= $2 and a.to_date > $2`,
+      [propertyId, p.business_date],
+    )).rows.map((r) => r.room_id);
+    await markDirty(tx, occupiedRooms, "night_audit", userId);
+    const unblocked = (await tx.query<{ room_id: string }>("select room_id from room_blocks where property_id = $1 and to_date = $2::date + 1 and to_date > from_date", [propertyId, p.business_date])).rows.map((r) => r.room_id);
+    await markDirty(tx, unblocked, "block_end", userId);
+
     step("advance");
     await tx.query("update properties set business_date = business_date + 1, night_audit_alerted_for = null where id = $1", [propertyId]);
-    // TODO(ticket 33): occupied rooms turn Dirty; TODO(ticket 34): the new day's Housekeeping Tasks; TODO(ticket 37): availability changes queued for the channel manager
+    // TODO(ticket 34): the new day's Housekeeping Tasks; TODO(ticket 37): availability changes queued for the channel manager
     return { auditId: rows[0]!.id, businessDate: p.business_date };
   });
 }
@@ -322,7 +333,11 @@ async function reportIn(
 ): Promise<Record<string, unknown>> {
   const bd = p.business_date;
   // the day's entries are those made on this Business Date
-  const rooms = Number((await tx.query<{ n: string }>("select count(*) as n from rooms where property_id = $1", [p.id])).rows[0]!.n);
+  // rooms available: the property's rooms less those Out of Order tonight
+  const rooms = Number((await tx.query<{ n: string }>(
+    "select count(*) as n from rooms m where m.property_id = $1 and not exists (select 1 from room_blocks b where b.room_id = m.id and b.kind = 'out_of_order' and b.from_date <= $2 and b.to_date > $2)",
+    [p.id, bd],
+  )).rows[0]!.n);
   const occupied = Number((await tx.query<{ n: string }>(
     "select count(*) as n from reservation_nights n join reservations r on r.id = n.reservation_id where r.property_id = $1 and n.date = $2 and r.status in ('checked_in', 'checked_out')",
     [p.id, bd],

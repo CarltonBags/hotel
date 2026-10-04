@@ -19,6 +19,7 @@ import { checkDate, isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
 import { loadPlanIndex, toRestriction, type RestrictionRow } from "./rates";
 import { withTenant } from "./with-tenant";
+import { outOfOrderByNight } from "./room-state";
 import { openFolios } from "./folios";
 
 /**
@@ -99,6 +100,8 @@ export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival:
        group by r.room_type_id, d`,
       [propertyId, arrival, departure, OCCUPYING_STATUSES, excludeReservationId],
     );
+  // Out of Order rooms are not for sale on their nights (ticket 33)
+  const outOfOrder = await outOfOrderByNight(tx, propertyId, arrival, departure);
   const plans = await tx.query<PlanRow>(
       `select p.id, p.code, p.name, p.kind, p.base_plan_id, p.base_occupancy, p.meal_plan, p.public, p.rate_code, p.company_id, c.name as company_name, p.date_change_allowed,
          coalesce((select array_agg(rt.room_type_id) from rate_plan_room_types rt where rt.rate_plan_id = p.id), '{}') as room_type_ids,
@@ -133,8 +136,8 @@ export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival:
     types: types.rows,
     plans: plans.rows,
     ageBands: bands.rows.map((b) => ({ id: b.id, minAge: b.min_age, maxAge: b.max_age })),
-    /** Rooms of the type taken by reservations on a night. */
-    roomsTaken: (roomTypeId: string, date: string) => occ.get(`${roomTypeId}|${date}`) ?? 0,
+    /** Rooms of the type not for sale on a night: taken by reservations, or Out of Order. */
+    roomsTaken: (roomTypeId: string, date: string) => (occ.get(`${roomTypeId}|${date}`) ?? 0) + (outOfOrder.get(`${roomTypeId}|${date}`) ?? 0),
     price: (planId: string, roomTypeId: string, date: string) => price.get(`${planId}|${roomTypeId}|${date}`) ?? null,
     restriction,
   };

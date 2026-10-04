@@ -20,6 +20,7 @@ import { rateOn } from "./tax-rate";
 import { cityTaxOfStay, dropCityTaxNights, fixCityTaxPassOn, recordCityTaxNights, type StayCityTax } from "./city-tax";
 import { paymentsOf, type Payment } from "./payments";
 import { withTenant } from "./with-tenant";
+import { roomReadiness } from "./room-state";
 
 /**
  * Check-in, Folios and Charges ("Folio, billing and invoicing domain model",
@@ -339,18 +340,33 @@ async function postStay(tx: PoolClient, res: ResRow, userId: string, lines: Want
   }
 }
 
+/** Check-in into a room that is not ready for a guest: refused until staff confirm with a reason (ticket 33). */
+export class RoomNotReady extends Error {
+  constructor(readonly roomNumber: string, readonly cleanliness: string) {
+    super(`Room ${roomNumber} is not ready (${cleanliness}); check in anyway with a reason`);
+    this.name = "RoomNotReady";
+  }
+}
+
 /**
  * Check-in: the guest arrives on a night of the stay, a room is assigned for
  * tonight, and every night is posted per component onto the routed folios.
+ * A room not ready for a guest needs a reason, which is logged.
  */
-export async function checkIn(pool: Pool, schema: string, id: string, userId: string): Promise<void> {
+export async function checkIn(pool: Pool, schema: string, id: string, userId: string, options: { notReadyReason?: string | null } = {}): Promise<void> {
   await withTenant(pool, schema, async (tx) => {
     const res = await loadReservationForStayChange(tx, id);
     if (res.status !== "confirmed") throw new Error(`The reservation is ${res.status.replace("_", " ")} and cannot be checked in`);
     if (res.arrival > res.businessDate) throw new Error(`Check-in opens on the arrival date, ${res.arrival}`);
     if (res.departure <= res.businessDate) throw new Error("The stay has ended; it cannot be checked in");
-    const room = await tx.query("select 1 from room_assignments where reservation_id = $1 and from_date <= $2 and to_date > $2", [res.id, res.businessDate]);
+    const room = await tx.query<{ room_id: string; number: string }>(
+      "select a.room_id, m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = $1 and a.from_date <= $2 and a.to_date > $2",
+      [res.id, res.businessDate],
+    );
     if (!room.rows.length) throw new Error("Assign a room for tonight before check-in");
+    const readiness = await roomReadiness(tx, room.rows[0]!.room_id);
+    const notReadyReason = options.notReadyReason?.trim().slice(0, 300) || null;
+    if (!readiness.ready && !notReadyReason) throw new RoomNotReady(room.rows[0]!.number, readiness.cleanliness);
     await fixCityTaxPassOn(tx, res.id, true);
     const { lines, cityTax } = await wantedStay(tx, res);
     await ensureFolios(tx, res, userId);
@@ -363,7 +379,7 @@ export async function checkIn(pool: Pool, schema: string, id: string, userId: st
       res.id,
       userId,
       JSON.stringify({ status: "confirmed" }),
-      JSON.stringify({ status: "checked_in" }),
+      JSON.stringify({ status: "checked_in", ...(readiness.ready ? {} : { roomNotReady: readiness.cleanliness, reason: notReadyReason }) }),
     ]);
   });
 }

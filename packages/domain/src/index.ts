@@ -198,3 +198,15 @@ export {
 } from "./city-tax";
 export { APPROVAL_KINDS, APPROVAL_TTL_HOURS, approvalStatus, priceOverrideCheck, type ApprovalKind, type ApprovalStatus } from "./approvals";
 export { auditOpen, auditOverdue, daysBehind, noShowFee, undecidedArrivals, type ArrivalDecision, type AuditClock } from "./night-audit";
+export {
+  CLEANLINESS,
+  ROOM_BLOCK_KINDS,
+  cleanlinessScope,
+  isReady,
+  preferredFeatures,
+  roomViewScope,
+  type Cleanliness,
+  type CleanlinessSource,
+  type RoomBlockKind,
+  type RoomScope,
+} from "./room-state";

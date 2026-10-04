@@ -19,12 +19,19 @@ export function CheckInButton({ reservationId, needsRoom = false, compact = fals
   const [error, setError] = useState<string | null>(null);
   const [choices, setChoices] = useState<RoomChoice[] | null>(null);
   const [room, setRoom] = useState("");
-  const checkIn = (roomId?: string) =>
+  // a room not ready for a guest: check in anyway with a reason
+  const [notReady, setNotReady] = useState<{ room: string; roomId: string | null } | null>(null);
+  const [reason, setReason] = useState("");
+  const checkIn = (roomId?: string, why?: string) =>
     startTransition(async () => {
-      const res = await checkInAction(reservationId, roomId ?? null);
-      setError(res.error ?? null);
+      const res = await checkInAction(reservationId, roomId ?? null, why ?? null);
+      setError(res.notReady ? null : (res.error ?? null));
+      setNotReady(res.notReady ? { room: res.notReady, roomId: null } : null);
+      // the room chosen is assigned by now: the reason is asked outside the room dialog
+      if (res.notReady) setChoices(null);
       if (!res.error) {
         setChoices(null);
+        setReason("");
         router.refresh();
       }
     });
@@ -47,6 +54,15 @@ export function CheckInButton({ reservationId, needsRoom = false, compact = fals
       {error && !choices ? (
         <span role="alert" className="text-sm text-danger">
           {error}
+        </span>
+      ) : null}
+      {notReady ? (
+        <span role="alert" className="flex flex-wrap items-center gap-2 rounded-xl bg-warning/15 px-3 py-1 text-sm">
+          {m["rooms.notReady"].replace("{room}", notReady.room)}
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={m["rooms.notReadyReason"]} maxLength={300} className="h-8 rounded-lg border border-ink-10 bg-surface px-2 text-sm" />
+          <button type="button" disabled={pending || !reason.trim()} onClick={() => checkIn(undefined, reason)} className="h-8 rounded-full bg-accent px-3 text-sm font-medium text-white disabled:opacity-40">
+            {m["rooms.checkInAnyway"]}
+          </button>
         </span>
       ) : null}
       {choices ? (
