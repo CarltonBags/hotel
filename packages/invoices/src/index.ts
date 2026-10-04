@@ -18,3 +18,4 @@ export function invoiceXml(doc: InvoiceDocument): Promise<string> {
 export { cityTaxReportCsv, renderCityTaxReportPdf, type CityTaxReportDocument } from "./city-tax-report";
 export { renderNightAuditPdf, type NightAuditReportDocument } from "./night-audit-report";
 export { renderTourismReportPdf, tourismReportCsv, type TourismReportDocument } from "./tourism-report";
+export { renderReportPdf, reportCsv } from "./report-table";

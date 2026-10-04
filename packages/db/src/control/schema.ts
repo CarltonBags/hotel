@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigserial, boolean, check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { bigserial, boolean, customType, check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 /** Control schema (ADR 0006). Mirrors migrations/control/*.sql; the SQL is the source of truth. */
 export const control = pgSchema("control");
@@ -363,3 +363,23 @@ export const controlSchema = {
   webhookEvents,
   externalIds,
 };
+
+const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
+
+export const mailOutbox = control.table(
+  "mail_outbox",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    toUserId: text("to_user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    toEmail: text("to_email").notNull(),
+    subject: text("subject").notNull(),
+    body: text("body").notNull(),
+    attachmentName: text("attachment_name"),
+    attachmentType: text("attachment_type"),
+    attachment: bytea("attachment"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [check("mail_outbox_attachment_check", sql`(${t.attachment} is null) = (${t.attachmentName} is null)`), index("mail_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
+);

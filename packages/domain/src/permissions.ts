@@ -166,6 +166,10 @@ export const PROPERTY_ACTIONS = {
   manage_floor_users: ["property_manager", "housekeeping_supervisor"],
   /** Matrix "Financial reports, City Tax report". */
   view_financial_reports: ["property_manager", "accounting"],
+  /** Occupancy, pickup, source mix and cancellations ("Who sees what": revenue and occupancy also for Revenue). */
+  view_revenue_reports: ["property_manager", "accounting", "revenue"],
+  /** Housekeeping performance. */
+  view_housekeeping_reports: ["property_manager", "housekeeping_supervisor"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */
   manage_payment_settings: ["property_manager"],
 } as const satisfies Record<string, readonly PropertyRole[]>;

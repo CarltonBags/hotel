@@ -6,6 +6,7 @@ import type { PaymentProvider } from "@hoteloftware/payments";
 import { deleteExpiredDemoTenants, findTenantById } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
+import { sendScheduledReports } from "./reports";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 
 export const QUEUES = {
@@ -22,6 +23,9 @@ export const QUEUES = {
   /** Every 15 minutes: alert Night Audits past their deadline, one job per tenant (ticket 32). */
   auditCheckAll: "night_audit.overdue.all",
   auditCheck: "night_audit.overdue",
+  /** Hourly: scheduled reports due, one job per tenant (ticket 82). */
+  reportsAll: "reports.scheduled.all",
+  reports: "reports.scheduled",
 } as const;
 
 /**
@@ -127,6 +131,20 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     for (const t of rows) await boss.send(QUEUES.auditCheck, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `night_audit.overdue:${t.id}`, singletonSeconds: 300 });
   });
   await boss.schedule(QUEUES.auditCheckAll, "*/15 * * * *", {}, { tz: "Europe/Berlin" });
+
+  await boss.work<TenantJobData>(QUEUES.reports, async (jobs) => {
+    for (const job of jobs) {
+      const tenant = await findTenantById(pool, job.data.tenantId);
+      if (!tenant) continue;
+      const n = await sendScheduledReports(pool, tenant);
+      if (n) console.log(`[reports] ${tenant.slug}: ${n} scheduled report(s) queued`);
+    }
+  });
+  await boss.work(QUEUES.reportsAll, async () => {
+    const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+    for (const t of rows) await boss.send(QUEUES.reports, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `reports.scheduled:${t.id}`, singletonSeconds: 300 });
+  });
+  await boss.schedule(QUEUES.reportsAll, "5 * * * *", {}, { tz: "Europe/Berlin" });
 
   if (options.tenantCheckCron) {
     await boss.schedule(QUEUES.tenantCheckAll, options.tenantCheckCron, {}, { tz: "Europe/Berlin" });

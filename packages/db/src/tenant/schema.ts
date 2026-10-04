@@ -1570,3 +1570,27 @@ export const tenantSchema = {
   closedPeriods,
   tourismReports,
 };
+
+export const reportSchedules = pgTable(
+  "report_schedules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(),
+    propertyIds: uuid("property_ids").array().notNull(),
+    frequency: text("frequency").notNull(),
+    options: jsonb("options").notNull().default(sql`'{}'`),
+    language: text("language").notNull().default("en"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSentOn: date("last_sent_on"),
+    stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+    stoppedReason: text("stopped_reason"),
+  },
+  (t) => [
+    check("report_schedules_kind_check", sql`${t.kind} in ('occupancy', 'pickup', 'source_mix', 'cancellations', 'revenue_by_code', 'housekeeping', 'receivables', 'cash')`),
+    check("report_schedules_properties_check", sql`cardinality(${t.propertyIds}) > 0`),
+    check("report_schedules_frequency_check", sql`${t.frequency} in ('daily', 'weekly', 'monthly')`),
+    check("report_schedules_language_check", sql`${t.language} in ('en', 'de')`),
+    index("report_schedules_user_idx").on(t.userId),
+  ],
+);
