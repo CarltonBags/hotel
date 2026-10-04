@@ -19,3 +19,4 @@ export { cityTaxReportCsv, renderCityTaxReportPdf, type CityTaxReportDocument } 
 export { renderNightAuditPdf, type NightAuditReportDocument } from "./night-audit-report";
 export { renderTourismReportPdf, tourismReportCsv, type TourismReportDocument } from "./tourism-report";
 export { renderReportPdf, reportCsv } from "./report-table";
+export { renderMeldescheinPdf, type MeldescheinDocument } from "./meldeschein";

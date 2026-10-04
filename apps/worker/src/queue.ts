@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { deleteExpiredDemoTenants, findTenantById } from "@hoteloftware/db";
+import { deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -103,6 +103,13 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     // a demo trial is deleted 30 days after it ended (ticket 87)
     const demos = await deleteExpiredDemoTenants(pool);
     if (demos.length) console.log(`[maintenance] deleted demo tenants ${demos.join(", ")}`);
+    // Meldeschein records go on schedule: Germany from day 365 after departure, Austria after 7 years (ticket 45)
+    const { rows: all } = await pool.query<{ slug: string; schema_name: string }>("select slug, schema_name from control.tenants");
+    const today = new Date().toISOString().slice(0, 10);
+    for (const t of all) {
+      const n = await deleteExpiredRegistrations(pool, t.schema_name, today).catch((err) => (console.error(`[maintenance] registrations of ${t.slug}`, err), 0));
+      if (n) console.log(`[maintenance] ${t.slug}: deleted ${n} registration record(s)`);
+    }
   });
   await boss.schedule(QUEUES.maintenance, "15 3 * * *", {}, { tz: "Europe/Berlin" });
 

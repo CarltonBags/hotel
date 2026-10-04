@@ -250,3 +250,4 @@ export * from "./go-live";
 export * from "./reports";
 export * from "./report-text";
 export * from "./downtime";
+export * from "./registration";

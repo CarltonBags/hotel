@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { formatDate } from "@hoteloftware/domain";
+import { can, formatDate } from "@hoteloftware/domain";
 import { listRooms, reservationHistory } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
 import { pool } from "@/lib/db";
@@ -20,6 +20,7 @@ import { GuestDrawerButton } from "./guest-drawer-button";
 import { ReservationActions } from "./reservation-actions";
 import { HousekeepingNotes } from "./housekeeping-notes";
 import { StatsExclusion } from "./stats-exclusion";
+import { RegistrationPanel } from "./registration-panel";
 
 /** One Reservation as a record tab: stay, guests, stored nightly prices, check-in and its folios. */
 export default async function ReservationPage({ params }: { params: Promise<{ id: string }> }) {
@@ -140,6 +141,8 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
           </p>
         ) : null}
       </section>
+
+      <RegistrationPanel reservationId={r.id} propertyId={r.propertyId} propertyCountry={property.country} schema={tenant.schemaName} tenantId={tenant.id} canRegister={can(actor, "check_in", r.propertyId)} m={m} />
 
       {v.guest ? (
         <section aria-label={m["res.guestDetails"]} className="grid gap-2 rounded-2xl bg-surface-2 p-5 text-sm">
