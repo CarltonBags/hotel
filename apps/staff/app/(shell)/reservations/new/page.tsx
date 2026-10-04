@@ -1,4 +1,4 @@
-import { addDays, can, todayIn, isCalendarDate } from "@hoteloftware/domain";
+import { addDays, can, isCalendarDate } from "@hoteloftware/domain";
 import { quoteStays } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -27,7 +27,8 @@ export default async function NewReservationPage({ searchParams }: { searchParam
   }
   const { tenant, actor } = await requireAllowed("manage_reservations", property.id);
   const sp = await searchParams;
-  const today = todayIn(property.timeZone);
+  // new stays from the property's open Business Date (ticket 32)
+  const today = property.businessDate;
   const arrival = isCalendarDate(sp.arrival) ? sp.arrival : today;
   const departure = isCalendarDate(sp.departure) && sp.departure > arrival ? sp.departure : addDays(arrival, 1);
   const adults = Math.min(20, Math.max(0, Number.parseInt(sp.adults ?? "2", 10) || 0));

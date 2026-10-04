@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { DATA_KINDS, can, formatCurrency, formatDate, formatDateTime, todayIn } from "@hoteloftware/domain";
+import { DATA_KINDS, can, formatCurrency, formatDate, formatDateTime } from "@hoteloftware/domain";
 import { WORKSPACE_LISTS, listOverbooked, todaySummary, workspaceCounts, workspaceList, type WorkspaceList as ListKind } from "@hoteloftware/db";
 import { paymentProps, reservationView } from "@/lib/reservation-view";
 import { WorkspaceList } from "./_today/workspace-list";
@@ -24,11 +24,11 @@ export default async function TodayPage({ searchParams }: { searchParams: Promis
     return <Workspace property={property} list={(WORKSPACE_LISTS as readonly string[]).includes(sp.list ?? "") ? (sp.list as ListKind) : "arrivals"} selected={sp.r ?? null} />;
   }
   const now = new Date();
-  // TODO(Night Audit ticket): each property's open Business Date instead of its wall-clock date
   const shown = properties.filter((p) => (scope === "all" || p.id === scope) && can(actor, "view_reservations", p.id));
   const cards = await Promise.all(
     shown.map(async (p) => {
-      const today = todayIn(p.timeZone);
+      // the property's open Business Date (ticket 32)
+      const today = p.businessDate;
       const [summary, overbooked] = await Promise.all([todaySummary(pool(), tenant.schemaName, p.id, today), listOverbooked(pool(), tenant.schemaName, p.id, today)]);
       return { property: p, summary, overbooked, lists: can(actor, "view_operational_lists", p.id) };
     }),
@@ -124,8 +124,8 @@ export default async function TodayPage({ searchParams }: { searchParams: Promis
 async function Workspace({ property, list, selected }: { property: Awaited<ReturnType<typeof loadShell>>["properties"][number]; list: ListKind; selected: string | null }) {
   const { principal, messages: m, language } = await loadShell();
   const s = principal.tenant.schemaName;
-  // TODO(Night Audit ticket): the open Business Date
-  const today = todayIn(property.timeZone);
+  // the property's open Business Date (ticket 32)
+  const today = property.businessDate;
   const [counts, rows] = await Promise.all([workspaceCounts(pool(), s, property.id, today), workspaceList(pool(), s, property.id, list, today)]);
   const currency = { code: property.currency, language, country: property.country };
   const money = (v: number) => formatCurrency(v, property.currency, language, property.country);

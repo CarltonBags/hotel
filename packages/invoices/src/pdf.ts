@@ -1,13 +1,10 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fonts } from "./fonts";
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from "@cantoo/pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import type { InvoiceDocument } from "./document";
 import { LABELS } from "./labels";
 
 /** Inter (SIL Open Font License), embedded so the PDF meets PDF/A. */
-const FONT = readFileSync(fileURLToPath(new URL("../fonts/Inter.ttf", import.meta.url)));
-const BOLD = readFileSync(fileURLToPath(new URL("../fonts/Inter-SemiBold.ttf", import.meta.url)));
 
 const A4 = { w: 595.28, h: 841.89 };
 const M = 50;
@@ -31,8 +28,8 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
 
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
-  const font = await pdf.embedFont(FONT, { subset: false });
-  const bold = await pdf.embedFont(BOLD, { subset: false });
+  const font = await pdf.embedFont(fonts().regular, { subset: false });
+  const bold = await pdf.embedFont(fonts().bold, { subset: false });
   const title = L[doc.kind === "final" ? "final" : doc.kind];
   // a Cancellation Invoice mirrors the cancelled one, shown negative
   const sign = doc.kind === "cancellation" ? -1 : 1;

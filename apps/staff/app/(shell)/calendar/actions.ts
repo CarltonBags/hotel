@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { todayIn, type AssignmentSegment } from "@hoteloftware/domain";
+import { type AssignmentSegment } from "@hoteloftware/domain";
 import { assignRoom, changeStayIntoRoom, findProperty, findReservation, moveRoom, OverbookingNeeded, previewReservationChange, restoreAssignments, type ChangePreview } from "@hoteloftware/db";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
@@ -30,8 +30,7 @@ export async function dropOnRoom(reservationId: string, roomId: string, fromNigh
       let from = String(fromNight);
       if (reservation.status === "checked_in") {
         // an in-house guest keeps the nights already slept: the move starts today at the earliest
-        // TODO(Night Audit ticket): Business Date instead of the property's wall-clock date
-        const today = todayIn((await findProperty(pool(), schema, reservation.propertyId))!.timeZone);
+        const today = (await findProperty(pool(), schema, reservation.propertyId))!.businessDate;
         const segment = before.find((s) => s.from === from);
         if (segment && segment.to <= today) throw new Error("Nights already slept keep their room");
         if (from < today) from = today;

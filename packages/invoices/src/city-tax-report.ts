@@ -1,10 +1,7 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fonts } from "./fonts";
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from "@cantoo/pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 
-const FONT = readFileSync(fileURLToPath(new URL("../fonts/Inter.ttf", import.meta.url)));
-const BOLD = readFileSync(fileURLToPath(new URL("../fonts/Inter-SemiBold.ttf", import.meta.url)));
 const A4 = { w: 595.28, h: 841.89 };
 const M = 45;
 const ink = rgb(0.1, 0.1, 0.12);
@@ -87,8 +84,8 @@ export async function renderCityTaxReportPdf(r: CityTaxReportDocument, language:
   const day = (d: string) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${d}T12:00:00Z`));
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
-  const font = await pdf.embedFont(FONT, { subset: false });
-  const bold = await pdf.embedFont(BOLD, { subset: false });
+  const font = await pdf.embedFont(fonts().regular, { subset: false });
+  const bold = await pdf.embedFont(fonts().bold, { subset: false });
   pdf.setTitle(`${t.title} ${r.from} – ${r.to}`);
   let page: PDFPage = pdf.addPage([A4.w, A4.h]);
   let y = A4.h - M;

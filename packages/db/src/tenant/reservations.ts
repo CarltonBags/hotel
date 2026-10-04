@@ -239,8 +239,8 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
   for (const r of input.reservations) checkStayRequest(r);
   return withTenant(pool, schema, async (tx) => {
     await lockProperty(tx, propertyId);
-    // TODO(Night Audit ticket): use the property's Business Date instead of its wall-clock date
-    const prop = await tx.query<{ today: string }>("select to_char((now() at time zone time_zone)::date, 'YYYY-MM-DD') as today from properties where id = $1", [propertyId]);
+    // arrivals from the property's Business Date on (a day not yet audited still takes walk-ins)
+    const prop = await tx.query<{ today: string }>("select to_char(business_date, 'YYYY-MM-DD') as today from properties where id = $1", [propertyId]);
     if (!prop.rows[0]) throw new Error("Property not found");
     const today = prop.rows[0].today;
     if (input.reservations.some((r) => r.arrival < today)) throw new Error("Arrival cannot be in the past");
@@ -347,6 +347,8 @@ export interface ReservationDetail {
     openReservations: number;
   };
   overbooked: boolean;
+  /** Excluded from No-show at the Night Audit: stays Confirmed and is proposed again (ticket 32). */
+  lateArrival: boolean;
   cancelledAt: Date | null;
   cancellationFee: number | null;
   cancellationFeeStatus: "open" | "confirmed" | "waived" | null;
@@ -361,7 +363,7 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
   if (!isUuid(id)) return null;
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query(
-      `select r.id, r.property_id, r.status, r.overbooked, r.cancelled_at, r.cancellation_fee, r.cancellation_fee_status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.adults, r.child_ages, r.created_at,
+      `select r.id, r.property_id, r.status, r.overbooked, r.late_arrival, r.cancelled_at, r.cancellation_fee, r.cancellation_fee_status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.adults, r.child_ages, r.created_at,
          t.id as rt_id, t.code as rt_code, t.name as rt_name, p.id as rp_id, p.code as rp_code, p.name as rp_name, p.meal_plan,
          g.id as g_id, g.first_name, g.last_name,
          b.id as b_id, b.confirmation_number, b.booker_guest_id, b.booker_company_id, b.source, b.walk_in, b.rate_code, b.rate_code_company_id, rc.name as rate_code_company_name, b.notes,
@@ -403,6 +405,7 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
       propertyId: r.property_id,
       status: r.status,
       overbooked: r.overbooked,
+      lateArrival: r.late_arrival,
       cancelledAt: r.cancelled_at,
       cancellationFee: r.cancellation_fee === null ? null : Number(r.cancellation_fee),
       cancellationFeeStatus: r.cancellation_fee_status,

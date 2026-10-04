@@ -138,7 +138,7 @@ export async function createGuest(pool: Pool, schema: string, input: GuestInput,
   });
 }
 
-async function loadGuest(tx: PoolClient, id: string, options: { lock?: boolean } = {}): Promise<Guest | null> {
+export async function loadGuest(tx: PoolClient, id: string, options: { lock?: boolean } = {}): Promise<Guest | null> {
   if (!isUuid(id)) return null;
   const { rows } = await tx.query<Row>(`${SELECT} where id = $1${options.lock ? " for update" : ""}`, [id]);
   return rows[0] ? toGuest(rows[0]) : null;

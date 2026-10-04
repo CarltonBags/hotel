@@ -345,7 +345,7 @@ export async function removeCityTaxVersion(pool: Pool, schema: string, propertyI
   return changeRule(pool, schema, propertyId, userId, async (tx, rule) => {
     if (!rule || !isUuid(versionId) || !rule.versions.some((v) => v.id === versionId)) throw new Error("Version not found");
     // nights in house are recalculated afterwards; nights already slept or invoiced keep the version they were taxed by
-    const used = (await tx.query("select 1 from city_tax_nights n where n.version_id = $1 and (n.date < (select (now() at time zone time_zone)::date from properties where id = $2) or exists (select 1 from charges c where c.reservation_id = n.reservation_id and c.service_date = n.date and c.component like 'ctax:%' and c.invoice_id is not null)) limit 1", [versionId, propertyId])).rows.length;
+    const used = (await tx.query("select 1 from city_tax_nights n where n.version_id = $1 and (n.date < (select business_date from properties where id = $2) or exists (select 1 from charges c where c.reservation_id = n.reservation_id and c.service_date = n.date and c.component like 'ctax:%' and c.invoice_id is not null)) limit 1", [versionId, propertyId])).rows.length;
     if (used) throw new Error("Nights have been taxed by this version; add a new version instead");
     await tx.query("update city_tax_nights set version_id = null where version_id = $1", [versionId]);
     await tx.query("delete from city_tax_rule_versions where id = $1", [versionId]);

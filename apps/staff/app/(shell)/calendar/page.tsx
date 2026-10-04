@@ -1,4 +1,4 @@
-import { CALENDAR_RANGES, DATA_KINDS, addDays, can, todayIn, isCalendarDate } from "@hoteloftware/domain";
+import { CALENDAR_RANGES, DATA_KINDS, addDays, can, isCalendarDate } from "@hoteloftware/domain";
 import { loadCalendar } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -24,8 +24,8 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
   }
   const { tenant, actor } = await requireAllowed("view_reservations", property.id);
   const sp = await searchParams;
-  // TODO(Night Audit ticket): the line marks the open Business Date; until then the property's own date
-  const today = todayIn(property.timeZone);
+  // the line marks the property's open Business Date (ticket 32)
+  const today = property.businessDate;
   const from = isCalendarDate(sp.from) ? sp.from : addDays(today, -3);
   const range = CALENDAR_RANGES.find((r) => String(r) === sp.range) ?? 14;
   const data = await loadCalendar(pool(), tenant.schemaName, property.id, from, LOADED_DAYS);

@@ -5,6 +5,7 @@ import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs"
 import type { PaymentProvider } from "@hoteloftware/payments";
 import { findTenantById } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
+import { alertOverdueAudits } from "./night-audit";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 
 export const QUEUES = {
@@ -18,6 +19,9 @@ export const QUEUES = {
   /** Hourly: renew Card Holds close to expiry, one job per tenant (ticket 27). */
   holdCheckAll: "payments.holds.all",
   holdCheck: "payments.holds",
+  /** Every 15 minutes: alert Night Audits past their deadline, one job per tenant (ticket 32). */
+  auditCheckAll: "night_audit.overdue.all",
+  auditCheck: "night_audit.overdue",
 } as const;
 
 /**
@@ -108,6 +112,18 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     });
     await boss.schedule(QUEUES.holdCheckAll, "5 * * * *", {}, { tz: "Europe/Berlin" });
   }
+
+  await boss.work<TenantJobData>(QUEUES.auditCheck, async (jobs) => {
+    for (const job of jobs) {
+      const tenant = await findTenantById(pool, job.data.tenantId);
+      if (tenant) await alertOverdueAudits(pool, tenant);
+    }
+  });
+  await boss.work(QUEUES.auditCheckAll, async () => {
+    const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+    for (const t of rows) await boss.send(QUEUES.auditCheck, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `night_audit.overdue:${t.id}`, singletonSeconds: 300 });
+  });
+  await boss.schedule(QUEUES.auditCheckAll, "*/15 * * * *", {}, { tz: "Europe/Berlin" });
 
   if (options.tenantCheckCron) {
     await boss.schedule(QUEUES.tenantCheckAll, options.tenantCheckCron, {}, { tz: "Europe/Berlin" });

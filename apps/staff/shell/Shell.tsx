@@ -18,7 +18,7 @@ import { ThemeToggle, UserMenu } from "./UserMenu";
  * Variant E from the prototype: floating navbar (Main Menu, property switcher,
  * Quick Access, search, theme, user), tab strip, one full-width Stage.
  */
-export function Shell({ children }: { children: React.ReactNode }) {
+export function Shell({ children, banner }: { children: React.ReactNode; banner?: React.ReactNode }) {
   const shell = useShell();
   const { t, moduleLabel, quickAccess, activeId, openModule, canManageTenant, propertyActions } = shell;
   const visible = useMemo(
@@ -60,6 +60,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <UserMenu />
       </header>
 
+      {banner}
       <div className="flex shrink-0 items-center print:hidden">
         <TabStrip />
       </div>

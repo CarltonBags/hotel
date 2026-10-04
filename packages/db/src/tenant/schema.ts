@@ -50,6 +50,10 @@ export const properties = pgTable(
     terminalLocationId: text("terminal_location_id"),
     refundLimit: numeric("refund_limit", { precision: 12, scale: 2 }).notNull().default("200"),
     cityTaxPassOn: text("city_tax_pass_on").notNull().default("on_top"),
+    businessDate: date("business_date").notNull(),
+    nightAuditFrom: time("night_audit_from").notNull().default("22:00"),
+    nightAuditDeadline: time("night_audit_deadline").notNull().default("06:00"),
+    nightAuditAlertedFor: date("night_audit_alerted_for"),
   },
   (t) => [
     index("properties_legal_entity_idx").on(t.legalEntityId),
@@ -600,6 +604,7 @@ export const reservations = pgTable(
     checkedOutAt: timestamp("checked_out_at", { withTimezone: true }),
     checkedOutBy: text("checked_out_by"),
     cityTaxPassOn: text("city_tax_pass_on"),
+    lateArrival: boolean("late_arrival").notNull().default(false),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -656,12 +661,13 @@ export const reservationChanges = pgTable(
     before: jsonb("before").notNull().default({}),
     after: jsonb("after").notNull().default({}),
     approvedBy: text("approved_by"),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [
     index("reservation_changes_reservation_idx").on(t.reservationId, t.at.desc()),
     check(
       "reservation_changes_action_check",
-      sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in', 'cancel_check_in', 'check_out', 'price_override')`,
+      sql`${t.action} in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in', 'cancel_check_in', 'check_out', 'price_override', 'no_show', 'late_arrival')`,
     ),
   ],
 );
@@ -735,14 +741,18 @@ export const charges = pgTable(
     voidReason: text("void_reason"),
     autoVoid: text("auto_void"),
     invoiceId: uuid("invoice_id").references((): AnyPgColumn => invoices.id),
+    businessDate: date("business_date").notNull(),
+    corrects: uuid("corrects").references((): AnyPgColumn => charges.id),
   },
   (t) => [
     index("charges_folio_idx").on(t.folioId),
+    uniqueIndex("charges_corrects_key").on(t.corrects).where(sql`${t.corrects} is not null`),
+    check("charges_corrects_check", sql`(${t.origin} = 'correction') = (${t.corrects} is not null)`),
     index("charges_reservation_idx").on(t.reservationId, t.serviceDate),
     index("charges_property_date_idx").on(t.propertyId, t.serviceDate).where(sql`${t.voidedAt} is null`),
     index("charges_uninvoiced_idx").on(t.folioId).where(sql`${t.invoiceId} is null and ${t.voidedAt} is null`),
     check("charges_category_check", sql`${t.category} in ('accommodation', 'package', 'extras', 'city_tax')`),
-    check("charges_origin_check", sql`${t.origin} in ('stay', 'catalogue', 'free_text', 'fee')`),
+    check("charges_origin_check", sql`${t.origin} in ('stay', 'catalogue', 'free_text', 'fee', 'correction')`),
     check("charges_component_check", sql`(${t.origin} = 'stay') = (${t.component} is not null)`),
     check("charges_auto_void_check", sql`${t.autoVoid} in ('early_departure', 'stay_changed', 'check_in_cancelled')`),
     check("charges_void_check", sql`(${t.voidedAt} is null) = (${t.voidReason} is null) and (${t.voidedAt} is null) = (${t.voidedBy} is null) and (${t.autoVoid} is null or ${t.voidedAt} is not null)`),
@@ -758,6 +768,7 @@ export const chargeEvents = pgTable(
     at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     action: text("action").notNull(),
     detail: jsonb("detail").notNull().default({}),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [index("charge_events_charge_idx").on(t.chargeId, t.at), check("charge_events_action_check", sql`${t.action} in ('post', 'void', 'move')`)],
 );
@@ -836,6 +847,7 @@ export const payments = pgTable(
     postedAt: timestamp("posted_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     postedBy: text("posted_by").notNull(),
     settledAt: timestamp("settled_at", { withTimezone: true }),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [
     index("payments_folio_idx").on(t.folioId),
@@ -927,6 +939,7 @@ export const invoices = pgTable(
     issuedBy: text("issued_by").notNull(),
     pdf: bytea("pdf"),
     xml: text("xml"),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [
     unique("invoices_number_key").on(t.legalEntityId, t.number),
@@ -1093,6 +1106,7 @@ export const approvals = pgTable(
     note: text("note").notNull().default(""),
     inPlace: boolean("in_place").notNull().default(false),
     usedAt: timestamp("used_at", { withTimezone: true }),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [
     index("approvals_property_idx").on(t.propertyId, t.requestedAt.desc()),
@@ -1101,6 +1115,28 @@ export const approvals = pgTable(
     check("approvals_status_check", sql`${t.status} in ('pending', 'approved', 'rejected', 'used')`),
     check("approvals_decided_check", sql`(${t.status} = 'pending') = (${t.decidedBy} is null)`),
     check("approvals_used_check", sql`(${t.status} = 'used') = (${t.usedAt} is not null)`),
+  ],
+);
+
+export const nightAudits = pgTable(
+  "night_audits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    businessDate: date("business_date").notNull(),
+    status: text("status").notNull().default("draft"),
+    decisions: jsonb("decisions").notNull().default({}),
+    report: jsonb("report"),
+    reportPdf: bytea("report_pdf"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    startedBy: text("started_by").notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    closedBy: text("closed_by"),
+  },
+  (t) => [
+    unique("night_audits_key").on(t.propertyId, t.businessDate),
+    check("night_audits_status_check", sql`${t.status} in ('draft', 'closed')`),
+    check("night_audits_closed_check", sql`(${t.status} = 'closed') = (${t.closedAt} is not null and ${t.closedBy} is not null and ${t.report} is not null)`),
   ],
 );
 
@@ -1158,4 +1194,5 @@ export const tenantSchema = {
   reservationCityTaxExemptions,
   cityTaxNights,
   approvals,
+  nightAudits,
 };
