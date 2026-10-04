@@ -24,6 +24,7 @@ import type { CalendarData, CalendarReservation, CalendarRoom, CalendarRoomType,
 import { fill, type Messages } from "@/i18n/messages";
 import { useShell } from "@/shell/ShellProvider";
 import { MARKER_STYLE } from "../rates/marker-style";
+import { ViewToggle } from "./calendar-availability";
 import { applyDrop, dropOnRoom, previewDrop, undoDrop, type DropResult, type StayMove } from "./actions";
 
 interface Props {
@@ -228,6 +229,7 @@ export function CalendarRooms({ property, data, today, markers, range, canEdit, 
       <header className="flex flex-wrap items-center gap-3 border-b border-ink-10 px-5 py-3">
         <h1 className="text-xl font-medium">{m["module.calendar"]}</h1>
         <span className="text-ink-60">· {property.name}</span>
+        <ViewToggle view="rooms" from={data.from} range={range} m={m} />
         <div className="flex gap-1 rounded-full bg-surface-2 p-1" role="group" aria-label={m["cal.range"]}>
           {CALENDAR_RANGES.map((r) => (
             <button key={r} type="button" aria-pressed={range === r} onClick={() => router.push(`/calendar?from=${data.from}&range=${r}`)} className={`h-8 rounded-full px-3 text-[13px] ${range === r ? "bg-ink text-canvas" : "text-ink-80 hover:bg-ink-5"}`}>

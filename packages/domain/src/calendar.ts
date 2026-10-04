@@ -80,3 +80,24 @@ export function packLanes<T extends { arrival: string; departure: string }>(bars
   }
   return lanes;
 }
+
+interface CellStay {
+  roomTypeId: string;
+  status: ReservationStatus;
+  arrival: string;
+  departure: string;
+}
+
+/**
+ * The reservations behind an Availability cell (room type by night): those
+ * taking a room that night (Confirmed or Checked-in, arrival up to the night,
+ * departure after it), and those leaving that morning.
+ */
+export function cellReservations<R extends CellStay>(reservations: R[], roomTypeId: string, date: string): { staying: R[]; leaving: R[] } {
+  const ofType = reservations.filter((r) => r.roomTypeId === roomTypeId);
+  return {
+    staying: ofType.filter((r) => (r.status === "confirmed" || r.status === "checked_in") && r.arrival <= date && r.departure > date),
+    leaving: ofType.filter((r) => r.status !== "cancelled" && r.status !== "no_show" && r.departure === date),
+  };
+}
+
