@@ -15,6 +15,7 @@ import { LABELS } from "@hoteloftware/invoices/labels";
 import { isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
+import { markDirty } from "./room-state";
 
 /**
  * Invoices (ticket 28). An invoice is numbered only when issued, from one
@@ -597,7 +598,9 @@ export async function checkOut(pool: Pool, schema: string, reservationId: string
       JSON.stringify({ status: "checked_in" }),
       JSON.stringify({ status: "checked_out", ...(open.length ? { openBalance: open.reduce((s, o) => roundMoney(s + o.balance), 0) } : {}) }),
     ]);
-    // TODO(ticket 33): the room turns Dirty with housekeeping's room status
+    // the room the guest leaves turns Dirty
+    const lastRoom = (await tx.query<{ room_id: string }>("select room_id from room_assignments where reservation_id = $1 order by from_date desc limit 1", [reservationId])).rows[0];
+    if (lastRoom) await markDirty(tx, [lastRoom.room_id], "check_out", userId);
     return issued;
   });
 }

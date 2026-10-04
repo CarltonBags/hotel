@@ -204,6 +204,7 @@ export {
   listFixedCharges,
   removeFixedCharge,
   type FixedCharge,
+  RoomNotReady,
   checkIn,
   loadFolios,
   moveCharge,
@@ -311,3 +312,16 @@ export {
   type NightAuditView,
   type OverdueDeparture,
 } from "./tenant/night-audit";
+export {
+  assignHousekeeping,
+  createRoomBlock,
+  endRoomBlock,
+  listRoomStates,
+  propertyOfRoom,
+  setCleanliness,
+  setInspectionRequired,
+  type BlockConflict,
+  type RoomBlock,
+  type RoomState,
+  type Viewer,
+} from "./tenant/room-state";

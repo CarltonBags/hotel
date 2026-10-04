@@ -54,6 +54,7 @@ export const properties = pgTable(
     nightAuditFrom: time("night_audit_from").notNull().default("22:00"),
     nightAuditDeadline: time("night_audit_deadline").notNull().default("06:00"),
     nightAuditAlertedFor: date("night_audit_alerted_for"),
+    inspectionRequired: boolean("inspection_required").notNull().default(true),
   },
   (t) => [
     index("properties_legal_entity_idx").on(t.legalEntityId),
@@ -138,8 +139,12 @@ export const rooms = pgTable(
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    cleanliness: text("cleanliness").notNull().default("inspected"),
+    cleanlinessAt: timestamp("cleanliness_at", { withTimezone: true }),
+    cleanlinessBy: text("cleanliness_by"),
   },
   (t) => [
+    check("rooms_cleanliness_check", sql`${t.cleanliness} in ('dirty', 'clean', 'inspected')`),
     unique("rooms_property_id_number_key").on(t.propertyId, t.number),
     index("rooms_property_type_idx").on(t.propertyId, t.roomTypeId),
     check("rooms_bed_places_check", sql`${t.bedPlaces} >= 0`),
@@ -1140,6 +1145,69 @@ export const nightAudits = pgTable(
   ],
 );
 
+export const roomCleanlinessChanges = pgTable(
+  "room_cleanliness_changes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    roomId: uuid("room_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    before: text("before").notNull(),
+    after: text("after").notNull(),
+    source: text("source").notNull(),
+    userId: text("user_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    businessDate: date("business_date").notNull(),
+  },
+  (t) => [
+    index("room_cleanliness_changes_room_idx").on(t.roomId, t.at.desc()),
+    check("room_cleanliness_changes_source_check", sql`${t.source} in ('manual', 'check_out', 'room_move', 'block_end', 'night_audit')`),
+  ],
+);
+
+export const roomBlocks = pgTable(
+  "room_blocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    roomId: uuid("room_id").notNull().references(() => rooms.id),
+    kind: text("kind").notNull(),
+    fromDate: date("from_date").notNull(),
+    toDate: date("to_date").notNull(),
+    reason: text("reason").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    endedBy: text("ended_by"),
+  },
+  (t) => [
+    index("room_blocks_room_idx").on(t.roomId, t.fromDate),
+    index("room_blocks_property_idx").on(t.propertyId, t.kind, t.fromDate, t.toDate),
+    check("room_blocks_kind_check", sql`${t.kind} in ('out_of_order', 'out_of_service')`),
+    check("room_blocks_dates_check", sql`${t.toDate} >= ${t.fromDate}`),
+    check("room_blocks_reason_check", sql`length(trim(${t.reason})) > 0`),
+  ],
+);
+
+export const housekeepingTasks = pgTable(
+  "housekeeping_tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    roomId: uuid("room_id").notNull().references(() => rooms.id),
+    businessDate: date("business_date").notNull(),
+    kind: text("kind").notNull().default("clean"),
+    assigneeId: text("assignee_id"),
+    status: text("status").notNull().default("open"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    unique("housekeeping_tasks_key").on(t.roomId, t.businessDate, t.kind),
+    index("housekeeping_tasks_assignee_idx").on(t.propertyId, t.businessDate, t.assigneeId),
+    check("housekeeping_tasks_status_check", sql`${t.status} in ('open', 'in_progress', 'done', 'skipped')`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1195,4 +1263,7 @@ export const tenantSchema = {
   cityTaxNights,
   approvals,
   nightAudits,
+  roomCleanlinessChanges,
+  roomBlocks,
+  housekeepingTasks,
 };

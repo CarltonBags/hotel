@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { ROUTING_CATEGORIES, isOneOf } from "@hoteloftware/domain";
-import { addFixedCharge, addFolio, assignRoom, cancelCheckIn, checkIn, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, setRouting, voidCharge } from "@hoteloftware/db";
+import { RoomNotReady, addFixedCharge, addFolio, assignRoom, cancelCheckIn, checkIn, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, setRouting, voidCharge } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
@@ -16,19 +16,30 @@ import { formAction, type FormState } from "@/lib/form";
 
 const optionalDate = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 
-/** Check in; with a room chosen at the desk, that room is assigned for the stay first. */
-export async function checkInAction(reservationId: string, roomId?: string | null): Promise<FormState> {
-  return formAction(async () => {
+/**
+ * Check in; with a room chosen at the desk, that room is assigned for the
+ * stay first. A room not ready for a guest needs a reason (ticket 33): the
+ * answer then says which room and its Cleanliness.
+ */
+export async function checkInAction(reservationId: string, roomId?: string | null, notReadyReason?: string | null): Promise<FormState & { notReady?: { room: string; cleanliness: string } }> {
+  let notReady: { room: string; cleanliness: string } | undefined;
+  const state = await formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "check_in");
     if (roomId) {
       await authorize("manage_reservations", reservation.propertyId);
       await assignRoom(pool(), schema, reservation.id, userId, String(roomId));
     }
-    await checkIn(pool(), schema, reservation.id, userId);
+    try {
+      await checkIn(pool(), schema, reservation.id, userId, { notReadyReason: notReadyReason ? String(notReadyReason) : null });
+    } catch (err) {
+      if (err instanceof RoomNotReady) notReady = { room: err.roomNumber, cleanliness: err.cleanliness };
+      throw err;
+    }
     revalidatePath(`/reservations/${reservation.id}`);
     await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Checked in." };
   });
+  return { ...state, ...(notReady ? { notReady } : {}) };
 }
 
 export async function postServiceAction(reservationId: string, input: { serviceId: string; quantity: number; serviceDate?: string }): Promise<FormState> {
