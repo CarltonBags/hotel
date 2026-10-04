@@ -311,6 +311,10 @@ _Avoid_: Storno, credit note, reversal
 The cancellation of an uninvoiced charge with a reason, kept in the audit log.
 _Avoid_: Delete, remove, reverse
 
+**Correction**:
+A new charge of the opposite amount, posted on the open business date, that offsets a charge of a closed business date; the original stays unchanged.
+_Avoid_: Reversal, negative void, adjustment
+
 **Receivable**:
 An issued invoice to an on-account bill-to that is not yet paid.
 _Avoid_: Open item, debt, outstanding

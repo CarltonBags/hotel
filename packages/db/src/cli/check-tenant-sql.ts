@@ -23,6 +23,8 @@ for (const file of readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).
 // `SET search_path` without LOCAL, or set_config(..., false), would stick to the pooled connection.
 const SESSION_SEARCH_PATH = /\bset\s+search_path\b(?!\s*=?\s*local)|set_config\(\s*'search_path'\s*,[^,]+,\s*false\s*\)/i;
 const SET_LOCAL_OK = /\bset\s+local\s+search_path\b/i;
+// a function's own `set search_path from current` applies only while the function runs (trigger functions find their tenant's tables)
+const FUNCTION_SEARCH_PATH_OK = /\bcreate\s+(or\s+replace\s+)?function\b.*\bset\s+search_path\s+from\s+current\b/i;
 function* sourceFiles(dir: string): Generator<string> {
   for (const entry of readdirSync(dir)) {
     if (entry === "node_modules" || entry === ".next" || entry === "dist" || entry.startsWith(".")) continue;
@@ -38,7 +40,7 @@ for (const scope of ["packages", "apps"]) {
       .split("\n")
       .forEach((line, i) => {
         if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) return;
-        if (SESSION_SEARCH_PATH.test(line) && !SET_LOCAL_OK.test(line)) {
+        if (SESSION_SEARCH_PATH.test(line) && !SET_LOCAL_OK.test(line) && !FUNCTION_SEARCH_PATH_OK.test(line)) {
           console.error(`${file.slice(repoRoot.length + 1)}:${i + 1}: session-level search_path (use SET LOCAL or set_config(..., true))`);
           bad++;
         }

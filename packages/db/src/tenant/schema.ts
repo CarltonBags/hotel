@@ -661,6 +661,7 @@ export const reservationChanges = pgTable(
     before: jsonb("before").notNull().default({}),
     after: jsonb("after").notNull().default({}),
     approvedBy: text("approved_by"),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [
     index("reservation_changes_reservation_idx").on(t.reservationId, t.at.desc()),
@@ -767,6 +768,7 @@ export const chargeEvents = pgTable(
     at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     action: text("action").notNull(),
     detail: jsonb("detail").notNull().default({}),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [index("charge_events_charge_idx").on(t.chargeId, t.at), check("charge_events_action_check", sql`${t.action} in ('post', 'void', 'move')`)],
 );
@@ -1104,6 +1106,7 @@ export const approvals = pgTable(
     note: text("note").notNull().default(""),
     inPlace: boolean("in_place").notNull().default(false),
     usedAt: timestamp("used_at", { withTimezone: true }),
+    businessDate: date("business_date").notNull(),
   },
   (t) => [
     index("approvals_property_idx").on(t.propertyId, t.requestedAt.desc()),

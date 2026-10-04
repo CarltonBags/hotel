@@ -6,6 +6,7 @@ import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { fill } from "@/i18n/messages";
 import { AuditSteps } from "./audit-steps";
+import { DepartureActions } from "./departure-actions";
 
 /** The Night Audit of the property selected in the navbar (ticket 32): decide, review, close. */
 export default async function NightAuditPage() {
@@ -67,8 +68,11 @@ export default async function NightAuditPage() {
         {view.overdueDepartures.length === 0 ? <p className="text-ink-60">{m["na.none"]}</p> : null}
         <ul className="grid gap-1">
           {view.overdueDepartures.map((d) => (
-            <li key={d.reservationId} data-departure={d.reservationId} className="rounded-xl bg-surface px-3 py-2">
-              {stayLink(d)} · {d.departure}
+            <li key={d.reservationId} data-departure={d.reservationId} className="flex flex-wrap items-center gap-2 rounded-xl bg-surface px-3 py-2">
+              <span className="min-w-0 flex-1">
+                {stayLink(d)} · {d.departure}
+              </span>
+              <DepartureActions propertyId={property.id} reservationId={d.reservationId} m={m} />
             </li>
           ))}
         </ul>

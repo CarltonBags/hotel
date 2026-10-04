@@ -103,13 +103,13 @@ interface ResRow {
   primary_guest_id: string;
   company_id: string | null;
   legal_entity_id: string;
-  today: string;
+  /** The property's open Business Date (ticket 32). */
+  businessDate: string;
 }
 
-// "today" is the property's Business Date (ticket 32)
 const RES_SELECT = `select r.id, r.property_id, r.rate_plan_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
     r.primary_guest_id, coalesce(b.booker_company_id, b.rate_code_company_id) as company_id, p.legal_entity_id,
-    to_char(p.business_date, 'YYYY-MM-DD') as today
+    to_char(p.business_date, 'YYYY-MM-DD') as "businessDate"
   from reservations r join bookings b on b.id = r.booking_id join properties p on p.id = r.property_id where r.id = $1`;
 
 /** The reservation row locked for a Charge write (posting, voiding, moving: no effect on Availability or prices). */
@@ -347,9 +347,9 @@ export async function checkIn(pool: Pool, schema: string, id: string, userId: st
   await withTenant(pool, schema, async (tx) => {
     const res = await loadReservationForStayChange(tx, id);
     if (res.status !== "confirmed") throw new Error(`The reservation is ${res.status.replace("_", " ")} and cannot be checked in`);
-    if (res.arrival > res.today) throw new Error(`Check-in opens on the arrival date, ${res.arrival}`);
-    if (res.departure <= res.today) throw new Error("The stay has ended; it cannot be checked in");
-    const room = await tx.query("select 1 from room_assignments where reservation_id = $1 and from_date <= $2 and to_date > $2", [res.id, res.today]);
+    if (res.arrival > res.businessDate) throw new Error(`Check-in opens on the arrival date, ${res.arrival}`);
+    if (res.departure <= res.businessDate) throw new Error("The stay has ended; it cannot be checked in");
+    const room = await tx.query("select 1 from room_assignments where reservation_id = $1 and from_date <= $2 and to_date > $2", [res.id, res.businessDate]);
     if (!room.rows.length) throw new Error("Assign a room for tonight before check-in");
     await fixCityTaxPassOn(tx, res.id, true);
     const { lines, cityTax } = await wantedStay(tx, res);
@@ -377,7 +377,7 @@ export async function cancelCheckIn(pool: Pool, schema: string, id: string, user
   await withTenant(pool, schema, async (tx) => {
     const res = await loadReservationForStayChange(tx, id);
     if (res.status !== "checked_in") throw new Error("The reservation is not checked in");
-    if (res.today !== res.arrival) throw new Error("A guest who has slept a night here checks out instead");
+    if (res.businessDate !== res.arrival) throw new Error("A guest who has slept a night here checks out instead");
     const { rows } = await tx.query<{ id: string }>("select id from charges where reservation_id = $1 and origin = 'stay' and voided_at is null", [res.id]);
     for (const c of rows) await voidIn(tx, c.id, AUTO_VOID_REASON.check_in_cancelled, userId, "check_in_cancelled");
     await dropCityTaxNights(tx, res.id);
@@ -415,16 +415,16 @@ export async function syncStayCharges(tx: PoolClient, reservationId: string, use
   // a night's component voided by hand (say, a night given for free) is settled: not posted again, whatever its price now
   const settled = new Set(rows.filter((h) => !h.live && !rows.some((x) => x.live && nightKey(x) === nightKey(h))).map(nightKey));
   const stay = await wantedStay(tx, res);
-  await recordCityTaxNights(tx, res.id, res.property_id, res.today, stay.cityTax);
+  await recordCityTaxNights(tx, res.id, res.property_id, res.businessDate, stay.cityTax);
   const wanted = stay.lines.filter((w) => !settled.has(nightKey(w))).map((w) => (invoicedAmount.has(nightKey(w)) ? { ...w, amount: invoicedAmount.get(nightKey(w))! } : w));
   const sync = staySync(have, wanted);
-  // nights already slept keep their Charges: a change voids only from today on
+  // nights already slept keep their Charges: a change voids only from the Business Date on
   const plan = {
     ...sync,
-    voids: sync.voids.filter((v) => have.find((h) => h.id === v)!.serviceDate >= res.today),
+    voids: sync.voids.filter((v) => have.find((h) => h.id === v)!.serviceDate >= res.businessDate),
     // a night already slept is posted only when it has nothing yet (a Fixed Charge added late), never a second time
-    // City Tax only from today on: nights slept are recorded and filed as they were
-    posts: sync.posts.filter((p) => p.serviceDate >= res.today || (!isCityTax(p.component) && !have.some((h) => h.serviceDate === p.serviceDate && h.component === p.component))),
+    // City Tax only from the Business Date on: nights slept are recorded and filed as they were
+    posts: sync.posts.filter((p) => p.serviceDate >= res.businessDate || (!isCityTax(p.component) && !have.some((h) => h.serviceDate === p.serviceDate && h.component === p.component))),
   };
   if (plan.voids.length === 0 && plan.posts.length === 0) return;
   const removed = new Set(plan.removedDates);
@@ -456,7 +456,7 @@ export async function syncStayCharges(tx: PoolClient, reservationId: string, use
     await insertCharge(tx, res, userId, {
       serviceId: s.id,
       description: "Early departure fee",
-      serviceDate: res.today,
+      serviceDate: res.businessDate,
       quantity: 1,
       unitPrice: fee,
       amount: fee,
@@ -499,7 +499,7 @@ export async function postServiceCharge(
     const id = await insertCharge(tx, res, userId, {
       serviceId: service.id,
       description: service.name,
-      serviceDate: input.serviceDate ? checkDate(input.serviceDate) : res.today,
+      serviceDate: input.serviceDate ? checkDate(input.serviceDate) : res.businessDate,
       quantity,
       unitPrice,
       amount,
@@ -534,7 +534,7 @@ export async function postFreeTextCharge(
     const id = await insertCharge(tx, res, userId, {
       serviceId: null,
       description,
-      serviceDate: input.serviceDate ? checkDate(input.serviceDate) : res.today,
+      serviceDate: input.serviceDate ? checkDate(input.serviceDate) : res.businessDate,
       quantity: 1,
       unitPrice: amount,
       amount,
@@ -563,24 +563,31 @@ export async function voidCharge(pool: Pool, schema: string, reservationId: stri
   if (why.length > 200) throw new Error("The reason is too long");
   await withTenant(pool, schema, async (tx) => {
     const res = await chargeReservation(tx, reservationId, chargeId);
-    const c = (await tx.query<{ service_date: string }>("select to_char(service_date, 'YYYY-MM-DD') as service_date from charges where id = $1", [chargeId])).rows[0]!;
-    // a closed Business Date's records never change: its Charge is reversed by a correction in the open one
-    if (c.service_date < res.today) await correctIn(tx, chargeId, why, userId);
+    const c = (await tx.query<{ service_date: string; business_date: string }>(
+      "select to_char(service_date, 'YYYY-MM-DD') as service_date, to_char(business_date, 'YYYY-MM-DD') as business_date from charges where id = $1",
+      [chargeId],
+    )).rows[0]!;
+    // a Charge of a closed Business Date (posted on a closed day for a closed night) never changes: a correction offsets it (ADR 0015)
+    if (c.business_date < res.businessDate && c.service_date < res.businessDate) await correctIn(tx, chargeId, why, userId);
     else await voidIn(tx, chargeId, why, userId);
   });
 }
 
 /**
- * A correction (ticket 32): a Charge of a closed Business Date is reversed
- * by a new entry in the open one, on the same folio, for the same Service
- * Date and Tax Code, referencing the original; the original stays as it was.
+ * A Correction (ticket 32, ADR 0015): a Charge of a closed Business Date is
+ * offset by a new entry of the opposite amount in the open one, on the same
+ * folio, for the same Service Date and Tax Code, naming the original; the
+ * original stays as it was. An invoiced Charge goes by Cancellation Invoice.
  */
 async function correctIn(tx: PoolClient, chargeId: string, reason: string, userId: string): Promise<void> {
-  const c = (await tx.query<{ voided: boolean; origin: ChargeOrigin; corrected: boolean }>(
-    "select voided_at is not null as voided, origin, exists (select 1 from charges x where x.corrects = c.id) as corrected from charges c where c.id = $1",
+  const c = (await tx.query<{ voided: boolean; origin: ChargeOrigin; corrected: boolean; invoiced: boolean; component: string | null; service_date: string; reservation_id: string }>(
+    `select voided_at is not null as voided, origin, exists (select 1 from charges x where x.corrects = c.id) as corrected, invoice_id is not null as invoiced, component,
+       to_char(service_date, 'YYYY-MM-DD') as service_date, reservation_id
+     from charges c where c.id = $1`,
     [chargeId],
   )).rows[0]!;
   if (c.voided) throw new Error("The Charge is already voided");
+  if (c.invoiced) throw new Error("The Charge is invoiced; correct it with a Cancellation Invoice");
   if (c.origin === "correction") throw new Error("A correction is not corrected again; post the Charge anew instead");
   if (c.corrected) throw new Error("The Charge is already corrected");
   const { rows } = await tx.query<{ id: string }>(
@@ -590,6 +597,8 @@ async function correctIn(tx: PoolClient, chargeId: string, reason: string, userI
     [chargeId, userId],
   );
   await tx.query("insert into charge_events (charge_id, user_id, action, detail) values ($1, $2, 'post', $3)", [rows[0]!.id, userId, JSON.stringify({ corrects: chargeId, reason })]);
+  // a City Tax Charge taken back: the tax is still owed, so its night is filed as borne by the hotel
+  if (c.component?.startsWith("ctax:")) await tx.query("update city_tax_nights set absorbed = true where reservation_id = $1 and date = $2", [c.reservation_id, c.service_date]);
 }
 
 /** A No-show's confirmed fee (ticket 32), on the reservation's folio for the Business Date it was decided on. */
@@ -602,7 +611,7 @@ export async function postNoShowFee(tx: PoolClient, reservationId: string, amoun
   await insertCharge(tx, res, userId, {
     serviceId: s.id,
     description: "No-show fee",
-    serviceDate: res.today,
+    serviceDate: res.businessDate,
     quantity: 1,
     unitPrice: amount,
     amount,

@@ -3,7 +3,7 @@ import {
   auditOpen,
   auditOverdue,
   daysBehind,
-  earlyDepartureFee,
+  noShowFee,
   registrationGaps,
   roundMoney,
   undecidedArrivals,
@@ -132,7 +132,7 @@ async function viewIn(tx: PoolClient, p: PropertyRow, now: Date): Promise<NightA
       arrival: m.arrival,
       departure: m.departure,
       lateArrival: m.late_arrival,
-      noShowFee: earlyDepartureFee(m.no_show_fee_kind, m.no_show_fee_percent === null ? null : Number(m.no_show_fee_percent), nights),
+      noShowFee: noShowFee(m.no_show_fee_kind, m.no_show_fee_percent === null ? null : Number(m.no_show_fee_percent), nights),
     });
   }
   const overdueDepartures = (await tx.query<StayRow>(`select ${STAY} ${FROM} where r.property_id = $1 and r.status = 'checked_in' and r.departure <= $2 order by b.confirmation_number`, [p.id, bd])).rows.map(
@@ -235,7 +235,12 @@ export async function closeNightAudit(
   schema: string,
   propertyId: string,
   userId: string,
-  options: { now?: Date; inject?: (step: CloseStep) => void } = {},
+  options: {
+    now?: Date;
+    inject?: (step: CloseStep) => void;
+    /** Renders the report as PDF, stored with the close (the data is the record). */
+    renderPdf?: (report: NightAuditReport) => Promise<Uint8Array>;
+  } = {},
 ): Promise<{ auditId: string; businessDate: string }> {
   if (!isUuid(propertyId)) throw new Error("Property not found");
   const now = options.now ?? new Date();
@@ -290,13 +295,15 @@ export async function closeNightAudit(
     }
 
     step("report");
-    const report = await reportIn(tx, p, view, { noShows, lateArrivals, userId, now });
+    const closedAt = (await tx.query<{ at: Date }>("select clock_timestamp() as at")).rows[0]!.at;
+    const report = await reportIn(tx, p, view, { noShows, lateArrivals, userId, closedAt });
+    const pdf = options.renderPdf ? Buffer.from(await options.renderPdf(report)) : null;
     const { rows } = await tx.query<{ id: string }>(
-      `insert into night_audits (property_id, business_date, started_by, decisions, status, report, closed_at, closed_by)
-       values ($1, $2, $3, $4, 'closed', $5, clock_timestamp(), $3)
-       on conflict (property_id, business_date) do update set status = 'closed', report = excluded.report, closed_at = excluded.closed_at, closed_by = excluded.closed_by
+      `insert into night_audits (property_id, business_date, started_by, decisions, status, report, report_pdf, closed_at, closed_by)
+       values ($1, $2, $3, $4, 'closed', $5, $6, $7, $3)
+       on conflict (property_id, business_date) do update set status = 'closed', report = excluded.report, report_pdf = excluded.report_pdf, closed_at = excluded.closed_at, closed_by = excluded.closed_by
        returning id`,
-      [propertyId, p.business_date, userId, JSON.stringify(view.decisions), JSON.stringify(report)],
+      [propertyId, p.business_date, userId, JSON.stringify(view.decisions), JSON.stringify(report), pdf, closedAt],
     );
 
     step("advance");
@@ -311,14 +318,10 @@ async function reportIn(
   tx: PoolClient,
   p: PropertyRow,
   view: NightAuditView,
-  closing: { noShows: unknown[]; lateArrivals: unknown[]; userId: string; now: Date },
+  closing: { noShows: unknown[]; lateArrivals: unknown[]; userId: string; closedAt: Date },
 ): Promise<Record<string, unknown>> {
   const bd = p.business_date;
-  // the day's entries: since the previous close, or since the Business Date began for the first audit
-  const since = (await tx.query<{ since: Date }>(
-    `select coalesce((select closed_at from night_audits where property_id = $1 and status = 'closed' order by business_date desc limit 1), ($2::date)::timestamp at time zone $3) as since`,
-    [p.id, bd, p.time_zone],
-  )).rows[0]!.since;
+  // the day's entries are those made on this Business Date
   const rooms = Number((await tx.query<{ n: string }>("select count(*) as n from rooms where property_id = $1", [p.id])).rows[0]!.n);
   const occupied = Number((await tx.query<{ n: string }>(
     "select count(*) as n from reservation_nights n join reservations r on r.id = n.reservation_id where r.property_id = $1 and n.date = $2 and r.status in ('checked_in', 'checked_out')",
@@ -336,6 +339,13 @@ async function reportIn(
      where ch.property_id = $1 and ch.service_date = $2 and ch.voided_at is null group by ch.description, t.code, ch.tax_rate order by t.code, ch.description`,
     [p.id, bd],
   )).rows.map((r) => ({ service: r.description, taxCode: r.tax_code, taxRate: Number(r.tax_rate), gross: Number(r.gross) }));
+  // posted today for nights of earlier Business Dates (a late check-in's first night, corrections): in no earlier report
+  const latePostings = (await tx.query<{ confirmation_number: string; description: string; service_date: string; tax_code: string; amount: string; origin: string }>(
+    `select b.confirmation_number, ch.description, to_char(ch.service_date, 'YYYY-MM-DD') as service_date, t.code as tax_code, ch.amount, ch.origin
+     from charges ch join tax_codes t on t.id = ch.tax_code_id join reservations r on r.id = ch.reservation_id join bookings b on b.id = r.booking_id
+     where ch.property_id = $1 and ch.business_date = $2 and ch.service_date < $2 and ch.voided_at is null order by ch.service_date, b.confirmation_number`,
+    [p.id, bd],
+  )).rows.map((r) => ({ confirmationNumber: r.confirmation_number, description: r.description, serviceDate: r.service_date, taxCode: r.tax_code, amount: Number(r.amount), correction: r.origin === "correction" }));
   const payments = (await tx.query<{ tender: string; amount: string; count: string }>(
     `select tender, sum(amount) as amount, count(*) as count from payments
      where property_id = $1 and business_date = $2 and (status = 'succeeded' or (refund_of is not null and status in ('pending', 'refund_pending_balance'))) group by tender order by tender`,
@@ -348,8 +358,8 @@ async function reportIn(
   const voids = (await tx.query<{ confirmation_number: string; description: string; amount: string; reason: string | null; user_id: string }>(
     `select b.confirmation_number, c.description, c.amount, c.void_reason as reason, e.user_id from charge_events e join charges c on c.id = e.charge_id
      join reservations r on r.id = c.reservation_id join bookings b on b.id = r.booking_id
-     where c.property_id = $1 and e.action = 'void' and c.auto_void is null and e.at > $2 order by e.at`,
-    [p.id, since],
+     where c.property_id = $1 and e.action = 'void' and c.auto_void is null and e.business_date = $2 order by e.at`,
+    [p.id, bd],
   )).rows;
   const corrections = (await tx.query<{ confirmation_number: string; description: string; amount: string; service_date: string; user_id: string }>(
     `select b.confirmation_number, c.description, c.amount, to_char(c.service_date, 'YYYY-MM-DD') as service_date, c.posted_by as user_id from charges c
@@ -359,8 +369,8 @@ async function reportIn(
   )).rows;
   const priceOverrides = (await tx.query<{ confirmation_number: string; after: Record<string, unknown>; user_id: string; approved_by: string | null }>(
     `select b.confirmation_number, rc.after, rc.user_id, rc.approved_by from reservation_changes rc join reservations r on r.id = rc.reservation_id join bookings b on b.id = r.booking_id
-     where r.property_id = $1 and rc.action = 'price_override' and rc.at > $2 order by rc.at`,
-    [p.id, since],
+     where r.property_id = $1 and rc.action = 'price_override' and rc.business_date = $2 order by rc.at`,
+    [p.id, bd],
   )).rows;
   const refunds = (await tx.query<{ confirmation_number: string; amount: string; tender: string; reference: string | null; user_id: string; approved_by: string | null }>(
     `select b.confirmation_number, x.amount, x.tender, x.reference, x.posted_by as user_id, x.approved_by from payments x join reservations r on r.id = x.reservation_id join bookings b on b.id = r.booking_id
@@ -372,14 +382,14 @@ async function reportIn(
     [p.id, bd],
   )).rows;
   const approvals = (await tx.query<{ summary: string; status: string; requested_by: string; decided_by: string | null }>(
-    "select summary, status, requested_by, decided_by from approvals where property_id = $1 and coalesce(decided_at, requested_at) > $2 order by requested_at",
-    [p.id, since],
+    "select summary, status, requested_by, decided_by from approvals where property_id = $1 and business_date = $2 order by requested_at",
+    [p.id, bd],
   )).rows;
   const money = (v: string) => Number(v);
   return {
     property: { id: p.id, name: p.name, currency: p.currency.trim() },
     businessDate: bd,
-    closedAt: closing.now.toISOString(),
+    closedAt: closing.closedAt.toISOString(),
     closedBy: closing.userId,
     occupancy: { rooms, occupied, percent: rooms ? roundMoney((occupied / rooms) * 100) : 0 },
     arrivals: await stays("r.arrival = $2 and r.status in ('checked_in', 'checked_out')"),
@@ -387,6 +397,7 @@ async function reportIn(
     noShows: closing.noShows,
     lateArrivals: closing.lateArrivals,
     revenue,
+    latePostings,
     payments,
     cityTax: { charged: money(cityTax.charged), absorbed: money(cityTax.absorbed), nights: Number(cityTax.nights) },
     openBalances: view.warnings.openBalances,
@@ -415,7 +426,7 @@ export async function listNightAuditReports(pool: Pool, schema: string, property
   if (!isUuid(propertyId)) return [];
   return withTenant(pool, schema, async (tx) =>
     (await tx.query<{ id: string; business_date: string; closed_at: Date; closed_by: string }>(
-      "select id, to_char(business_date, 'YYYY-MM-DD') as business_date, closed_at, closed_by from night_audits where property_id = $1 and status = 'closed' order by business_date desc limit 400",
+      "select id, to_char(business_date, 'YYYY-MM-DD') as business_date, closed_at, closed_by from night_audits where property_id = $1 and status = 'closed' order by business_date desc",
       [propertyId],
     )).rows.map((r) => ({ id: r.id, businessDate: r.business_date, closedAt: r.closed_at, closedBy: r.closed_by })),
   );

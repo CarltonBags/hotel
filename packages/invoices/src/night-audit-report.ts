@@ -1,10 +1,7 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fonts } from "./fonts";
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from "@cantoo/pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 
-const FONT = readFileSync(fileURLToPath(new URL("../fonts/Inter.ttf", import.meta.url)));
-const BOLD = readFileSync(fileURLToPath(new URL("../fonts/Inter-SemiBold.ttf", import.meta.url)));
 const A4 = { w: 595.28, h: 841.89 };
 const M = 45;
 const ink = rgb(0.1, 0.1, 0.12);
@@ -23,6 +20,8 @@ export interface NightAuditReportDocument {
   noShows: (Stay & { fee: number; feeStatus: string | null; waiveReason: string | null })[];
   lateArrivals: Stay[];
   revenue: { service: string; taxCode: string; taxRate: number; gross: number }[];
+  /** Posted on this Business Date for earlier nights: late postings and Corrections. */
+  latePostings: { confirmationNumber: string; description: string; serviceDate: string; taxCode: string; amount: number; correction: boolean }[];
   payments: { tender: string; amount: number; count: number }[];
   cityTax: { charged: number; absorbed: number; nights: number };
   openBalances: (Stay & { balance: number })[];
@@ -51,6 +50,8 @@ const L = {
     waived: "erlassen",
     lateArrivals: "Späte Anreisen",
     revenue: "Umsatz nach Leistung und Steuerschlüssel (Leistungsdatum)",
+    latePostings: "Für frühere Leistungsdaten gebucht (Nachbuchungen, Korrekturen)",
+    correction: "Korrektur",
     payments: "Zahlungen nach Zahlungsart",
     cityTax: "Beherbergungsabgabe",
     charged: "berechnet",
@@ -83,6 +84,8 @@ const L = {
     waived: "waived",
     lateArrivals: "Late Arrivals",
     revenue: "Revenue by Service and Tax Code (Service Date)",
+    latePostings: "Posted for earlier Service Dates (late postings, Corrections)",
+    correction: "Correction",
     payments: "Payments by Tender",
     cityTax: "City Tax",
     charged: "charged",
@@ -115,8 +118,8 @@ export async function renderNightAuditPdf(r: NightAuditReportDocument, language:
   const who = (id: string | null) => (id ? (names[id] ?? id) : "");
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
-  const font = await pdf.embedFont(FONT, { subset: false });
-  const bold = await pdf.embedFont(BOLD, { subset: false });
+  const font = await pdf.embedFont(fonts().regular, { subset: false });
+  const bold = await pdf.embedFont(fonts().bold, { subset: false });
   pdf.setTitle(`${t.title} ${r.businessDate}`);
   pdf.setCreationDate(new Date(r.closedAt));
   pdf.setModificationDate(new Date(r.closedAt));
@@ -172,6 +175,7 @@ export async function renderNightAuditPdf(r: NightAuditReportDocument, language:
   list(t.lateArrivals, r.lateArrivals, (s) => [stay(s)]);
   list(t.revenue, r.revenue, (x) => [`${x.service} · ${x.taxCode} ${x.taxRate} %`, money(x.gross)]);
   if (r.revenue.length) line(t.total, money(r.revenue.reduce((s, x) => s + x.gross, 0)));
+  list(t.latePostings, r.latePostings ?? [], (x) => [`${x.confirmationNumber} · ${x.description} · ${x.serviceDate} · ${x.taxCode}${x.correction ? ` · ${t.correction}` : ""}`, money(x.amount)]);
   const tender = (k: string) => t.tenders[k] ?? k;
   list(t.payments, r.payments, (x) => [`${tender(x.tender)} (${x.count})`, money(x.amount)]);
   heading(t.cityTax);

@@ -25,12 +25,18 @@ alter table reservation_changes drop constraint reservation_changes_action_check
 alter table reservation_changes add constraint reservation_changes_action_check
   check (action in ('edit', 'cancel', 'assign_room', 'move_room', 'unassign_room', 'fee_confirmed', 'fee_waived', 'check_in', 'cancel_check_in', 'check_out', 'price_override', 'no_show', 'late_arrival'));
 
--- every money record carries the Business Date it was made on, besides its real time
+-- records carry the Business Date they were made on, besides their real time
 alter table charges add column business_date date;
 alter table payments add column business_date date;
 alter table invoices add column business_date date;
+alter table approvals add column business_date date;
+alter table reservation_changes add column business_date date;
+alter table charge_events add column business_date date;
 update charges c set business_date = (c.posted_at at time zone p.time_zone)::date from properties p where p.id = c.property_id;
 update payments x set business_date = (x.posted_at at time zone p.time_zone)::date from properties p where p.id = x.property_id;
+update approvals a set business_date = (a.requested_at at time zone p.time_zone)::date from properties p where p.id = a.property_id;
+update reservation_changes rc set business_date = (rc.at at time zone p.time_zone)::date from reservations r join properties p on p.id = r.property_id where r.id = rc.reservation_id;
+update charge_events e set business_date = (e.at at time zone p.time_zone)::date from charges c join properties p on p.id = c.property_id where c.id = e.charge_id;
 -- (an issued invoice never changes; its Business Date is set once, here)
 alter table invoices disable trigger invoices_immutable;
 update invoices i set business_date = (i.issued_at at time zone p.time_zone)::date from properties p where p.id = i.property_id;
@@ -38,24 +44,60 @@ alter table invoices enable trigger invoices_immutable;
 alter table charges alter column business_date set not null;
 alter table payments alter column business_date set not null;
 alter table invoices alter column business_date set not null;
+alter table approvals alter column business_date set not null;
+alter table reservation_changes alter column business_date set not null;
+alter table charge_events alter column business_date set not null;
 
-create function stamp_business_date() returns trigger language plpgsql as $$
+-- the property's open Business Date, read under a share lock: a record written while the Night Audit closes
+-- waits for the close and carries the new date, so no record falls between two reports
+create function stamp_business_date() returns trigger language plpgsql set search_path from current as $$
 begin
   if new.business_date is null then
-    select business_date into new.business_date from properties where id = new.property_id;
+    select business_date into new.business_date from properties where id = new.property_id for share;
   end if;
   return new;
 end $$;
 create trigger charges_business_date before insert on charges for each row execute function stamp_business_date();
 create trigger payments_business_date before insert on payments for each row execute function stamp_business_date();
 create trigger invoices_business_date before insert on invoices for each row execute function stamp_business_date();
+create trigger approvals_business_date before insert on approvals for each row execute function stamp_business_date();
+create function stamp_business_date_of_reservation() returns trigger language plpgsql set search_path from current as $$
+begin
+  if new.business_date is null then
+    select p.business_date into new.business_date from reservations r join properties p on p.id = r.property_id where r.id = new.reservation_id for share of p;
+  end if;
+  return new;
+end $$;
+create trigger reservation_changes_business_date before insert on reservation_changes for each row execute function stamp_business_date_of_reservation();
+create function stamp_business_date_of_charge() returns trigger language plpgsql set search_path from current as $$
+begin
+  if new.business_date is null then
+    select p.business_date into new.business_date from charges c join properties p on p.id = c.property_id where c.id = new.charge_id for share of p;
+  end if;
+  return new;
+end $$;
+create trigger charge_events_business_date before insert on charge_events for each row execute function stamp_business_date_of_charge();
 
--- a Charge of a closed Business Date is never voided: a correction in the open one reverses it
+-- a Charge of a closed Business Date (posted on a closed day for a closed night) is never voided:
+-- a correction in the open day offsets it
 alter table charges drop constraint charges_origin_check;
 alter table charges add constraint charges_origin_check check (origin in ('stay', 'catalogue', 'free_text', 'fee', 'correction'));
 alter table charges add column corrects uuid references charges(id);
 alter table charges add constraint charges_corrects_check check ((origin = 'correction') = (corrects is not null));
 create unique index charges_corrects_key on charges(corrects) where corrects is not null;
+create function charges_closed_day() returns trigger language plpgsql set search_path from current as $$
+declare
+  open_date date;
+begin
+  if old.voided_at is null and new.voided_at is not null then
+    select business_date into open_date from properties where id = old.property_id;
+    if old.business_date < open_date and old.service_date < open_date then
+      raise exception 'A Charge of a closed Business Date is corrected, not voided';
+    end if;
+  end if;
+  return new;
+end $$;
+create trigger charges_closed_day before update on charges for each row execute function charges_closed_day();
 
 -- one audit per property and Business Date: a draft of decisions while it runs, the report once closed
 create table night_audits (
@@ -82,7 +124,8 @@ begin
     if old.status = 'closed' then raise exception 'A closed Business Date cannot be reopened'; end if;
     return old;
   end if;
-  if old.status = 'closed' and (new.status <> 'closed' or new.decisions is distinct from old.decisions or new.report is distinct from old.report
+  if old.status = 'closed' and (new.status <> 'closed' or new.property_id is distinct from old.property_id or new.started_at is distinct from old.started_at
+     or new.started_by is distinct from old.started_by or new.decisions is distinct from old.decisions or new.report is distinct from old.report
      or new.business_date is distinct from old.business_date or new.closed_at is distinct from old.closed_at or new.closed_by is distinct from old.closed_by
      or (old.report_pdf is not null and new.report_pdf is distinct from old.report_pdf)) then
     raise exception 'A closed Business Date cannot be reopened';

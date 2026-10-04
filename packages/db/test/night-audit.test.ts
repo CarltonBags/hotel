@@ -149,6 +149,10 @@ describe("night audit", () => {
     const nights = (await loadFolios(pool, s(), late)).folios.flatMap((f) => f.charges).map((c) => c.serviceDate).sort();
     expect(nights).toEqual([day(1), day(2)]);
     expect((await findReservation(pool, s(), late))!.lateArrival).toBe(false);
+    // the missed night was posted on the open Business Date: it is voided as usual, not corrected
+    const missed = (await loadFolios(pool, s(), late)).folios[0]!.charges.find((c) => c.serviceDate === day(1))!;
+    await voidCharge(pool, s(), late, missed.id, "goodwill", fd);
+    expect((await loadFolios(pool, s(), late)).folios[0]!.charges.find((c) => c.id === missed.id)!.voidedAt).not.toBeNull();
   });
 
   it("a Charge of a closed day is corrected by a new entry in the open day, never voided", async () => {
@@ -158,6 +162,8 @@ describe("night audit", () => {
     const charges = (await loadFolios(pool, s(), inHouse)).folios[0]!.charges;
     expect(charges.find((c) => c.id === first.id)!.voidedAt).toBeNull();
     expect(charges.find((c) => c.origin === "correction")).toMatchObject({ amount: -first.amount, serviceDate: d0, correctsId: first.id });
+    // the database refuses a void of a closed day's Charge, whoever tries
+    await expect(pool.query(`update ${s()}.charges set voided_at = now(), voided_by = 'x', void_reason = 'x' where id = $1`, [first.id])).rejects.toThrow(/corrected, not voided/);
     // an open day's Charge is voided as before
     await postServiceCharge(pool, s(), inHouse, { serviceId: minibar, quantity: 1 }, fd);
     const mini = (await loadFolios(pool, s(), inHouse)).folios[0]!.charges.find((c) => c.description === "Minibar")!;
@@ -166,13 +172,14 @@ describe("night audit", () => {
   });
 
   it("catching up closes each missed day in order, one report each, with the listed sections", async () => {
-    await closeNightAudit(pool, s(), berlin, fd);
+    await closeNightAudit(pool, s(), berlin, fd, { renderPdf: async () => new TextEncoder().encode("%PDF-1.4 report") });
+    expect((await nightAuditReport(pool, s(), (await listNightAuditReports(pool, s(), berlin))[0]!.id)).pdf?.toString()).toBe("%PDF-1.4 report");
     expect(await businessDate()).toBe(todayIn("Europe/Berlin"));
     const reports = await listNightAuditReports(pool, s(), berlin);
     expect(reports.map((r) => r.businessDate)).toEqual([day(2), day(1), d0]);
     const first = await nightAuditReport(pool, s(), reports.at(-1)!.id);
     expect(Object.keys(first.report).sort()).toEqual(
-      ["arrivals", "businessDate", "cityTax", "changes", "closedAt", "closedBy", "departures", "expiringHolds", "lateArrivals", "noShows", "occupancy", "openBalances", "payments", "property", "revenue", "warnings"].sort(),
+      ["arrivals", "businessDate", "cityTax", "changes", "closedAt", "closedBy", "departures", "expiringHolds", "lateArrivals", "latePostings", "noShows", "occupancy", "openBalances", "payments", "property", "revenue", "warnings"].sort(),
     );
     expect(first.report.noShows.map((n: { reservationId: string }) => n.reservationId)).toEqual([missing]);
     expect(first.report.occupancy).toMatchObject({ rooms: 10, occupied: 2 });

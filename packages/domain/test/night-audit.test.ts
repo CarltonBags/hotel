@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditOpen, auditOverdue, daysBehind, undecidedArrivals } from "../src/night-audit";
+import { auditOpen, auditOverdue, daysBehind, noShowFee, undecidedArrivals } from "../src/night-audit";
 
 const berlin = { businessDate: "2026-10-03", timeZone: "Europe/Berlin", windowFrom: "22:00", deadline: "06:00" };
 
@@ -29,5 +29,12 @@ describe("night audit clock", () => {
         c: { kind: "late_arrival" },
       }),
     ).toEqual(["b", "d"]);
+  });
+
+  it("the No-show fee follows the Cancellation Policy", () => {
+    expect(noShowFee("first_night", null, [120, 100])).toBe(120);
+    expect(noShowFee("percent", 50, [120, 100])).toBe(110);
+    expect(noShowFee("full_stay", null, [120, 100])).toBe(220);
+    expect(noShowFee("none", null, [120])).toBe(0);
   });
 });

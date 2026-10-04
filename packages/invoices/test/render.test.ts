@@ -71,6 +71,7 @@ describe("invoice rendering", () => {
           noShows: [{ ...stay, fee: 100, feeStatus: "confirmed", waiveReason: null }],
           lateArrivals: [],
           revenue: [{ service: "Übernachtung", taxCode: "ACC", taxRate: 7, gross: 400 }],
+          latePostings: [{ confirmationNumber: "100030", description: "Frühstück", serviceDate: "2026-10-01", taxCode: "FOOD", amount: -12, correction: true }],
           payments: [{ tender: "card_terminal", amount: 250, count: 2 }],
           cityTax: { charged: 30, absorbed: 0, nights: 4 },
           openBalances: [{ ...stay, balance: 150 }],

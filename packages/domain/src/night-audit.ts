@@ -5,6 +5,8 @@
  * (default from 22:00 on the Business Date); after the deadline on the next
  * morning (default 06:00) it is overdue.
  */
+import type { FeeKind } from "./rates";
+import { roundMoney } from "./money";
 import { addDays } from "./rates-grid";
 import { zonedInstant } from "./reservation-edit";
 
@@ -30,6 +32,15 @@ export function auditOverdue(c: AuditClock, now: Date): boolean {
 /** Whole days the Business Date lags the calendar date (0 on the evening of the day itself). */
 export function daysBehind(businessDate: string, calendarDate: string): number {
   return Math.max(0, Math.round((Date.parse(`${calendarDate}T00:00:00Z`) - Date.parse(`${businessDate}T00:00:00Z`)) / 86_400_000));
+}
+
+/** The No-show fee of a Cancellation Policy on the stay's nightly prices. */
+export function noShowFee(kind: FeeKind, percent: number | null, nights: number[]): number {
+  if (nights.length === 0 || kind === "none") return 0;
+  const total = nights.reduce((s, n) => s + n, 0);
+  if (kind === "first_night") return roundMoney(nights[0]!);
+  if (kind === "percent") return roundMoney((total * (percent ?? 0)) / 100);
+  return roundMoney(total);
 }
 
 /** A missing arrival's decision at the audit. */

@@ -13,6 +13,8 @@ export async function alertOverdueAudits(pool: Pool, tenant: { id: string; schem
   if (!overdue.length) return 0;
   const users = await listTenantUsers(pool, tenant.id);
   for (const o of overdue) {
+    // marked first: a crash part-way sends no alert twice (at most once per Business Date)
+    await markAuditAlerted(pool, tenant.schemaName, o.propertyId, o.businessDate);
     const staff = users.filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "run_night_audit", o.propertyId));
     for (const u of staff) {
       await publishNotification(pool, {
@@ -23,7 +25,6 @@ export async function alertOverdueAudits(pool: Pool, tenant: { id: string; schem
         href: "/night-audit",
       });
     }
-    await markAuditAlerted(pool, tenant.schemaName, o.propertyId, o.businessDate);
   }
   return overdue.length;
 }

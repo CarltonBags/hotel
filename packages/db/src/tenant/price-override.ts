@@ -35,9 +35,9 @@ export async function overrideNightPrices(
     const owner = (await tx.query<{ property_id: string }>("select property_id from reservations where id = $1", [reservationId])).rows[0];
     if (!owner) throw new Error("Reservation not found");
     await lockProperty(tx, owner.property_id);
-    const r = (await tx.query<{ id: string; property_id: string; status: string; arrival: string; departure: string; confirmation_number: string; price_floor: string | null; currency: string; today: string }>(
+    const r = (await tx.query<{ id: string; property_id: string; status: string; arrival: string; departure: string; confirmation_number: string; price_floor: string | null; currency: string; business_date: string }>(
       `select r.id, r.property_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, b.confirmation_number, t.price_floor, p.currency,
-         to_char(p.business_date, 'YYYY-MM-DD') as today
+         to_char(p.business_date, 'YYYY-MM-DD') as business_date
        from reservations r join bookings b on b.id = r.booking_id join room_types t on t.id = r.room_type_id join properties p on p.id = r.property_id
        where r.id = $1 for update of r`,
       [reservationId],
@@ -45,7 +45,7 @@ export async function overrideNightPrices(
     if (r.status !== "confirmed" && r.status !== "checked_in") throw new Error(`The reservation is ${r.status.replace("_", " ")}; its prices cannot change`);
     if (nights.some((n) => n.date < r.arrival || n.date >= r.departure)) throw new Error("A night is not part of the stay");
     // a checked-in guest's slept nights keep their Charges (corrected by voiding or posting), so their price stays as posted
-    if (r.status === "checked_in" && nights.some((n) => n.date < r.today)) throw new Error("A night already slept keeps its price; correct its Charges on the folio instead");
+    if (r.status === "checked_in" && nights.some((n) => n.date < r.business_date)) throw new Error("A night already slept keeps its price; correct its Charges on the folio instead");
     const invoiced = (await tx.query<{ date: string }>(
       "select distinct to_char(service_date, 'YYYY-MM-DD') as date from charges where reservation_id = $1 and origin = 'stay' and invoice_id is not null and voided_at is null and service_date = any($2::date[])",
       [r.id, nights.map((n) => n.date)],
