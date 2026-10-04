@@ -148,6 +148,10 @@ export const PROPERTY_ACTIONS = {
   paid_out_without_limit: ["property_manager"],
   /** Matrix "Bank deposit, transfer between registers; view all Cash Books". */
   manage_cash: ["property_manager", "accounting"],
+  /** Official tourism statistics: the monthly report, its submission, the statistical settings and opening calendar. */
+  tourism_statistics: ["property_manager"],
+  /** Leave a stay out of the statistics with a reason (refugees, stays over a year). */
+  exclude_from_statistics: ["property_manager", "front_desk"],
   /** The cash desk page: the desk for its own Shift, Property Manager and Accounting for every register. */
   view_cash_desk: ["property_manager", "front_desk", "accounting"],
   /** The property's cash desk: on or off, Cash Registers, tolerance and Paid-out limit. */

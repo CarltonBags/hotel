@@ -75,6 +75,7 @@ export const MODULES: ModuleDef[] = [
   { id: "lost_found", group: "housekeeping", label: "module.lost_found", icon: "PackageSearch", hue: "#b98900", href: "/lost-found", requiresProperty: "view_lost_items" },
   soon("reports", "reports", "module.reports", "ChartColumn", "#4f5bd5", 82),
   { id: "night_audit_reports", group: "reports", label: "module.night_audit_reports", icon: "MoonStar", hue: "#7c5cff", href: "/night-audit/reports", requiresProperty: "view_night_audit_reports" },
+  { id: "tourism_statistics", group: "reports", label: "module.tourism_statistics", icon: "ChartColumn", hue: "#0aa5a5", href: "/statistics", requiresProperty: "tourism_statistics" },
   { id: "audit_log", group: "reports", label: "module.audit_log", icon: "List", hue: "#4f5bd5", href: "/audit-log", requiresProperty: "view_audit_log" },
   { id: "city_tax_report", group: "reports", label: "module.city_tax_report", icon: "Landmark", hue: "#6b7280", href: "/city-tax-report", requiresProperty: "view_financial_reports" },
   soon("outlets", "front_desk", "module.outlets", "UtensilsCrossed", "#e2552b", 60),

@@ -1,3 +1,4 @@
+import { csvCell } from "./csv";
 import { fonts } from "./fonts";
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from "@cantoo/pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
@@ -199,12 +200,7 @@ export async function renderCityTaxReportPdf(r: CityTaxReportDocument, language:
 
 /** The filing report as CSV (semicolon separated, decimal point), one row per stay. */
 export function cityTaxReportCsv(r: CityTaxReportDocument): string {
-  const q = (v: string | number) => {
-    const s = String(v);
-    // a leading formula character is neutralised so spreadsheets never run it
-    const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
-    return /[;"\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
-  };
+  const q = csvCell;
   const lines = [["booking", "guest", "arrival", "departure", "nights", "persons", "base", "tax", "absorbed", "exemptions"].join(";")];
   for (const s of r.stays) {
     const ex = r.exemptions.filter((e) => e.reservationId === s.reservationId).map((e) => `${e.person + 1}:${e.reason}`).join(" ");

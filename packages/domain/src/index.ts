@@ -244,3 +244,4 @@ export {
 } from "./floor";
 export { copySourceDate, parsePaste, planCopyPeriod, planFill, planPaste, type FillMode, type ToolPlan } from "./rates-tools";
 export { CASH_MOVEMENT_KINDS, cashBookBalance, closeCount, countTotal, denominationsFor, movementSign, paidOutNeedsApproval, type CashCount, type CashMovementKind } from "./cash";
+export { countMonth, monthBounds, statsRowFor, statsRows, statsVariant, type MonthCount, type StatsRow, type StatsStay, type StatsVariant } from "./tourism-stats";

@@ -19,6 +19,7 @@ import { RegistrationStatus } from "./guest-details";
 import { GuestDrawerButton } from "./guest-drawer-button";
 import { ReservationActions } from "./reservation-actions";
 import { HousekeepingNotes } from "./housekeeping-notes";
+import { StatsExclusion } from "./stats-exclusion";
 
 /** One Reservation as a record tab: stay, guests, stored nightly prices, check-in and its folios. */
 export default async function ReservationPage({ params }: { params: Promise<{ id: string }> }) {
@@ -98,6 +99,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
       </section>
 
       <HousekeepingNotes schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} m={m} />
+      <StatsExclusion schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} m={m} />
 
       <section aria-label={m["res.guests"]} className="grid gap-1 rounded-2xl bg-surface-2 p-5 text-sm">
         <h2 className="mb-1 font-medium">{m["res.guests"]}</h2>
