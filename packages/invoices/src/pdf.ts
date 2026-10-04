@@ -89,6 +89,7 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
 
   // title and facts
   y = A4.h - M - 210;
+  if (doc.test) page.drawText(L.testMark, { x: M, y: y + 22, size: 11, font: bold, color: rgb(0.75, 0.1, 0.1) });
   text(title, M, 16, ink, bold);
   y -= 24;
   const facts: [string, string][] = [

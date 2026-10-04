@@ -21,6 +21,7 @@ import { assertDepositInvoiceable, depositIn } from "./invoices";
 import { openFolios } from "./folios";
 import { mapProviderAccount } from "../control/external-ids";
 import { withTenant } from "./with-tenant";
+import { inTestMode } from "./go-live";
 import { bookCashPaymentIn, issueReceiptIn } from "./cash";
 
 /**
@@ -186,8 +187,9 @@ interface Context {
   propertyId: string;
 }
 
-/** The property's provider account (its Legal Entity's), ready for card payments. */
-async function accountFor(tx: PoolClient, propertyId: string): Promise<Context> {
+/** The property's provider account (its Legal Entity's), ready for card payments. In Test Mode no card is charged: only a test provider. */
+async function accountFor(tx: PoolClient, propertyId: string, provider: PaymentProvider | null): Promise<Context> {
+  if (provider && !provider.testMode && (await inTestMode(tx))) throw new Error("No card is charged in Test Mode");
   const { rows } = await tx.query<{ account_id: string | null; charges_enabled: boolean | null; currency: string }>(
     "select a.account_id, a.charges_enabled, p.currency from properties p left join payment_accounts a on a.legal_entity_id = p.legal_entity_id where p.id = $1",
     [propertyId],
@@ -222,7 +224,8 @@ export async function registerTerminalReader(pool: Pool, schema: string, provide
   if (!label) throw new Error("Name the reader (say, the desk it sits at)");
   if (!isUuid(propertyId)) throw new Error("Property not found");
   const prop = await withTenant(pool, schema, async (tx) => {
-    const ctx = await accountFor(tx, propertyId);
+    // pairing a reader charges nothing: allowed in Test Mode too
+    const ctx = await accountFor(tx, propertyId, null);
     // TODO(property address): properties carry no address yet; the Legal Entity's stands in for the Terminal location
     const p = (await tx.query<{ name: string; address_line1: string; city: string; postal_code: string; country: string; terminal_location_id: string | null }>(
       `select p.name, l.address_line1, l.city, l.postal_code, p.country, p.terminal_location_id
@@ -328,7 +331,7 @@ export async function takePayment(
       ? (await tx.query<{ id: string }>("select id from folios where id = $1 and reservation_id = $2", [input.folioId, res.id])).rows[0]
       : (await tx.query<{ id: string }>("select id from folios where reservation_id = $1 and number = 1", [res.id])).rows[0];
     if (!folio) throw new Error("Folio not found on this reservation");
-    const ctx = viaProvider ? await accountFor(tx, res.property_id) : { accountId: "", currency: (await tx.query<{ currency: string }>("select currency from properties where id = $1", [res.property_id])).rows[0]!.currency.trim(), propertyId: res.property_id };
+    const ctx = viaProvider ? await accountFor(tx, res.property_id, provider) : { accountId: "", currency: (await tx.query<{ currency: string }>("select currency from properties where id = $1", [res.property_id])).rows[0]!.currency.trim(), propertyId: res.property_id };
     const reader = viaProvider ? await readerOf(tx, res.property_id, String(input.readerId ?? "")) : null;
     // money before check-in must be taxable as a deposit before it is taken
     await assertDepositInvoiceable(tx, res.id, tender);
@@ -372,7 +375,7 @@ export async function syncPayment(pool: Pool, schema: string, provider: PaymentP
   const p = await withTenant(pool, schema, async (tx) => (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [paymentId])).rows[0]);
   if (!p) throw new Error("Payment not found");
   if (p.status !== "pending" || !p.provider_intent_id || p.refund_of) return toPayment(p);
-  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id));
+  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id, provider));
   const state = await provider.getIntent(ctx.accountId, p.provider_intent_id);
   return applyIntentToPayment(pool, schema, p.id, state);
 }
@@ -410,7 +413,7 @@ export async function cancelPendingPayment(pool: Pool, schema: string, provider:
   const p = await withTenant(pool, schema, async (tx) => (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [paymentId])).rows[0]);
   if (!p || p.status !== "pending" || p.refund_of) throw new Error("Only a payment waiting at the reader can be cancelled");
   if (p.provider_intent_id && p.reader_id) {
-    const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id));
+    const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id, provider));
     await provider.cancelTerminalPayment(ctx.accountId, p.reader_id, p.provider_intent_id);
     const state = await provider.getIntent(ctx.accountId, p.provider_intent_id);
     if (state.status !== "waiting") return applyIntentToPayment(pool, schema, p.id, state);
@@ -432,7 +435,7 @@ export async function simulateCard(pool: Pool, schema: string, provider: Payment
       : (await tx.query<{ property_id: string; reader_id: string | null }>("select property_id, reader_id from card_holds where id = $1", [target.holdId])).rows[0],
   );
   if (!row?.reader_id) throw new Error("Nothing is waiting on a reader");
-  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, row.property_id));
+  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, row.property_id, provider));
   await provider.simulateCard(ctx.accountId, row.reader_id);
   if (target.paymentId) await syncPayment(pool, schema, provider, target.paymentId);
   if (target.holdId) await syncCardHold(pool, schema, provider, target.holdId);
@@ -509,7 +512,7 @@ async function refundReceipt(tx: PoolClient, row: PaymentRow): Promise<void> {
 /** Ask the provider for a pending refund (first time or again); the key changes only after a definite "not now". */
 async function sendRefund(pool: Pool, schema: string, provider: PaymentProvider, refundPaymentId: string): Promise<Payment> {
   const r = await withTenant(pool, schema, async (tx) => (await tx.query<PaymentRow & { provider_attempts: number }>(`select ${PAYMENT_COLUMNS}, provider_attempts from payments where id = $1`, [refundPaymentId])).rows[0]!);
-  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, r.property_id));
+  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, r.property_id, provider));
   try {
     const result = await provider.refund(ctx.accountId, {
       intentId: r.provider_intent_id!,
@@ -543,7 +546,7 @@ export async function syncRefund(pool: Pool, schema: string, provider: PaymentPr
   const p = await withTenant(pool, schema, async (tx) => (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where provider_refund_id = $1`, [refundId])).rows[0]);
   if (!p) return null;
   if (p.status === "succeeded" || p.status === "failed") return { propertyId: p.property_id };
-  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id));
+  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id, provider));
   const r = await provider.getRefund(ctx.accountId, refundId);
   if (r.status === "succeeded" || r.status === "failed") {
     await withTenant(pool, schema, async (tx) => {
@@ -661,12 +664,12 @@ async function holdRow(pool: Pool, schema: string, holdId: string): Promise<Hold
  * is held (short calls, one row): two desks cannot raise, capture or release
  * the same hold at once. Waiting at a reader never happens under a lock.
  */
-async function withHold<T>(pool: Pool, schema: string, holdId: string, fn: (tx: PoolClient, h: HoldRow, ctx: Context) => Promise<T>): Promise<T> {
+async function withHold<T>(pool: Pool, schema: string, provider: PaymentProvider, holdId: string, fn: (tx: PoolClient, h: HoldRow, ctx: Context) => Promise<T>): Promise<T> {
   if (!isUuid(holdId)) throw new Error("Card Hold not found");
   return withTenant(pool, schema, async (tx) => {
     const h = (await tx.query<HoldRow>(`select ${HOLD_COLUMNS} from card_holds where id = $1 for update`, [holdId])).rows[0];
     if (!h) throw new Error("Card Hold not found");
-    return fn(tx, h, await accountFor(tx, h.property_id));
+    return fn(tx, h, await accountFor(tx, h.property_id, provider));
   });
 }
 
@@ -676,7 +679,7 @@ export async function placeCardHold(pool: Pool, schema: string, provider: Paymen
   const prepared = await withTenant(pool, schema, async (tx) => {
     const res = await lockReservation(tx, input.reservationId);
     if (res.status !== "confirmed" && res.status !== "checked_in") throw new Error("Card Holds are for open stays only");
-    const ctx = await accountFor(tx, res.property_id);
+    const ctx = await accountFor(tx, res.property_id, provider);
     const reader = await readerOf(tx, res.property_id, input.readerId);
     // the hold's row exists before the reader is asked, so its id keys the request
     const { rows } = await tx.query<{ id: string }>(
@@ -709,7 +712,7 @@ export async function placeCardHold(pool: Pool, schema: string, provider: Paymen
 export async function syncCardHold(pool: Pool, schema: string, provider: PaymentProvider, holdId: string): Promise<CardHold> {
   const h = await holdRow(pool, schema, holdId);
   if ((h.status !== "pending" && h.status !== "active") || h.provider_intent_id.startsWith("pending:")) return toHold(h);
-  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, h.property_id));
+  const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, h.property_id, provider));
   const state = await provider.getIntent(ctx.accountId, h.provider_intent_id);
   return withTenant(pool, schema, async (tx) => {
     // only an open hold changes: a capture or release that committed meanwhile is never undone
@@ -760,7 +763,7 @@ async function recordCapture(tx: PoolClient, h: HoldRow, providerName: string, a
 /** Raise an active hold, within the provider's limits (10 increments; each up to the greater of 500 or 5× held). */
 export async function incrementCardHold(pool: Pool, schema: string, provider: PaymentProvider, input: { holdId: string; increment: number }): Promise<CardHold> {
   const increment = amountOf(input.increment);
-  return withHold(pool, schema, input.holdId, async (tx, h, ctx) => {
+  return withHold(pool, schema, provider, input.holdId, async (tx, h, ctx) => {
     if (h.status !== "active") throw new Error("Only an active hold can be raised");
     if (!holdIncrementAllowed({ held: Number(h.amount), increment, increments: h.increments })) {
       throw new Error("This increment is beyond the card's limits; cover the balance instead, or place a new hold");
@@ -777,7 +780,7 @@ export async function incrementCardHold(pool: Pool, schema: string, provider: Pa
  * places a new hold on the reader.
  */
 export async function coverBalanceWithHold(pool: Pool, schema: string, provider: PaymentProvider, holdId: string, userId: string): Promise<{ raisedBy: number; newHoldId: string | null }> {
-  const plan = await withHold(pool, schema, holdId, async (tx, h, ctx) => {
+  const plan = await withHold(pool, schema, provider, holdId, async (tx, h, ctx) => {
     if (h.status !== "active") throw new Error("Only an active hold can be raised");
     const held = (await tx.query<{ s: string }>("select coalesce(sum(amount), 0) as s from card_holds where reservation_id = $1 and status = 'active'", [h.reservation_id])).rows[0]!.s;
     const shortfall = roundMoney((await guestBalance(tx, h.reservation_id)) - Number(held));
@@ -821,7 +824,7 @@ async function savedCardHold(pool: Pool, schema: string, provider: PaymentProvid
 
 /** At checkout: capture what is due on the guest's folios (or the amount named), never more than held; the rest is released. */
 export async function captureCardHold(pool: Pool, schema: string, provider: PaymentProvider, input: { holdId: string; amount?: number | undefined }, userId: string): Promise<Payment> {
-  return withHold(pool, schema, input.holdId, async (tx, h, ctx) => {
+  return withHold(pool, schema, provider, input.holdId, async (tx, h, ctx) => {
     if (h.status !== "active") throw new Error("Only an active hold can be captured");
     const due = input.amount === undefined ? await guestBalance(tx, h.reservation_id) : amountOf(input.amount);
     if (input.amount !== undefined && roundMoney(due - Number(h.amount)) > 0) throw new Error(`Cannot capture more than the ${Number(h.amount).toFixed(2)} held`);
@@ -835,7 +838,7 @@ export async function captureCardHold(pool: Pool, schema: string, provider: Paym
 
 /** Release a hold the guest no longer needs, or one still waiting on the reader. */
 export async function releaseCardHold(pool: Pool, schema: string, provider: PaymentProvider, holdId: string): Promise<void> {
-  await withHold(pool, schema, holdId, async (tx, h, ctx) => {
+  await withHold(pool, schema, provider, holdId, async (tx, h, ctx) => {
     if (h.status !== "active" && h.status !== "pending") throw new Error("The hold is no longer open");
     if (!h.provider_intent_id.startsWith("pending:")) {
       if (h.status === "pending" && h.reader_id) await provider.cancelTerminalPayment(ctx.accountId, h.reader_id, h.provider_intent_id);
@@ -884,7 +887,7 @@ export async function renewExpiringHolds(pool: Pool, schema: string, provider: P
     let ok = false;
     if (h.provider_customer_id && h.payment_method_id) {
       try {
-        const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, h.property_id));
+        const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, h.property_id, provider));
         await savedCardHold(pool, schema, provider, h, ctx, Number(h.amount), { renewedFrom: h.id, key: `renew:${h.id}`, userId: "system" });
         await provider.releaseHold(ctx.accountId, h.provider_intent_id).catch(() => undefined);
         await withTenant(pool, schema, (tx) => tx.query("update card_holds set status = 'released' where id = $1 and status = 'active'", [h.id]));

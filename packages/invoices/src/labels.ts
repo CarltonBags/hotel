@@ -2,6 +2,7 @@
 export const LABELS = {
   de: {
     final: "Rechnung",
+    testMark: "TESTRECHNUNG – keine gültige Rechnung",
     deposit: "Anzahlungsrechnung",
     cancellation: "Stornorechnung",
     cancels: "Storno zu Rechnung {number} vom {date}",
@@ -47,6 +48,7 @@ export const LABELS = {
     page: "Seite",
   },
   en: {
+    testMark: "TEST INVOICE – not a valid invoice",
     final: "Invoice",
     deposit: "Deposit invoice",
     cancellation: "Cancellation invoice",

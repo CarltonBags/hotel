@@ -8,7 +8,11 @@ export { migrateControl } from "./control/migrate-control";
 export { assertContiguous, type Migration } from "./migrations/versions";
 export { findSchemaQualifiedNames, type Finding } from "./tenant/check-tenant-sql";
 export { migrateTenants, type MigrateResult } from "./tenant/migrate-tenants";
-export { findTenantById, findTenantBySlug, provisionTenant, setTenantAccent, type NewTenant, type Tenant } from "./tenant/provision";
+export { deleteExpiredDemoTenants, deleteTenant, findTenantById, findTenantBySlug, provisionTenant, setTenantAccent, trialsInLastHour, type NewTenant, type Tenant } from "./tenant/provision";
+export { GoLiveBlocked, goLive, goLiveCheckCurrent, goLiveChecklistOf, markGoLiveChecked, tenantLifecycle, testRecordCounts, type TenantLifecycle, type TestRecordCounts } from "./tenant/go-live";
+export { seedDemoData } from "./tenant/demo";
+/** Kept with the rates for the app's Rates page; the domain owns it. */
+export { PRICE_HORIZON_DAYS } from "@hoteloftware/domain";
 export { getFloorLanguage, getPreferences, getWorkspace, setFloorLanguage, setPinnedTabs, setPreferences, type PinnedTab, type Preferences, type Workspace } from "./control/preferences";
 export { assertTenantSlug, isTenantSlug, resolveTenantSlug, tenantSchemaFromSlug } from "@hoteloftware/domain";
 export { assertTenantSchemaName, inTenantTransaction, isTenantSchemaName, withTenant } from "./tenant/with-tenant";
@@ -101,7 +105,6 @@ export {
   createEventMarker,
   deleteEventMarker,
   listEventMarkers,
-  PRICE_HORIZON_DAYS,
   type EventMarker,
   type RatesTool,
   applyGridEdit,

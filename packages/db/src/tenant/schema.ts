@@ -463,6 +463,7 @@ export const companies = pgTable(
   "companies",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    test: boolean("test").notNull().default(sql`in_test_mode()`),
     name: text("name").notNull(),
     vatId: text("vat_id"),
     addressLine1: text("address_line1").notNull().default(""),
@@ -507,6 +508,7 @@ export const guests = pgTable(
   "guests",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    test: boolean("test").notNull().default(sql`in_test_mode()`),
     firstName: text("first_name").notNull().default(""),
     lastName: text("last_name").notNull(),
     dateOfBirth: date("date_of_birth"),
@@ -582,6 +584,7 @@ export const bookings = pgTable(
   "bookings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    test: boolean("test").notNull().default(sql`in_test_mode()`),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
     confirmationNumber: text("confirmation_number").notNull().default(sql`nextval('booking_number_seq')::text`),
     bookerGuestId: uuid("booker_guest_id").references(() => guests.id),
@@ -608,6 +611,7 @@ export const reservations = pgTable(
   "reservations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    test: boolean("test").notNull().default(sql`in_test_mode()`),
     bookingId: uuid("booking_id").notNull().references(() => bookings.id),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
     roomTypeId: uuid("room_type_id").notNull().references(() => roomTypes.id),
@@ -949,6 +953,7 @@ export const invoices = pgTable(
   "invoices",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    test: boolean("test").notNull().default(sql`in_test_mode()`),
     legalEntityId: uuid("legal_entity_id").notNull().references(() => legalEntities.id),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
     reservationId: uuid("reservation_id").notNull().references(() => reservations.id),

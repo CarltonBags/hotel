@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { findTenantById } from "@hoteloftware/db";
+import { deleteExpiredDemoTenants, findTenantById } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
@@ -93,6 +93,9 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
   await boss.work(QUEUES.maintenance, async () => {
     const pruned = await pruneNotifications(pool, 30);
     if (pruned) console.log(`[maintenance] pruned ${pruned} old notifications`);
+    // a demo trial is deleted 30 days after it ended (ticket 87)
+    const demos = await deleteExpiredDemoTenants(pool);
+    if (demos.length) console.log(`[maintenance] deleted demo tenants ${demos.join(", ")}`);
   });
   await boss.schedule(QUEUES.maintenance, "15 3 * * *", {}, { tz: "Europe/Berlin" });
 

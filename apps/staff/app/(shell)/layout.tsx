@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { dueTourismReports, findProperty } from "@hoteloftware/db";
+import { dueTourismReports, findProperty, tenantLifecycle } from "@hoteloftware/db";
 import { isSupportConsoleUser } from "@/lib/support";
 import { endSupportAccessAction } from "./support/actions";
-import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, type PropertyAction } from "@hoteloftware/domain";
+import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, trialDaysLeft, type PropertyAction } from "@hoteloftware/domain";
 import { IdleLock } from "@/app/device/idle-lock";
 import { pool } from "@/lib/db";
 import { fill } from "@/i18n/messages";
@@ -66,8 +66,24 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       </form>
     </div>
   ) : null;
-  const banners = banner || statsBanner || supportBanner ? (
+  // Test Mode (ticket 87): for everyone, until go-live
+  const life = await tenantLifecycle(pool(), tenant.id);
+  const daysLeft = life.trialEndsAt ? trialDaysLeft(life.trialEndsAt, now) : null;
+  const testBanner = life.liveAt ? null : (
+    <div role="status" data-test-mode className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl bg-warning/25 px-4 py-2 text-sm print:hidden">
+      <span className="font-medium">{m["golive.banner"]}</span>
+      {daysLeft !== null ? <span>{daysLeft > 0 ? fill(m["golive.trialLeft"], { n: daysLeft }) : m["golive.trialEnded"]}</span> : null}
+      {life.trialKind === "demo" ? <span>{m["golive.demo"]}</span> : null}
+      {can(actor, "manage_tenant_settings") ? (
+        <Link href="/settings/go-live" className="font-medium underline">
+          {m["golive.open"]}
+        </Link>
+      ) : null}
+    </div>
+  );
+  const banners = banner || statsBanner || supportBanner || testBanner ? (
     <>
+      {testBanner}
       {supportBanner}
       {banner}
       {statsBanner}
