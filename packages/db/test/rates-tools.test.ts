@@ -1,3 +1,4 @@
+import { PRICE_HORIZON_DAYS } from "@hoteloftware/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import { addDays } from "@hoteloftware/domain";
@@ -9,7 +10,7 @@ import { createProperty } from "../src/tenant/properties";
 import { createRoomType } from "../src/tenant/rooms";
 import { createCancellationPolicy, createPaymentPolicy } from "../src/tenant/policies";
 import { createRatePlan } from "../src/tenant/rate-plans";
-import { PRICE_HORIZON_DAYS, applyRatesTool, createEventMarker, deleteEventMarker, listEventMarkers, listPriceEnds, listRates, listRestrictions, setRates, setRestrictions, undoLastChange } from "../src/tenant/rates";
+import { applyRatesTool, createEventMarker, deleteEventMarker, listEventMarkers, listPriceEnds, listRates, listRestrictions, setRates, setRestrictions, undoLastChange } from "../src/tenant/rates";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**

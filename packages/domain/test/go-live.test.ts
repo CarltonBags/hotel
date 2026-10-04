@@ -3,8 +3,7 @@ import { DEMO_KEPT_DAYS, TRIAL_DAYS, demoDeletionDue, goLiveBlockers, goLiveChec
 
 const ready: GoLiveFacts = {
   legalEntities: [{ name: "Alpha GmbH", hasTaxData: true, hasTaxCodes: true, hasInvoiceNumbering: true, card: null }],
-  properties: [{ name: "Berlin", rooms: 12, pricedThrough: "2028-02-17", cityTaxRule: true }],
-  today: "2026-10-04",
+  properties: [{ name: "Berlin", rooms: 12, pricedThrough: "2028-02-17", cityTaxRule: true, today: "2026-10-04" }],
   staffUsers: 3,
   devices: 0,
 };
@@ -22,10 +21,17 @@ describe("go-live checklist", () => {
       ...ready,
       legalEntities: [{ ...ready.legalEntities[0]!, hasTaxData: false, hasInvoiceNumbering: false }],
       // prices only 400 days ahead, where 500 are required
-      properties: [{ name: "Berlin", rooms: 0, pricedThrough: "2027-11-08", cityTaxRule: false }],
-      staffUsers: 1,
+      properties: [{ name: "Berlin", rooms: 0, pricedThrough: "2027-11-08", cityTaxRule: false, today: "2026-10-04" }],
+      staffUsers: 0,
     };
     expect(goLiveBlockers(goLiveChecklist(facts)).map((i) => i.id).sort()).toEqual(["city_tax", "invoice_numbering", "legal_entity_tax", "rates_500_days", "rooms", "users"]);
+  });
+
+  it("each property's price horizon counts from its own date", () => {
+    const two = { ...ready, properties: [ready.properties[0]!, { name: "Tokyo", rooms: 5, pricedThrough: "2028-02-17", cityTaxRule: true, today: "2026-10-05" }] };
+    expect(goLiveBlockers(goLiveChecklist(two))).toEqual([]);
+    const late = { ...ready, properties: [ready.properties[0]!, { name: "Tokyo", rooms: 5, pricedThrough: "2028-02-17", cityTaxRule: true, today: "2026-10-06" }] };
+    expect(goLiveBlockers(goLiveChecklist(late))).toMatchObject([{ id: "rates_500_days", missing: ["Tokyo"] }]);
   });
 
   it("prices exactly 500 days ahead are enough", () => {

@@ -15,6 +15,7 @@ export const tenants = control.table("tenants", {
   trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
   goLiveCheckedBy: text("go_live_checked_by").references((): AnyPgColumn => user.id, { onDelete: "set null" }),
   goLiveCheckedAt: timestamp("go_live_checked_at", { withTimezone: true }),
+  goLiveCheckedSetup: jsonb("go_live_checked_setup"),
   liveAt: timestamp("live_at", { withTimezone: true }),
 });
 

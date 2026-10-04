@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { goLiveBlockers, goLiveChecklist, todayIn, type ChecklistItem, type GoLiveFacts, type TrialKind } from "@hoteloftware/domain";
+import { goLiveBlockers, goLiveChecklist, type ChecklistItem, type GoLiveFacts, type TrialKind } from "@hoteloftware/domain";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -36,18 +36,18 @@ export async function tenantLifecycle(pool: Pool, tenantId: string): Promise<Ten
 }
 
 async function factsIn(tx: PoolClient, tenantId: string): Promise<GoLiveFacts> {
-  const les = await tx.query<{ name: string; tax: boolean; codes: boolean; numbering: boolean; charges_enabled: boolean | null }>(
+  const legalEntities = await tx.query<{ name: string; tax: boolean; codes: boolean; numbering: boolean; charges_enabled: boolean | null }>(
     `select l.name, (coalesce(l.vat_id, '') <> '' or coalesce(l.tax_number, '') <> '') as tax,
        exists (select 1 from tax_codes c where c.legal_entity_id = l.id) as codes,
        exists (select 1 from invoice_number_ranges r where r.legal_entity_id = l.id and r.kind = 'final') as numbering,
        a.charges_enabled
      from legal_entities l left join payment_accounts a on a.legal_entity_id = l.id order by l.name`,
   );
-  const props = await tx.query<{ name: string; rooms: number; priced_through: string | null; city_tax: boolean; business_date: string }>(
+  const props = await tx.query<{ name: string; rooms: number; priced_through: string | null; city_tax: boolean; today: string }>(
     `select p.name, (select count(*)::int from rooms r where r.property_id = p.id) as rooms,
        (select to_char(max(x.date), 'YYYY-MM-DD') from rates x join rate_plans rp on rp.id = x.rate_plan_id where rp.property_id = p.id) as priced_through,
        exists (select 1 from city_tax_rules c where c.property_id = p.id) as city_tax,
-       to_char(p.business_date, 'YYYY-MM-DD') as business_date
+       to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today
      from properties p order by p.name`,
   );
   const users = await tx.query<{ n: number }>(
@@ -55,11 +55,9 @@ async function factsIn(tx: PoolClient, tenantId: string): Promise<GoLiveFacts> {
     [tenantId],
   );
   const devices = await tx.query<{ n: number }>("select count(*)::int as n from control.devices where tenant_id = $1 and revoked_at is null", [tenantId]);
-  const dates = props.rows.map((p) => p.business_date).sort();
   return {
-    legalEntities: les.rows.map((l) => ({ name: l.name, hasTaxData: l.tax, hasTaxCodes: l.codes, hasInvoiceNumbering: l.numbering, card: l.charges_enabled === null ? null : { chargesEnabled: l.charges_enabled } })),
-    properties: props.rows.map((p) => ({ name: p.name, rooms: p.rooms, pricedThrough: p.priced_through, cityTaxRule: p.city_tax })),
-    today: dates.at(-1) ?? todayIn("Europe/Berlin"),
+    legalEntities: legalEntities.rows.map((l) => ({ name: l.name, hasTaxData: l.tax, hasTaxCodes: l.codes, hasInvoiceNumbering: l.numbering, card: l.charges_enabled === null ? null : { chargesEnabled: l.charges_enabled } })),
+    properties: props.rows.map((p) => ({ name: p.name, rooms: p.rooms, pricedThrough: p.priced_through, cityTaxRule: p.city_tax, today: p.today })),
     staffUsers: users.rows[0]!.n,
     devices: devices.rows[0]!.n,
   };
@@ -100,18 +98,37 @@ export async function testRecordCounts(pool: Pool, schema: string): Promise<Test
   return withTenant(pool, schema, countsIn);
 }
 
-/** The platform's support staff confirm the checklist (null takes the confirmation back). */
-export async function markGoLiveChecked(pool: Pool, tenantId: string, staffUserId: string | null): Promise<void> {
-  const { rowCount } = await pool.query(
-    "update control.tenants set go_live_checked_by = $2, go_live_checked_at = case when $2::text is null then null else now() end where id = $1 and live_at is null",
-    [tenantId, staffUserId],
-  );
-  if (!rowCount) throw new Error("This tenant is already live");
+/** What the staff check covers: the setup, without the date (which moves daily) and the optional Devices. */
+function checkedSetup(f: GoLiveFacts): string {
+  return JSON.stringify({ legalEntities: f.legalEntities, properties: f.properties.map(({ today: _today, ...p }) => p), staffUsers: f.staffUsers });
+}
+
+/** The platform's support staff confirm the checklist as the setup stands now (null takes the confirmation back). */
+export async function markGoLiveChecked(pool: Pool, tenant: { id: string; schemaName: string }, staffUserId: string | null): Promise<void> {
+  await withTenant(pool, tenant.schemaName, async (tx) => {
+    const setup = staffUserId ? checkedSetup(await factsIn(tx, tenant.id)) : null;
+    const { rowCount } = await tx.query(
+      `update control.tenants set go_live_checked_by = $2, go_live_checked_at = case when $2::text is null then null else now() end, go_live_checked_setup = $3::jsonb
+       where id = $1 and live_at is null`,
+      [tenant.id, staffUserId, setup],
+    );
+    if (!rowCount) throw new Error("This tenant is already live");
+  });
+}
+
+/** Whether the setup still is what our staff checked. */
+export async function goLiveCheckCurrent(pool: Pool, tenant: { id: string; schemaName: string }): Promise<boolean> {
+  return withTenant(pool, tenant.schemaName, async (tx) => {
+    const setup = checkedSetup(await factsIn(tx, tenant.id));
+    // compared as jsonb: key order does not matter
+    const t = (await tx.query<{ same: boolean }>("select go_live_checked_setup = $2::jsonb as same from control.tenants where id = $1", [tenant.id, setup])).rows[0];
+    return t?.same === true;
+  });
 }
 
 export class GoLiveBlocked extends Error {
   constructor(readonly blockers: ChecklistItem[]) {
-    super(`Go-live needs: ${blockers.map((b) => b.id).join(", ")}`);
+    super("Complete the required checklist items first");
   }
 }
 
@@ -123,18 +140,26 @@ export class GoLiveBlocked extends Error {
  */
 export async function goLive(pool: Pool, tenant: { id: string; schemaName: string }): Promise<TestRecordCounts> {
   return withTenant(pool, tenant.schemaName, async (tx) => {
-    const t = (await tx.query<{ live_at: Date | null; go_live_checked_at: Date | null; trial_kind: TrialKind | null }>("select live_at, go_live_checked_at, trial_kind from control.tenants where id = $1 for update", [tenant.id])).rows[0];
+    // every write in the tenant references a property (and takes a row share lock on the table): exclusive mode makes them wait,
+    // so no record made while testing commits after the clearing has looked
+    await tx.query("lock table properties in exclusive mode");
+    const facts = await factsIn(tx, tenant.id);
+    const t = (await tx.query<{ live_at: Date | null; checked: boolean; current: boolean; trial_kind: TrialKind | null }>(
+      "select live_at, go_live_checked_setup is not null as checked, go_live_checked_setup = $2::jsonb as current, trial_kind from control.tenants where id = $1 for update",
+      [tenant.id, checkedSetup(facts)],
+    )).rows[0];
     if (!t) throw new Error("Tenant not found");
     if (t.live_at || !(await inTestMode(tx))) throw new Error("This tenant is already live");
     // nothing of the demo carries over but the user
     if (t.trial_kind === "demo") throw new Error("A demo tenant does not go live; a tenant with your own data does");
-    const blockers = goLiveBlockers(goLiveChecklist(await factsIn(tx, tenant.id)));
+    const blockers = goLiveBlockers(goLiveChecklist(facts));
     if (blockers.length) throw new GoLiveBlocked(blockers);
-    if (!t.go_live_checked_at) throw new Error("Our support staff check the checklist before go-live");
-    // no record is written while the test records go
-    await tx.query("lock table properties in share row exclusive mode");
+    if (!t.checked) throw new Error("Our support staff check the checklist before go-live");
+    if (!t.current) throw new Error("The setup changed after our support staff checked it; ask for a new check");
     const cleared = await countsIn(tx);
     await tx.query("select set_config('hoteloftware.clearing_test_records', 'on', true)");
+    // In Test Mode no money moved and no document is real: every financial and operational record goes, also on an
+    // imported reservation (an import brings guests, companies and reservations, which stay)
     // money, documents and the Cash Book reference each other: one statement, constraints checked at its end
     await tx.query(
       `with m as (delete from receivable_matches), rm as (delete from reminders), rc as (delete from receipts), cm as (delete from cash_movements),

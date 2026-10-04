@@ -27,9 +27,9 @@ export interface GoLiveFacts {
     /** The last date some Rate Plan has prices for, or null. */
     pricedThrough: string | null;
     cityTaxRule: boolean;
+    /** The property's own calendar date: its first Business Date at go-live, from which the price horizon counts. */
+    today: string;
   }[];
-  /** The open Business Date (the latest across properties) the price horizon counts from. */
-  today: string;
   /** Active staff users, the Owner included. */
   staffUsers: number;
   devices: number;
@@ -53,7 +53,6 @@ function item(id: string, level: ChecklistLevel, missing: string[], used = true)
 
 /** The go-live checklist ("Onboarding and subscription"), worked out from the tenant's setup. */
 export function goLiveChecklist(f: GoLiveFacts): ChecklistItem[] {
-  const horizon = addDays(f.today, PRICE_HORIZON_DAYS);
   const les = (ok: (le: GoLiveFacts["legalEntities"][number]) => boolean) => (f.legalEntities.length ? f.legalEntities.filter((le) => !ok(le)).map((le) => le.name) : ["—"]);
   const props = (ok: (p: GoLiveFacts["properties"][number]) => boolean) => (f.properties.length ? f.properties.filter((p) => !ok(p)).map((p) => p.name) : ["—"]);
   const card = f.legalEntities.filter((le) => le.card);
@@ -61,11 +60,11 @@ export function goLiveChecklist(f: GoLiveFacts): ChecklistItem[] {
     item("legal_entity_tax", "required", les((le) => le.hasTaxData)),
     item("property", "required", f.properties.length ? [] : ["—"]),
     item("rooms", "required", props((p) => p.rooms > 0)),
-    item("rates_500_days", "required", props((p) => p.pricedThrough !== null && p.pricedThrough >= horizon)),
+    item("rates_500_days", "required", props((p) => p.pricedThrough !== null && p.pricedThrough >= addDays(p.today, PRICE_HORIZON_DAYS))),
     item("tax_codes", "required", les((le) => le.hasTaxCodes)),
     item("city_tax", "required", props((p) => p.cityTaxRule)),
-    // the Owner alone does not run a hotel
-    item("users", "required", f.staffUsers > 1 ? [] : ["—"]),
+    // a one-person guesthouse is run by its Owner alone
+    item("users", "required", f.staffUsers > 0 ? [] : ["—"]),
     item("invoice_numbering", "required", les((le) => le.hasInvoiceNumbering)),
     item("card_provider", "if_used", card.filter((le) => !le.card!.chargesEnabled).map((le) => le.name), card.length > 0),
     item("devices", "optional", f.devices > 0 ? [] : ["—"]),

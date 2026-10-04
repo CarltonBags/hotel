@@ -79,12 +79,14 @@ export async function setInvoiceNumberRange(pool: Pool, schema: string, legalEnt
  * range only when one is set up, else the final range. With a year in the
  * format the counter restarts each year.
  */
+const TEST_NUMBER_PREFIX = "TEST-";
+
 async function nextNumber(tx: PoolClient, legalEntityId: string, kind: RangeKind, issueDate: string): Promise<string> {
   // in Test Mode the real range is untouched: go-live starts it where it was set up
   if (await inTestMode(tx)) {
     await tx.query("select pg_advisory_xact_lock(hashtext('test-invoice:' || $1))", [legalEntityId]);
     const n = (await tx.query<{ n: number }>("select count(*)::int + 1 as n from invoices where legal_entity_id = $1 and test", [legalEntityId])).rows[0]!.n;
-    return `TEST-${String(n).padStart(5, "0")}`;
+    return `${TEST_NUMBER_PREFIX}${String(n).padStart(5, "0")}`;
   }
   const pick = async (k: RangeKind) =>
     (await tx.query<{ kind: RangeKind; format: string; next_value: number; counter_year: number | null }>(
@@ -232,7 +234,7 @@ export interface IssuedInvoice {
 type Stored = Pick<Context, "legalEntityId" | "propertyId" | "reservationId" | "currency">;
 
 async function storeInvoice(tx: PoolClient, ctx: Stored, folioId: string, issuedDoc: InvoiceDocument, extra: { receivable: boolean; paymentId: string | null; cancels?: string }, userId: string): Promise<IssuedInvoice> {
-  const doc: InvoiceDocument = (await inTestMode(tx)) ? { ...issuedDoc, test: true, notes: [LABELS[issuedDoc.language].testMark, ...issuedDoc.notes] } : issuedDoc;
+  const doc: InvoiceDocument = issuedDoc.number.startsWith(TEST_NUMBER_PREFIX) ? { ...issuedDoc, test: true, notes: [LABELS[issuedDoc.language].testMark, ...issuedDoc.notes] } : issuedDoc;
   // the document shows a Cancellation Invoice's totals as on the original; the books count them negative
   const sign = doc.kind === "cancellation" ? -1 : 1;
   const gross = sign * doc.totals.gross;

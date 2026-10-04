@@ -1,6 +1,5 @@
 import { resolve } from "node:path";
 
-
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is not set`);
@@ -37,6 +36,10 @@ export const env = {
   /** Self-service trial signup on the bare domain; "off" closes it. */
   get trialSignup() {
     return process.env.TRIAL_SIGNUP !== "off";
+  },
+  /** Trials that may start per hour, platform-wide. */
+  get trialsPerHour() {
+    return Number(process.env.TRIALS_PER_HOUR ?? 20);
   },
   /** Support contacts shown in the help centre (ticket 93); set them for production. */
   get supportEmail() {

@@ -9,8 +9,6 @@ export interface NewTenant {
   name: string;
   /** A self-service trial (ticket 87): 30 days in Test Mode, on demo data or the customer's own. */
   trial?: TrialKind;
-  /** Start in Test Mode without a trial (a customer set up by us); a trial always does. */
-  testMode?: boolean;
 }
 
 export interface Tenant {
@@ -37,7 +35,7 @@ export async function provisionTenant(pool: Pool, input: NewTenant, migrations: 
       schemaName,
     ]);
     if (existing.rowCount) throw new Error(`Tenant "${input.slug}" already exists`);
-    const testMode = input.trial !== undefined || input.testMode === true;
+    const testMode = input.trial !== undefined;
     const { rows } = await client.query<{ id: string }>(
       `insert into control.tenants (slug, name, schema_name, trial_kind, trial_ends_at, live_at)
        values ($1, $2, $3, $4, case when $4::text is null then null else now() + make_interval(hours => 24 * $5) end, case when $6 then null else now() end) returning id`,
@@ -86,13 +84,14 @@ export async function setTenantAccent(pool: Pool, tenantId: string, accent: stri
   await pool.query("update control.tenants set accent = $2 where id = $1", [tenantId, accent]);
 }
 
-/** Delete a tenant with all its data: schema, users, sessions, roles (control rows cascade). */
+/** Delete a tenant that never went live, with all its data: schema, users, sessions, roles (control rows cascade). A live tenant leaves by the exit process instead. */
 export async function deleteTenant(pool: Pool, tenantId: string): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const t = (await client.query<{ schema_name: string }>("select schema_name from control.tenants where id = $1 for update", [tenantId])).rows[0];
+    const t = (await client.query<{ schema_name: string; live_at: Date | null }>("select schema_name, live_at from control.tenants where id = $1 for update", [tenantId])).rows[0];
     if (!t) throw new Error("Tenant not found");
+    if (t.live_at) throw new Error("A live tenant is not deleted here");
     assertTenantSchemaName(t.schema_name);
     await client.query(`drop schema "${t.schema_name}" cascade`);
     await client.query("delete from control.tenants where id = $1", [tenantId]);
@@ -105,10 +104,23 @@ export async function deleteTenant(pool: Pool, tenantId: string): Promise<void> 
   }
 }
 
+/** How many trials started in the last hour: the public signup is capped platform-wide. */
+export async function trialsInLastHour(pool: Pool): Promise<number> {
+  return (await pool.query<{ n: number }>("select count(*)::int as n from control.tenants where trial_kind is not null and created_at > now() - interval '1 hour'")).rows[0]!.n;
+}
+
 /** Delete the demo tenants whose trial ended 30 days ago (a daily worker job); returns their slugs. */
 export async function deleteExpiredDemoTenants(pool: Pool, now = new Date()): Promise<string[]> {
   const { rows } = await pool.query<{ id: string; slug: string; trial_ends_at: Date }>("select id, slug, trial_ends_at from control.tenants where trial_kind = 'demo' and live_at is null");
-  const due = rows.filter((r) => demoDeletionDue(r.trial_ends_at, now));
-  for (const t of due) await deleteTenant(pool, t.id);
-  return due.map((t) => t.slug);
+  const deleted: string[] = [];
+  for (const tenant of rows.filter((r) => demoDeletionDue(r.trial_ends_at, now))) {
+    // one failure must not keep the others
+    try {
+      await deleteTenant(pool, tenant.id);
+      deleted.push(tenant.slug);
+    } catch (err) {
+      console.error(`[demo] could not delete ${tenant.slug}`, err);
+    }
+  }
+  return deleted;
 }

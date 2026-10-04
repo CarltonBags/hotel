@@ -1,4 +1,4 @@
-import { goLiveChecklistOf, tenantLifecycle, testRecordCounts, type TestRecordCounts } from "@hoteloftware/db";
+import { goLiveCheckCurrent, goLiveChecklistOf, tenantLifecycle, testRecordCounts, type TestRecordCounts } from "@hoteloftware/db";
 import { can, goLiveBlockers } from "@hoteloftware/domain";
 import { ActionForm } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
@@ -21,9 +21,9 @@ export default async function GoLivePage() {
       </div>
     );
   }
-  const [items, counts] = await Promise.all([goLiveChecklistOf(pool(), tenant.schemaName, tenant.id), testRecordCounts(pool(), tenant.schemaName)]);
+  const [items, counts, checkCurrent] = await Promise.all([goLiveChecklistOf(pool(), tenant.schemaName, tenant.id), testRecordCounts(pool(), tenant.schemaName), goLiveCheckCurrent(pool(), tenant)]);
   const blockers = goLiveBlockers(items);
-  const ready = blockers.length === 0 && life.checkedAt !== null && life.trialKind !== "demo";
+  const ready = blockers.length === 0 && checkCurrent && life.trialKind !== "demo";
   return (
     <div className="mx-auto grid max-w-3xl gap-6 p-6">
       <div>
@@ -48,12 +48,13 @@ export default async function GoLivePage() {
             );
           })}
         </ul>
-        <p className="text-sm" data-checked={life.checkedAt ? "yes" : "no"}>
+        <p className="text-sm" data-checked={!life.checkedAt ? "no" : checkCurrent ? "yes" : "stale"}>
           {life.checkedAt ? fill(m["golive.checked"], { name: life.checkedBy ?? "—", date: when(life.checkedAt) }) : m["golive.notChecked"]}
+          {life.checkedAt && !checkCurrent ? ` ${m["golive.stale"]}` : null}
         </p>
         {session.support ? (
-          <ActionForm action={markCheckedAction} submitLabel={life.checkedAt ? m["golive.unmark"] : m["golive.markChecked"]}>
-            <input type="hidden" name="checked" value={life.checkedAt ? "off" : "on"} />
+          <ActionForm action={markCheckedAction} submitLabel={checkCurrent ? m["golive.unmark"] : m["golive.markChecked"]}>
+            <input type="hidden" name="checked" value={checkCurrent ? "off" : "on"} />
           </ActionForm>
         ) : null}
       </section>

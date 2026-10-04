@@ -21,7 +21,7 @@ import { onboardPaymentAccount, placeCardHold, refreshPaymentAccount, takePaymen
 import { checkOut, invoiceDocument, listInvoices, setInvoiceNumberRange } from "../src/tenant/invoices";
 import { createCityTaxRule } from "../src/tenant/city-tax";
 import { closeNightAudit } from "../src/tenant/night-audit";
-import { GoLiveBlocked, goLive, goLiveChecklistOf, markGoLiveChecked, tenantLifecycle, testRecordCounts } from "../src/tenant/go-live";
+import { GoLiveBlocked, goLive, goLiveCheckCurrent, goLiveChecklistOf, markGoLiveChecked, tenantLifecycle, testRecordCounts } from "../src/tenant/go-live";
 import { seedDemoData } from "../src/tenant/demo";
 import { resetTestDatabase, testPool } from "./helpers";
 
@@ -143,8 +143,14 @@ describe("trial, Test Mode and go-live", () => {
     const preview = await testRecordCounts(pool, s());
     expect(preview).toMatchObject({ invoices: 1, guests: 1, payments: 1 });
     expect(preview.reservations).toBe(2);
-    await markGoLiveChecked(pool, tenant.id, "user_support");
+    await markGoLiveChecked(pool, tenant, "user_support");
     expect((await tenantLifecycle(pool, tenant.id)).checkedBy).toBe("Sam Support");
+    // a change after the check needs a new check
+    await createRooms(pool, s(), { propertyId: berlin, roomTypeId: dbl, numbers: ["104"] });
+    expect(await goLiveCheckCurrent(pool, tenant)).toBe(false);
+    await expect(goLive(pool, tenant)).rejects.toThrow(/setup changed/);
+    await markGoLiveChecked(pool, tenant, "user_support");
+    expect(await goLiveCheckCurrent(pool, tenant)).toBe(true);
     const cleared = await goLive(pool, tenant);
     expect(cleared.invoices).toBe(1);
     // test records gone; setup and imported records kept
@@ -153,7 +159,7 @@ describe("trial, Test Mode and go-live", () => {
         (select count(*)::int from $s.payments) as payments, (select count(*)::int from $s.night_audits) as audits, (select count(*)::int from $s.charges) as charges,
         (select count(*)::int from $s.rooms) as rooms, (select count(*)::int from $s.rates) as rates, (select count(*)::int from $s.city_tax_rules) as rules`,
     ))[0]!;
-    expect(left).toMatchObject({ reservations: 1, guests: 1, invoices: 0, payments: 0, audits: 0, charges: 0, rooms: 3, rules: 1 });
+    expect(left).toMatchObject({ reservations: 1, guests: 1, invoices: 0, payments: 0, audits: 0, charges: 0, rooms: 4, rules: 1 });
     expect(left.rates).toBeGreaterThan(500);
     expect((await q<{ id: string }>("select id from $s.reservations"))[0]!.id).toBe(importedRes);
     // live: the Business Date starts today, the next invoice gets the real number the range was set up with

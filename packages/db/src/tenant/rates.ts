@@ -303,7 +303,6 @@ async function loadGridState(tx: PoolClient, propertyId: string, from: string, t
   };
 }
 
-export { PRICE_HORIZON_DAYS };
 
 export type RatesTool =
   | { kind: "paste"; block: (number | null)[][]; rows: { ratePlanId: string; roomTypeId: string }[]; anchorDate: string }

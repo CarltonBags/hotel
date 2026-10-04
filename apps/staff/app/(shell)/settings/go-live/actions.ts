@@ -11,7 +11,7 @@ export async function markCheckedAction(_prev: FormState, formData: FormData): P
   return formAction(async () => {
     const { tenant, session } = await authorize("manage_tenant_settings");
     if (!session.support) throw new Error("Only our support staff check the checklist");
-    await markGoLiveChecked(pool(), tenant.id, flag(formData, "checked") ? session.user.id : null);
+    await markGoLiveChecked(pool(), tenant, flag(formData, "checked") ? session.user.id : null);
     revalidatePath("/settings/go-live");
   });
 }
