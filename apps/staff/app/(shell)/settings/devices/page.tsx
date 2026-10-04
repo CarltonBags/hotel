@@ -1,6 +1,6 @@
 import { listDevices, pinEvents, pinStates } from "@hoteloftware/auth";
 import { listTenantUsers } from "@hoteloftware/db";
-import { PIN_ROLES, can, canUsePin } from "@hoteloftware/domain";
+import { can, canUsePin, mayLookAfterPinUser, pinRolesFor } from "@hoteloftware/domain";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
@@ -23,12 +23,13 @@ export default async function DevicesSettingsPage() {
   }
   const { tenant, actor } = await requireAllowed("manage_floor_users", property.id);
   const manager = can(actor, "manage_devices", property.id);
-  const [users, devices, pins, events] = await Promise.all([listTenantUsers(pool(), tenant.id), manager ? listDevices(pool(), tenant.id, property.id) : [], pinStates(pool(), tenant.id), pinEvents(pool(), tenant.id)]);
+  const [users, devices, pins] = await Promise.all([listTenantUsers(pool(), tenant.id), manager ? listDevices(pool(), tenant.id, property.id) : [], pinStates(pool(), tenant.id)]);
   const name = new Map(users.map((u) => [u.id, u.name]));
   // people who sign in by PIN here; the Housekeeping Supervisor looks after Housekeepers
   const floor = users.filter((u) => !u.pendingInvitation && canUsePin({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, property.id));
   const roleAt = (u: (typeof users)[number]) => u.propertyRoles.filter((r) => r.propertyId === property.id).map((r) => r.role);
-  const mine = manager ? floor : floor.filter((u) => roleAt(u).every((r) => r === "housekeeper"));
+  const mine = floor.filter((u) => mayLookAfterPinUser(actor, { tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }));
+  const events = await pinEvents(pool(), tenant.id, mine.map((u) => u.id));
   const when = (d: Date | null) => (d ? new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "short", timeStyle: "short", timeZone: property.timeZone }).format(d) : "–");
   const deviceName = new Map(devices.map((d) => [d.id, d.name]));
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
@@ -135,7 +136,7 @@ export default async function DevicesSettingsPage() {
             {hidden}
             <Field label={m["dev.personName"]} name="name" required />
             <Field label={m["dev.username"]} name="username" required />
-            <Select label={m["dev.role"]} name="role" options={(manager ? PIN_ROLES : (["housekeeper"] as const)).map((r) => ({ value: r, label: m[`role.${r}`] }))} />
+            <Select label={m["dev.role"]} name="role" options={pinRolesFor(actor, property.id).map((r) => ({ value: r, label: m[`role.${r}`] }))} />
             <Field label={m["dev.firstPin"]} name="pin" type="password" autoComplete="new-password" required />
           </ActionForm>
         </details>
@@ -144,12 +145,9 @@ export default async function DevicesSettingsPage() {
       <section aria-label={m["dev.events"]} className={section}>
         <h2 className="font-medium">{m["dev.events"]}</h2>
         <ul className="grid gap-1">
-          {events
-            .filter((e) => mine.some((u) => u.id === e.userId) && e.kind !== "success")
-            .slice(0, 30)
-            .map((e, i) => (
+          {events.map((e, i) => (
               <li key={i}>
-                {when(e.at)} · {name.get(e.userId) ?? "?"} · {m[`dev.event.${e.kind as "wrong" | "lock" | "reset" | "changed"}`]}
+                {when(e.at)} · {name.get(e.userId) ?? "?"} · {m[`dev.event.${e.kind}`]}
                 {e.deviceId ? ` · ${deviceName.get(e.deviceId) ?? m["dev.aDevice"]}` : ""}
                 {e.byUserId && e.byUserId !== e.userId ? ` · ${name.get(e.byUserId) ?? "?"}` : ""}
               </li>

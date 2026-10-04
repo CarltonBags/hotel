@@ -5,7 +5,7 @@ import type { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { controlDb, controlSchema, emailForUsername, findTenantBySlug, setPropertyRoles, setUsername } from "@hoteloftware/db";
 import { PIN_ROLES, resolveTenantSlugFromHeaders, type PropertyRole } from "@hoteloftware/domain";
-import { DEVICE_COOKIE, cookieValue, devicePinPlugin, deviceSessionValid, setPin } from "./devices";
+import { DEVICE_COOKIE, checkDeviceSession, cookieValue, devicePinPlugin, setPin, type DeviceSession } from "./devices";
 
 export * from "./devices";
 
@@ -219,6 +219,8 @@ export async function verifyTenantCredentials(auth: Auth, pool: Pool, input: { t
 export interface TenantSession {
   user: { id: string; email: string; username: string | null; name: string; tenantId: string };
   session: { id: string; expiresAt: Date };
+  /** Signed in by PIN on this Device (ticket 14); null for a password session. */
+  device: DeviceSession | null;
 }
 
 /**
@@ -231,9 +233,11 @@ export async function getTenantSession(auth: Auth, pool: Pool, headers: Headers,
   if (!result) return null;
   const user = result.user as typeof result.user & { tenantId?: string; username?: string | null };
   if (user.tenantId !== tenantId) return null;
-  if (!(await deviceSessionValid(pool, result.session.id, cookieValue(headers, DEVICE_COOKIE)))) return null;
+  const device = await checkDeviceSession(pool, result.session.id, cookieValue(headers, DEVICE_COOKIE));
+  if (device === false) return null;
   return {
     user: { id: user.id, email: user.email, username: user.username ?? null, name: user.name, tenantId: user.tenantId },
     session: { id: result.session.id, expiresAt: result.session.expiresAt },
+    device,
   };
 }

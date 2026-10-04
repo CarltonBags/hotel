@@ -1,6 +1,4 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { pinSession } from "@hoteloftware/auth";
 import { findProperty } from "@hoteloftware/db";
 import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, type PropertyAction } from "@hoteloftware/domain";
 import { IdleLock } from "@/app/device/idle-lock";
@@ -15,10 +13,8 @@ import { PropertyChooser } from "@/shell/PropertyChooser";
 export default async function ShellLayout({ children }: { children: React.ReactNode }) {
   const shell = await loadShell();
   const { tenant, session, actor } = shell.principal;
-  // signed in by PIN on an enrolled Device (ticket 14): a first PIN is changed before anything else; the Device locks when idle
-  const onDevice = await pinSession(pool(), session.session.id);
-  if (onDevice?.mustChange) redirect("/device/pin");
-  const idleMinutes = onDevice ? deviceIdleMinutes((await findProperty(pool(), tenant.schemaName, onDevice.propertyId))?.deviceIdleMinutes) : null;
+  // signed in by PIN on an enrolled Device (ticket 14): the screen locks when idle
+  const idleMinutes = session.device ? deviceIdleMinutes((await findProperty(pool(), tenant.schemaName, session.device.propertyId))?.deviceIdleMinutes) : null;
   const propertyActions = (Object.keys(PROPERTY_ACTIONS) as PropertyAction[]).filter((a) => shell.properties.some((p) => can(actor, a, p.id)));
   // the Night Audit banner (ticket 32): for whoever runs the audit, while it is overdue or the Business Date lags
   const now = new Date();

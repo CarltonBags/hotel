@@ -3,8 +3,8 @@ import type { Pool } from "pg";
 import { APIError, createAuthEndpoint } from "better-auth/api";
 import { setSessionCookie } from "better-auth/cookies";
 import type { BetterAuthPlugin } from "better-auth";
-import { PIN_MAX_TRIES, canUsePin, pinProblem, resolveTenantSlugFromHeaders } from "@hoteloftware/domain";
-import { findTenantBySlug, loadActor } from "@hoteloftware/db";
+import { PIN_MAX_TRIES, canUsePin, deviceIdleMinutes, pinProblem, resolveTenantSlugFromHeaders } from "@hoteloftware/domain";
+import { findProperty, findTenantBySlug, loadActor } from "@hoteloftware/db";
 
 /**
  * Devices and PIN Sign-in (ticket 14, decided in "Shared-device login for
@@ -17,6 +17,7 @@ import { findTenantBySlug, loadActor } from "@hoteloftware/db";
 
 export const DEVICE_COOKIE = "hs_device";
 const ENROL_MINUTES = 15;
+const LOCKED = "Locked after too many wrong PINs; ask your supervisor to reset it";
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const secret = () => randomBytes(32).toString("base64url");
 
@@ -30,11 +31,15 @@ export async function createEnrolment(
   const name = input.name.trim().slice(0, 80);
   if (!name) throw new Error("Give the Device a name");
   if (input.kind !== "staff" && input.kind !== "guest") throw new Error("Staff or guest device");
+  // a guest device has no staff sign-in; the people named must be of this tenant
+  const people = input.kind === "guest" ? [] : [...new Set(input.ownerUserId ? [input.ownerUserId] : (input.userIds ?? []))];
+  const known = (await pool.query('select count(*)::int as n from control."user" where tenant_id = $1 and id = any($2::text[])', [input.tenantId, people])).rows[0].n;
+  if (known !== people.length) throw new Error("Unknown user");
   const code = secret();
   const { rows } = await pool.query<{ expires_at: Date }>(
     `insert into control.device_enrolments (code_hash, tenant_id, property_id, kind, name, owner_user_id, user_ids, created_by, expires_at)
      values ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $9)) returning expires_at`,
-    [hash(code), input.tenantId, input.propertyId, input.kind, name, input.ownerUserId ?? null, input.userIds ?? [], input.createdBy, ENROL_MINUTES],
+    [hash(code), input.tenantId, input.propertyId, input.kind, name, input.kind === "guest" ? null : (input.ownerUserId ?? null), input.ownerUserId ? [] : people, input.createdBy, ENROL_MINUTES],
   );
   return { code, expiresAt: rows[0]!.expires_at };
 }
@@ -114,41 +119,74 @@ export async function listDevices(pool: Pool, tenantId: string, propertyId?: str
   return rows.map((r) => ({ id: r.id, propertyId: r.property_id, kind: r.kind, name: r.name, ownerUserId: r.owner_user_id, userIds: r.user_ids ?? [], enrolledAt: r.enrolled_at, lastSeenAt: r.last_seen_at, lastUserId: r.last_user_id, revokedAt: r.revoked_at }));
 }
 
-/** Who may sign in on a shared staff Device. */
-export async function setDeviceUsers(pool: Pool, tenantId: string, deviceId: string, userIds: string[]): Promise<void> {
-  const d = (await pool.query("select 1 from control.devices where id = $1 and tenant_id = $2 and owner_user_id is null and revoked_at is null", [deviceId, tenantId])).rows.length;
-  if (!d) throw new Error("Device not found");
-  await pool.query("delete from control.device_users where device_id = $1", [deviceId]);
-  for (const u of new Set(userIds)) {
-    await pool.query("insert into control.device_users (device_id, user_id) select $1, id from control.\"user\" where id = $2 and tenant_id = $3", [deviceId, u, tenantId]);
+/** Who may sign in on a shared staff Device: people of the tenant, replaced in one go. */
+export async function setDeviceUsers(pool: Pool, scope: { tenantId: string; propertyId: string }, deviceId: string, userIds: string[]): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const shared = await client.query(
+      "select 1 from control.devices where id = $1 and tenant_id = $2 and property_id = $3 and owner_user_id is null and revoked_at is null for update",
+      [deviceId, scope.tenantId, scope.propertyId],
+    );
+    if (!shared.rowCount) throw new Error("Device not found");
+    await client.query("delete from control.device_users where device_id = $1", [deviceId]);
+    await client.query('insert into control.device_users (device_id, user_id) select $1, id from control."user" where tenant_id = $2 and id = any($3::text[])', [deviceId, scope.tenantId, [...new Set(userIds)]]);
+    await client.query("commit");
+  } catch (err) {
+    await client.query("rollback");
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
-/** Revoke a Device: every session on it ends at once; it is told to wipe its data when it next calls. */
-export async function revokeDevice(pool: Pool, tenantId: string, deviceId: string, byUserId: string): Promise<void> {
-  const { rowCount } = await pool.query("update control.devices set revoked_at = now(), revoked_by = $3 where id = $1 and tenant_id = $2 and revoked_at is null", [deviceId, tenantId, byUserId]);
-  if (!rowCount) throw new Error("Device not found");
+/** End every session on the Device. */
+async function endDeviceSessions(pool: Pool, deviceId: string): Promise<void> {
   await pool.query("delete from control.session where id in (select session_id from control.device_sessions where device_id = $1)", [deviceId]);
 }
 
-/**
- * A session made by PIN is valid only from its Device: the request must
- * carry that Device's token, and the Device must not be revoked. Any session
- * is refused from a revoked Device; other sessions are not concerned.
- */
-export async function deviceSessionValid(pool: Pool, sessionId: string, deviceToken: string | null | undefined): Promise<boolean> {
-  const { rows } = await pool.query<{ pinned: boolean; matches: boolean; revoked: boolean }>(
-    `select s.session_id is not null as pinned, d.token_hash = $2 as matches, d.revoked_at is not null as revoked
-     from control.devices d left join control.device_sessions s on s.device_id = d.id and s.session_id = $1
-     where d.id = (select device_id from control.device_sessions where session_id = $1) or d.token_hash = $2`,
-    [sessionId, deviceToken ? hash(deviceToken) : null],
-  );
-  if (rows.some((r) => r.matches && r.revoked)) return false;
-  const own = rows.find((r) => r.pinned);
-  return !own || (own.matches && !own.revoked);
+/** Revoke a Device: every session on it ends at once; it is told to wipe its data when it next calls. */
+export async function revokeDevice(pool: Pool, scope: { tenantId: string; propertyId: string }, deviceId: string, byUserId: string): Promise<void> {
+  const { rowCount } = await pool.query("update control.devices set revoked_at = now(), revoked_by = $4 where id = $1 and tenant_id = $2 and property_id = $3 and revoked_at is null", [deviceId, scope.tenantId, scope.propertyId, byUserId]);
+  if (!rowCount) throw new Error("Device not found");
+  await endDeviceSessions(pool, deviceId);
 }
 
-async function event(pool: Pool, e: { tenantId: string; userId: string; deviceId: string | null; kind: "success" | "wrong" | "lock" | "reset" | "changed"; byUserId?: string | null }) {
+export interface DeviceSession {
+  deviceId: string;
+  propertyId: string;
+  /** A first or reset PIN: the user chooses their own before anything else. */
+  mustChange: boolean;
+}
+
+/**
+ * Check a session against Devices. A session made by PIN is valid only from
+ * its Device (the request carries that Device's token), while the Device is
+ * not revoked, and until it sits idle longer than its minutes; each request
+ * counts as use. Any session is refused from a revoked Device. Returns false
+ * when refused, null for a session not made by PIN, else its Device.
+ */
+export async function checkDeviceSession(pool: Pool, sessionId: string, deviceToken: string | null | undefined): Promise<DeviceSession | null | false> {
+  const tokenHash = deviceToken ? hash(deviceToken) : null;
+  if (tokenHash && (await pool.query("select 1 from control.devices where token_hash = $1 and revoked_at is not null", [tokenHash])).rowCount) return false;
+  const own = (await pool.query<{ device_id: string; property_id: string; matches: boolean; revoked: boolean; idle: boolean; must_change: boolean | null }>(
+    `select d.id as device_id, d.property_id, d.token_hash = $2 as matches, d.revoked_at is not null as revoked,
+       s.last_active_at < now() - make_interval(mins => s.idle_minutes) as idle,
+       (select p.must_change from control.session x join control.user_pins p on p.user_id = x.user_id where x.id = s.session_id) as must_change
+     from control.device_sessions s join control.devices d on d.id = s.device_id where s.session_id = $1`,
+    [sessionId, tokenHash],
+  )).rows[0];
+  if (!own) return null;
+  if (!own.matches || own.revoked) return false;
+  if (own.idle) {
+    await pool.query("delete from control.session where id = $1", [sessionId]);
+    return false;
+  }
+  await pool.query("update control.device_sessions set last_active_at = now() where session_id = $1", [sessionId]);
+  return { deviceId: own.device_id, propertyId: own.property_id, mustChange: own.must_change ?? false };
+}
+
+async function event(pool: Pool, e: { tenantId: string; userId: string; deviceId: string | null; kind: PinEventKind; byUserId?: string | null }) {
   await pool.query("insert into control.pin_events (tenant_id, user_id, device_id, kind, by_user_id) values ($1, $2, $3, $4, $5)", [e.tenantId, e.userId, e.deviceId, e.kind, e.byUserId ?? null]);
 }
 
@@ -171,6 +209,16 @@ export async function setPin(
   await event(pool, { tenantId: input.tenantId, userId: input.userId, deviceId: null, kind: input.userId === input.byUserId ? "changed" : "reset", byUserId: input.byUserId });
 }
 
+/**
+ * Choose one's own PIN, only while a first or reset PIN must be changed;
+ * otherwise someone holding an unlocked Device could take the PIN over.
+ */
+export async function chooseOwnPin(hashPin: (pin: string) => Promise<string>, pool: Pool, input: { tenantId: string; userId: string; pin: string }): Promise<void> {
+  const due = (await pool.query("select 1 from control.user_pins where user_id = $1 and must_change", [input.userId])).rowCount;
+  if (!due) throw new Error("Ask your supervisor for a new PIN to change it");
+  await setPin(hashPin, pool, { ...input, byUserId: input.userId, mustChange: false });
+}
+
 /** The PIN state of the tenant's users: who has one, who is locked. */
 export async function pinStates(pool: Pool, tenantId: string): Promise<Map<string, { locked: boolean; mustChange: boolean }>> {
   const { rows } = await pool.query<{ user_id: string; locked: boolean; must_change: boolean }>(
@@ -180,11 +228,13 @@ export async function pinStates(pool: Pool, tenantId: string): Promise<Map<strin
   return new Map(rows.map((r) => [r.user_id, { locked: r.locked, mustChange: r.must_change }]));
 }
 
-/** Lockouts and sign-ins by PIN, newest first. */
-export async function pinEvents(pool: Pool, tenantId: string, userId?: string): Promise<{ userId: string; deviceId: string | null; kind: string; byUserId: string | null; at: Date }[]> {
-  const { rows } = await pool.query<{ user_id: string; device_id: string | null; kind: string; by_user_id: string | null; at: Date }>(
-    "select user_id, device_id, kind, by_user_id, at from control.pin_events where tenant_id = $1 and ($2::text is null or user_id = $2) order by at desc limit 200",
-    [tenantId, userId ?? null],
+export type PinEventKind = "success" | "wrong" | "lock" | "reset" | "changed";
+
+/** PIN events of these users other than sign-ins (wrong PINs, lockouts, new PINs), newest first. */
+export async function pinEvents(pool: Pool, tenantId: string, userIds: string[]): Promise<{ userId: string; deviceId: string | null; kind: Exclude<PinEventKind, "success">; byUserId: string | null; at: Date }[]> {
+  const { rows } = await pool.query<{ user_id: string; device_id: string | null; kind: Exclude<PinEventKind, "success">; by_user_id: string | null; at: Date }>(
+    "select user_id, device_id, kind, by_user_id, at from control.pin_events where tenant_id = $1 and user_id = any($2::text[]) and kind <> 'success' order by at desc limit 50",
+    [tenantId, userIds],
   );
   return rows.map((r) => ({ userId: r.user_id, deviceId: r.device_id, kind: r.kind, byUserId: r.by_user_id, at: r.at }));
 }
@@ -227,22 +277,23 @@ export function devicePinPlugin(pool: Pool, appDomain: string) {
         )).rows[0];
         if (!row) {
           const known = (await pool.query("select 1 from control.user_pins where user_id = $1", [userId])).rowCount;
-          throw new APIError("FORBIDDEN", { message: known ? "Locked after too many wrong PINs; ask your supervisor to reset it" : "No PIN set yet; ask your supervisor" });
+          throw new APIError("FORBIDDEN", { message: known ? LOCKED : "No PIN set yet; ask your supervisor" });
         }
         const ok = row.tries <= PIN_MAX_TRIES && (await ctx.context.password.verify({ hash: row.pin_hash, password: pin }));
         if (!ok) {
           const lock = row.tries >= PIN_MAX_TRIES;
           if (lock) await pool.query("update control.user_pins set locked_at = now() where user_id = $1 and locked_at is null", [userId]);
           await event(pool, { tenantId: tenant.id, userId, deviceId: device.id, kind: lock ? "lock" : "wrong" });
-          throw new APIError("UNAUTHORIZED", { message: lock ? "Locked after too many wrong PINs; ask your supervisor to reset it" : `Wrong PIN (${PIN_MAX_TRIES - row.tries} tries left)` });
+          throw new APIError("UNAUTHORIZED", { message: lock ? LOCKED : `Wrong PIN (${PIN_MAX_TRIES - row.tries} tries left)` });
         }
         await pool.query("update control.user_pins set failed_count = 0 where user_id = $1", [userId]);
         // one person at a time on a Device: the previous session ends
-        await pool.query("delete from control.session where id in (select session_id from control.device_sessions where device_id = $1)", [device.id]);
+        await endDeviceSessions(pool, device.id);
         const session = await ctx.context.internalAdapter.createSession(userId);
         const user = await ctx.context.internalAdapter.findUserById(userId);
         if (!session || !user) throw new APIError("INTERNAL_SERVER_ERROR", { message: "Could not sign in" });
-        await pool.query("insert into control.device_sessions (session_id, device_id) values ($1, $2)", [session.id, device.id]);
+        const property = await findProperty(pool, tenant.schemaName, device.propertyId);
+        await pool.query("insert into control.device_sessions (session_id, device_id, idle_minutes) values ($1, $2, $3)", [session.id, device.id, deviceIdleMinutes(property?.deviceIdleMinutes)]);
         await pool.query("update control.devices set last_user_id = $2, last_seen_at = now() where id = $1", [device.id, userId]);
         await event(pool, { tenantId: tenant.id, userId, deviceId: device.id, kind: "success" });
         await setSessionCookie(ctx, { session, user });
@@ -250,16 +301,6 @@ export function devicePinPlugin(pool: Pool, appDomain: string) {
       }),
     },
   } satisfies BetterAuthPlugin;
-}
-
-/** For a session made by PIN: its Device and whether the user must still change their first PIN. Null for other sessions. */
-export async function pinSession(pool: Pool, sessionId: string): Promise<{ deviceId: string; propertyId: string; mustChange: boolean } | null> {
-  const r = (await pool.query<{ device_id: string; property_id: string; must_change: boolean | null }>(
-    `select d.id as device_id, d.property_id, p.must_change from control.device_sessions s join control.devices d on d.id = s.device_id
-     join control.session x on x.id = s.session_id left join control.user_pins p on p.user_id = x.user_id where s.session_id = $1`,
-    [sessionId],
-  )).rows[0];
-  return r ? { deviceId: r.device_id, propertyId: r.property_id, mustChange: r.must_change ?? false } : null;
 }
 
 /** The people who may sign in on a Device, for its lock screen: name and id only. */

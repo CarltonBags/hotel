@@ -3,10 +3,10 @@
  * floor staff"): floor and service roles sign in on an enrolled Device by
  * choosing their name and entering a personal PIN of 4 to 6 digits.
  */
-import type { Actor, PropertyRole } from "./permissions";
+import { can, type Actor, type PropertyRole } from "./permissions";
 
-/** Roles that may use PIN Sign-in; everyone else signs in with full credentials. */
-export const PIN_ROLES: readonly PropertyRole[] = ["housekeeper", "housekeeping_supervisor", "maintenance"];
+/** Floor and service roles may use PIN Sign-in; everyone else signs in with full credentials. */
+export const PIN_ROLES: readonly PropertyRole[] = ["housekeeper", "housekeeping_supervisor", "maintenance", "service", "spa_staff"];
 
 /** Five wrong PINs lock the user on every Device. */
 export const PIN_MAX_TRIES = 5;
@@ -33,4 +33,20 @@ export function pinProblem(pin: string): "format" | "simple" | null {
 /** Idle minutes before a Device locks: 1 to 10, default 2. */
 export function deviceIdleMinutes(setting: number | null | undefined): number {
   return setting && Number.isInteger(setting) && setting >= 1 && setting <= 10 ? setting : 2;
+}
+
+/** The PIN roles a user may give at the property: every one for the Property Manager, Housekeeper for the Housekeeping Supervisor. */
+export function pinRolesFor(viewer: Actor, propertyId: string): PropertyRole[] {
+  if (can(viewer, "manage_devices", propertyId)) return [...PIN_ROLES];
+  return can(viewer, "manage_floor_users", propertyId) ? ["housekeeper"] : [];
+}
+
+/**
+ * May the viewer create, reset or unlock this PIN user? A PIN works on every
+ * Device of the tenant, so every role the person holds, at every property,
+ * must be one the viewer may give there.
+ */
+export function mayLookAfterPinUser(viewer: Actor, target: Actor): boolean {
+  if (target.tenantRole !== undefined || target.propertyRoles.length === 0) return false;
+  return target.propertyRoles.every((r) => pinRolesFor(viewer, r.propertyId).includes(r.role));
 }

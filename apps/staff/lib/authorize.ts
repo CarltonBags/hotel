@@ -25,6 +25,8 @@ export const requirePrincipal = cache(async (): Promise<Principal> => {
   const current = await currentSession();
   // an enrolled Device goes to its lock screen (which also shows a revoked Device's wipe notice)
   if (!current) redirect((await cookies()).has(DEVICE_COOKIE) ? "/device" : "/sign-in");
+  // a first or reset PIN is changed before anything else
+  if (current.session.device?.mustChange) redirect("/device/pin");
   const actor = await loadActor(pool(), current.tenant.id, current.session.user.id);
   return { ...current, actor };
 });

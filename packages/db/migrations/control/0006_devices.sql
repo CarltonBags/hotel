@@ -44,7 +44,10 @@ create table control.device_enrolments (
 -- a sign-in made by PIN on a Device: valid only from that Device, ended when it is revoked
 create table control.device_sessions (
   session_id text primary key references control.session(id) on delete cascade,
-  device_id uuid not null references control.devices(id) on delete cascade
+  device_id uuid not null references control.devices(id) on delete cascade,
+  -- the session ends after this many minutes without a request (the property's setting at sign-in)
+  idle_minutes integer not null default 2 check (idle_minutes between 1 and 10),
+  last_active_at timestamptz not null default now()
 );
 create index device_sessions_device_idx on control.device_sessions(device_id);
 

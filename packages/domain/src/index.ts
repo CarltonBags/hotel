@@ -223,4 +223,4 @@ export {
   type TaskKind,
   type TaskRules,
 } from "./housekeeping";
-export { PIN_MAX_TRIES, PIN_ROLES, canUsePin, deviceIdleMinutes, pinProblem } from "./devices";
+export { PIN_MAX_TRIES, PIN_ROLES, canUsePin, deviceIdleMinutes, mayLookAfterPinUser, pinProblem, pinRolesFor } from "./devices";

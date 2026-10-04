@@ -11,7 +11,7 @@ export async function currentDevice(): Promise<DeviceInfo | null> {
   return deviceByToken(pool(), (await cookies()).get(DEVICE_COOKIE)?.value);
 }
 
-/** Keep the Device token: httpOnly, for as long as browsers allow (400 days), renewed on use. */
+/** Keep the Device token: httpOnly, for as long as browsers allow (400 days); renewed at each PIN Sign-in. */
 export async function keepDeviceToken(token: string): Promise<void> {
   (await cookies()).set(DEVICE_COOKIE, token, {
     httpOnly: true,

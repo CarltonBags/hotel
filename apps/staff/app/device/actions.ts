@@ -1,8 +1,8 @@
 "use server";
 
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { redeemEnrolment, setPin } from "@hoteloftware/auth";
+import { DEVICE_COOKIE, chooseOwnPin, redeemEnrolment } from "@hoteloftware/auth";
 import { auth } from "@/lib/auth";
 import { dropSessionCookies, takeSignInCookies } from "@/lib/auth-cookies";
 import { pool } from "@/lib/db";
@@ -45,7 +45,14 @@ export async function pinSignInAction(_prev: FormState, formData: FormData): Pro
   const body = (await response.json().catch(() => ({}))) as { message?: string; mustChange?: boolean };
   if (!response.ok) return { error: body.message ?? "Could not sign in." };
   await takeSignInCookies(response, tenant);
+  const token = (await cookies()).get(DEVICE_COOKIE)?.value;
+  if (token) await keepDeviceToken(token);
   redirect(body.mustChange ? "/device/pin" : "/");
+}
+
+/** A request on use, so the server counts the Device as active (its idle lock is checked there too). */
+export async function stillHereAction(): Promise<void> {
+  await currentSession();
 }
 
 /** Lock the Device: the session ends, the lock screen shows (idle lock, or the user leaves). */
@@ -62,8 +69,7 @@ export async function changePinAction(_prev: FormState, formData: FormData): Pro
     if (!current) redirect("/device");
     const pin = String(formData.get("pin") ?? "");
     if (pin !== String(formData.get("repeat") ?? "")) throw new Error("The two PINs differ");
-    const userId = current.session.user.id;
-    await setPin((await auth().$context).password.hash, pool(), { tenantId: current.tenant.id, userId, pin, byUserId: userId, mustChange: false });
+    await chooseOwnPin((await auth().$context).password.hash, pool(), { tenantId: current.tenant.id, userId: current.session.user.id, pin });
     redirect("/");
   });
 }

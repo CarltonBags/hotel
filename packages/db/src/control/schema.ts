@@ -222,8 +222,10 @@ export const deviceSessions = control.table(
   {
     sessionId: text("session_id").primaryKey().references(() => session.id, { onDelete: "cascade" }),
     deviceId: uuid("device_id").notNull().references(() => devices.id, { onDelete: "cascade" }),
+    idleMinutes: integer("idle_minutes").notNull().default(2),
+    lastActiveAt: timestamp("last_active_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("device_sessions_device_idx").on(t.deviceId)],
+  (t) => [index("device_sessions_device_idx").on(t.deviceId), check("device_sessions_idle_minutes_check", sql`${t.idleMinutes} between 1 and 10`)],
 );
 
 export const userPins = control.table("user_pins", {

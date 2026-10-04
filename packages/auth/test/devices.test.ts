@@ -11,6 +11,7 @@ import {
   deviceByToken,
   getTenantSession,
   listDevices,
+  chooseOwnPin,
   pinEvents,
   pinStates,
   redeemEnrolment,
@@ -109,6 +110,19 @@ describe("devices and PIN sign-in", () => {
     expect(await getTenantSession(auth, pool, sessionHeaders(second), alpha.id)).not.toBeNull();
   });
 
+  it("a PIN session ends after the Device sits idle longer than its minutes", async () => {
+    const res = await pinSignIn({ userId: hannaId, pin: "4826" });
+    expect((await getTenantSession(auth, pool, sessionHeaders(res), alpha.id))?.device).toMatchObject({ deviceId, propertyId: PROPERTY });
+    await pool.query("update control.device_sessions set last_active_at = now() - interval '3 minutes' where device_id = $1", [deviceId]);
+    expect(await getTenantSession(auth, pool, sessionHeaders(res), alpha.id)).toBeNull();
+  });
+
+  it("one's own PIN is chosen only while a first or reset PIN is due", async () => {
+    const hash = (await auth.$context).password.hash;
+    await chooseOwnPin(hash, pool, { tenantId: alpha.id, userId: hannaId, pin: "4826" });
+    await expect(chooseOwnPin(hash, pool, { tenantId: alpha.id, userId: hannaId, pin: "9157" })).rejects.toThrow(/supervisor/);
+  });
+
   it("Front Desk and other full-credential roles cannot use PIN Sign-in", async () => {
     // even with a PIN set and allowed on the Device
     await setPin((await auth.$context).password.hash, pool, { tenantId: alpha.id, userId: deskId, pin: "7391", byUserId: managerId, mustChange: false });
@@ -131,7 +145,7 @@ describe("devices and PIN sign-in", () => {
     // locked: even the right PIN is refused, on every Device
     expect((await pinSignIn({ userId: hannaId, pin: "4826" })).status).toBe(403);
     expect((await pinStates(pool, alpha.id)).get(hannaId)).toMatchObject({ locked: true });
-    const lock = (await pinEvents(pool, alpha.id, hannaId)).find((e) => e.kind === "lock");
+    const lock = (await pinEvents(pool, alpha.id, [hannaId])).find((e) => e.kind === "lock");
     expect(lock).toMatchObject({ deviceId });
     expect(Date.now() - lock!.at.getTime()).toBeLessThan(60_000);
 
@@ -142,7 +156,8 @@ describe("devices and PIN sign-in", () => {
 
   it("Revoked Device cannot reach the service and shows a wipe notice", async () => {
     const signedIn = await pinSignIn({ userId: hannaId, pin: "5173" });
-    await revokeDevice(pool, alpha.id, deviceId, managerId);
+    await expect(revokeDevice(pool, { tenantId: alpha.id, propertyId: "22222222-2222-4222-8222-222222222222" }, deviceId, managerId)).rejects.toThrow(/not found/);
+    await revokeDevice(pool, { tenantId: alpha.id, propertyId: PROPERTY }, deviceId, managerId);
     expect(await getTenantSession(auth, pool, sessionHeaders(signedIn), alpha.id)).toBeNull();
     const again = await pinSignIn({ userId: hannaId, pin: "5173" });
     expect(again.status).toBe(403);
