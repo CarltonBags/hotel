@@ -1,19 +1,20 @@
 import { NextResponse } from "next/server";
-import { supportSessionFor } from "@hoteloftware/db";
+import { redeemSupportHandoff } from "@hoteloftware/db";
 import { pool } from "@/lib/db";
-import { env } from "@/lib/env";
+import { env, tenantUrl } from "@/lib/env";
 import { SUPPORT_COOKIE, currentTenant } from "@/lib/tenant";
 
 /** A support access opened from the console arrives here on the customer's subdomain: the token becomes this browser's support session. */
 export async function GET(req: Request): Promise<Response> {
   const tenant = await currentTenant();
-  const token = new URL(req.url).searchParams.get("token") ?? "";
-  const access = tenant ? await supportSessionFor(pool(), token, tenant.id) : null;
-  if (!tenant || !access) return new Response("This support access is not valid here", { status: 403 });
+  // the one-time code from the console is used up here and exchanged for the session's own secret
+  const code = new URL(req.url).searchParams.get("code") ?? "";
+  const session = tenant ? await redeemSupportHandoff(pool(), code, tenant.id) : null;
+  if (!tenant || !session) return new Response("This support access is not valid here (the link works once, within two minutes)", { status: 403 });
   // the request's own URL may carry the internal host: go to the tenant's address
-  const scheme = env.authUrl.startsWith("https") ? "https" : "http";
-  const res = NextResponse.redirect(`${scheme}://${tenant.slug}.${env.appDomain}/`);
+  const res = NextResponse.redirect(tenantUrl(tenant.slug));
   // host-only, like the session cookie: it never reaches another tenant's subdomain
-  res.cookies.set(SUPPORT_COOKIE, token, { httpOnly: true, secure: env.authUrl.startsWith("https"), sameSite: "lax", path: "/", expires: access.expiresAt });
+  res.cookies.set(SUPPORT_COOKIE, session.secret, { httpOnly: true, secure: env.authUrl.startsWith("https"), sameSite: "lax", path: "/", expires: session.expiresAt });
+  res.headers.set("referrer-policy", "no-referrer");
   return res;
 }

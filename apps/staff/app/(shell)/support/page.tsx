@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
-import { isSupportStaff, listTenantsForSupport, statusPage } from "@hoteloftware/db";
-import { requirePrincipal } from "@/lib/authorize";
+import { INCIDENT_STATES } from "@hoteloftware/domain";
+import { listTenantsForSupport, statusPage } from "@hoteloftware/db";
+import { isSupportConsoleUser } from "@/lib/support";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { ActionForm, Field, Select } from "@/components/form-fields";
@@ -10,8 +11,7 @@ import { OpenTenant } from "./open-tenant";
 /** The support console (ticket 93): open a customer's tenant with a reason; run the status page. */
 export default async function SupportPage() {
   const { messages: m } = await loadShell();
-  const { session } = await requirePrincipal();
-  if (session.support || !(await isSupportStaff(pool(), session.user.id))) redirect("/not-allowed");
+  if (!(await isSupportConsoleUser())) redirect("/not-allowed");
   const [tenants, status] = await Promise.all([listTenantsForSupport(pool()), statusPage(pool())]);
   const section = "grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm";
   return (
@@ -31,11 +31,11 @@ export default async function SupportPage() {
         {status.open.map((i) => (
           <div key={i.id} data-incident={i.title} className="grid gap-2 rounded-xl bg-surface p-3">
             <p className="font-medium">
-              {i.title} · {i.impact}
+              {i.title} · {m[`support.impact.${i.impact}`]}
             </p>
             <ActionForm action={updateIncidentAction} submitLabel={m["support.publishUpdate"]} pendingLabel={m["action.saving"]} className="flex flex-wrap items-end gap-2">
               <input type="hidden" name="incidentId" value={i.id} />
-              <Select label={m["support.state"]} name="state" options={["investigating", "identified", "monitoring", "resolved"].map((s) => ({ value: s, label: s }))} />
+              <Select label={m["support.state"]} name="state" options={INCIDENT_STATES.map((s) => ({ value: s, label: m[`support.state.${s}`] }))} />
               <Field label={m["support.message"]} name="message" required />
             </ActionForm>
           </div>

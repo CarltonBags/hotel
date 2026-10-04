@@ -10,14 +10,21 @@ export const AVAILABILITY_TARGET = 99.95;
 export const MAINTENANCE_NOTICE_DAYS = 7;
 
 export type IncidentImpact = "minor" | "major";
+export const INCIDENT_STATES = ["investigating", "identified", "monitoring", "resolved"] as const;
+export type IncidentState = (typeof INCIDENT_STATES)[number];
 export type ServiceState = "operational" | "degraded" | "outage";
 
-/** The month's availability: minutes of major incidents (an outage) within the month, up to now for the current month. */
+/**
+ * The month's availability: minutes of major incidents (an outage) within the
+ * month, up to now for the current month, against all minutes of the month
+ * (the promise is per month: about 22 minutes).
+ */
 export function monthlyAvailability(month: string, incidents: { impact: IncidentImpact; startedAt: string; resolvedAt: string | null }[], now: Date): { downMinutes: number; percent: number; met: boolean } {
   const [y, m] = month.split("-").map(Number) as [number, number];
   const start = Date.UTC(y, m - 1, 1);
-  const end = Math.min(Date.UTC(y, m, 1), now.getTime());
-  const minutes = Math.max(1, (end - start) / 60_000);
+  const monthEnd = Date.UTC(y, m, 1);
+  const end = Math.min(monthEnd, now.getTime());
+  const minutes = (monthEnd - start) / 60_000;
   let down = 0;
   for (const i of incidents) {
     if (i.impact !== "major") continue;

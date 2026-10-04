@@ -13,7 +13,11 @@ create table control.support_accesses (
   staff_user_id text not null references control."user"(id),
   tenant_id uuid not null references control.tenants(id) on delete cascade,
   reason text not null constraint support_accesses_reason_check check (length(trim(reason)) >= 10),
-  token_hash text not null unique,
+  -- a one-time code carries the access to the customer's subdomain (used up within two minutes) ...
+  handoff_hash text not null unique,
+  handoff_expires_at timestamptz not null,
+  -- ... where it is exchanged for the session's own secret, never seen in a URL
+  session_hash text unique,
   started_at timestamptz not null default now(),
   expires_at timestamptz not null,
   ended_at timestamptz

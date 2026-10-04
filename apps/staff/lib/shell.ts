@@ -53,9 +53,10 @@ export const loadShell = cache(async (): Promise<ShellData> => {
           ? requested
           : "all";
   }
+  // a support access uses the staff member's display settings but keeps no workspace in the customer's tenant
   const [preferences, workspace] = await Promise.all([
     getPreferences(pool(), principal.session.user.id),
-    getWorkspace(pool(), principal.session.user.id, scope),
+    principal.session.support ? Promise.resolve({ pinnedTabs: [] }) : getWorkspace(pool(), principal.session.user.id, scope),
   ]);
   const accentId = principal.tenant.accent;
   return {
@@ -65,7 +66,7 @@ export const loadShell = cache(async (): Promise<ShellData> => {
     frontOffice,
     propertyChoices: frontOffice && available.length > 1 ? available : [],
     preferences,
-    quickAccess: preferences.quickAccess ?? defaultQuickAccess(principal.actor, properties.map((p) => p.id)),
+    quickAccess: (principal.session.support ? null : preferences.quickAccess) ?? defaultQuickAccess(principal.actor, properties.map((p) => p.id)),
     pinnedTabs: workspace.pinnedTabs,
     messages: messagesFor(preferences.language),
     language: preferences.language,

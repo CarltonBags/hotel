@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Pool } from "pg";
-import { maintenanceProblem, monthlyAvailability, serviceState, supportReasonProblem, type IncidentImpact, type ServiceState } from "@hoteloftware/domain";
+import { INCIDENT_STATES, maintenanceProblem, monthlyAvailability, serviceState, supportReasonProblem, type IncidentImpact, type IncidentState, type ServiceState } from "@hoteloftware/domain";
 
 /**
  * Support access and the status page (ticket 93, decided in "Support and
@@ -14,13 +14,24 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 /** A support access lasts a working session at most. */
 const ACCESS_HOURS = 8;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** The one-time code is used within this many minutes. */
+const HANDOFF_MINUTES = 2;
 
-export async function isSupportStaff(pool: Pool, userId: string): Promise<boolean> {
-  return (await pool.query("select 1 from control.support_staff where user_id = $1", [userId])).rowCount === 1;
+/**
+ * Support staff are users of the platform's own tenant listed as support
+ * staff; a user moved out of that tenant or taken off the list loses every
+ * access at once.
+ */
+const STAFF = `control.support_staff s join control."user" su on su.id = s.user_id join control.tenants st on st.id = su.tenant_id and st.slug = $PLATFORM`;
+
+export async function isSupportStaff(pool: Pool, userId: string, platformSlug: string): Promise<boolean> {
+  return (await pool.query(`select 1 from ${STAFF.replace("$PLATFORM", "$2")} where s.user_id = $1`, [userId, platformSlug])).rowCount === 1;
 }
 
 /** Make a user of the platform's own tenant support staff (from the command line). */
-export async function addSupportStaff(pool: Pool, userId: string, addedBy: string | null): Promise<void> {
+export async function addSupportStaff(pool: Pool, userId: string, addedBy: string | null, platformSlug: string): Promise<void> {
+  const inPlatform = await pool.query(`select 1 from control."user" u join control.tenants t on t.id = u.tenant_id where u.id = $1 and t.slug = $2`, [userId, platformSlug]);
+  if (!inPlatform.rowCount) throw new Error("Support staff are users of the platform's own tenant");
   await pool.query("insert into control.support_staff (user_id, added_by) values ($1, $2) on conflict do nothing", [userId, addedBy]);
 }
 
@@ -29,20 +40,38 @@ export async function listTenantsForSupport(pool: Pool): Promise<{ id: string; s
   return (await pool.query<{ id: string; slug: string; name: string }>("select id, slug, name from control.tenants order by name")).rows;
 }
 
-/** Open a customer's tenant: logged with person, time and reason; returns a one-session token for the tenant's subdomain. */
-export async function startSupportAccess(pool: Pool, input: { staffUserId: string; tenantId: string; reason: string }): Promise<{ accessId: string; token: string; slug: string }> {
+/**
+ * Open a customer's tenant: logged with person, time and reason. Returns a
+ * one-time code, used up within two minutes on the tenant's subdomain, where
+ * it is exchanged for the session's own secret (redeemSupportHandoff).
+ */
+export async function startSupportAccess(pool: Pool, input: { staffUserId: string; tenantId: string; reason: string; platformSlug: string }): Promise<{ accessId: string; handoff: string; slug: string }> {
   const problem = supportReasonProblem(input.reason);
   if (problem) throw new Error("Give the reason for the access (at least 10 characters), for example the ticket it serves");
-  if (!(await isSupportStaff(pool, input.staffUserId))) throw new Error("Only support staff open customers' tenants");
+  if (!(await isSupportStaff(pool, input.staffUserId, input.platformSlug))) throw new Error("Only support staff open customers' tenants");
   if (!UUID.test(input.tenantId)) throw new Error("Tenant not found");
   const tenant = (await pool.query<{ slug: string }>("select slug from control.tenants where id = $1", [input.tenantId])).rows[0];
   if (!tenant) throw new Error("Tenant not found");
-  const token = randomBytes(32).toString("base64url");
+  const handoff = randomBytes(32).toString("base64url");
   const { rows } = await pool.query<{ id: string }>(
-    "insert into control.support_accesses (staff_user_id, tenant_id, reason, token_hash, expires_at) values ($1, $2, $3, $4, now() + make_interval(hours => $5)) returning id",
-    [input.staffUserId, input.tenantId, input.reason.trim().slice(0, 500), hash(token), ACCESS_HOURS],
+    `insert into control.support_accesses (staff_user_id, tenant_id, reason, handoff_hash, handoff_expires_at, expires_at)
+     values ($1, $2, $3, $4, now() + make_interval(mins => $5), now() + make_interval(hours => $6)) returning id`,
+    [input.staffUserId, input.tenantId, input.reason.trim().slice(0, 500), hash(handoff), HANDOFF_MINUTES, ACCESS_HOURS],
   );
-  return { accessId: rows[0]!.id, token, slug: tenant.slug };
+  return { accessId: rows[0]!.id, handoff, slug: tenant.slug };
+}
+
+/** Exchange the one-time code for the session's own secret, once, on the access's own tenant. */
+export async function redeemSupportHandoff(pool: Pool, handoff: string, tenantId: string): Promise<{ secret: string; expiresAt: Date } | null> {
+  if (!handoff) return null;
+  const secret = randomBytes(32).toString("base64url");
+  const r = (await pool.query<{ expires_at: Date }>(
+    `update control.support_accesses set session_hash = $3, handoff_expires_at = now()
+     where handoff_hash = $1 and tenant_id = $2 and session_hash is null and handoff_expires_at > now() and ended_at is null and expires_at > now()
+     returning expires_at`,
+    [hash(handoff), tenantId, hash(secret)],
+  )).rows[0];
+  return r ? { secret, expiresAt: r.expires_at } : null;
 }
 
 export interface SupportSession {
@@ -54,21 +83,22 @@ export interface SupportSession {
   expiresAt: Date;
 }
 
-/** The support access a token stands for at this tenant, while it lasts. */
-export async function supportSessionFor(pool: Pool, token: string | null | undefined, tenantId: string): Promise<SupportSession | null> {
-  if (!token) return null;
+/** The support access a session secret stands for at this tenant, while it lasts and its staff member is still support staff. */
+export async function supportSessionFor(pool: Pool, secret: string | null | undefined, tenantId: string, platformSlug: string): Promise<SupportSession | null> {
+  if (!secret) return null;
   const r = (await pool.query<{ id: string; staff_user_id: string; name: string; email: string; reason: string; expires_at: Date }>(
-    `select a.id, a.staff_user_id, u.name, u.email, a.reason, a.expires_at from control.support_accesses a join control."user" u on u.id = a.staff_user_id
-     join control.support_staff s on s.user_id = a.staff_user_id
-     where a.token_hash = $1 and a.tenant_id = $2 and a.ended_at is null and a.expires_at > now()`,
-    [hash(token), tenantId],
+    `select a.id, a.staff_user_id, su.name, su.email, a.reason, a.expires_at from control.support_accesses a
+     join ${STAFF.replace("$PLATFORM", "$3")} on s.user_id = a.staff_user_id
+     where a.session_hash = $1 and a.tenant_id = $2 and a.ended_at is null and a.expires_at > now()`,
+    [hash(secret), tenantId, platformSlug],
   )).rows[0];
   return r ? { accessId: r.id, staffUserId: r.staff_user_id, staffName: r.name, staffEmail: r.email, reason: r.reason, expiresAt: r.expires_at } : null;
 }
 
-export async function endSupportAccess(pool: Pool, accessId: string): Promise<void> {
+/** End an access: by the support staff member, or by the customer's Owner (tenant given). */
+export async function endSupportAccess(pool: Pool, accessId: string, tenantId?: string): Promise<void> {
   if (!UUID.test(accessId)) return;
-  await pool.query("update control.support_accesses set ended_at = now() where id = $1 and ended_at is null", [accessId]);
+  await pool.query("update control.support_accesses set ended_at = now() where id = $1 and ended_at is null and ($2::uuid is null or tenant_id = $2)", [accessId, tenantId ?? null]);
 }
 
 export interface SupportAccessEntry {
@@ -156,9 +186,9 @@ export async function reportIncident(pool: Pool, input: { title: string; impact:
 }
 
 /** An update to an incident; "resolved" ends it. */
-export async function updateIncident(pool: Pool, incidentId: string, input: { state: "investigating" | "identified" | "monitoring" | "resolved"; message: string; at?: Date }, userId: string): Promise<void> {
+export async function updateIncident(pool: Pool, incidentId: string, input: { state: IncidentState; message: string; at?: Date }, userId: string): Promise<void> {
   if (!UUID.test(incidentId)) throw new Error("Incident not found");
-  if (!["investigating", "identified", "monitoring", "resolved"].includes(input.state)) throw new Error("Unknown state");
+  if (!INCIDENT_STATES.includes(input.state)) throw new Error("Unknown state");
   const message = input.message.trim().slice(0, 1000);
   if (!message) throw new Error("Write the update");
   const open = await pool.query("select 1 from control.status_incidents where id = $1 and resolved_at is null", [incidentId]);

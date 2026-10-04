@@ -16,6 +16,8 @@ describe("service status", () => {
     // the current month counts up to now; an open outage up to now
     const c = monthlyAvailability("2026-10", [{ impact: "major", startedAt: "2026-10-04T12:00:00Z", resolvedAt: null }], new Date("2026-10-04T12:20:00Z"));
     expect(c.downMinutes).toBe(20);
+    // judged against the whole month: 20 minutes early in the month still keep the promise
+    expect(c.met).toBe(true);
   });
 
   it("the service state follows the worst open incident", () => {

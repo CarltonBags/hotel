@@ -7,6 +7,7 @@ import {
   addSupportStaff,
   endSupportAccess,
   listSupportAccesses,
+  redeemSupportHandoff,
   reportIncident,
   scheduleMaintenance,
   startSupportAccess,
@@ -35,7 +36,8 @@ describe("support access and status page", () => {
     platform = await provisionTenant(pool, { slug: "platform", name: "Hoteloftware" }, tenantMigrations());
     hotel = await provisionTenant(pool, { slug: "alpha", name: "Alpha Hotels" }, tenantMigrations());
     await pool.query(`insert into control."user" (id, tenant_id, name, email) values ($1, $2, 'Sam Support', 'sam@hoteloftware.eu'), ($3, $4, 'Bob', 'bob@alpha.example')`, [sam, platform.id, bob, hotel.id]);
-    await addSupportStaff(pool, sam, null);
+    await addSupportStaff(pool, sam, null, "platform");
+    await expect(addSupportStaff(pool, bob, null, "platform")).rejects.toThrow(/platform/);
   });
 
   afterAll(async () => {
@@ -44,23 +46,47 @@ describe("support access and status page", () => {
   });
 
   it("support access without a reason is impossible; the Owner sees the entry", async () => {
-    await expect(startSupportAccess(pool, { staffUserId: sam, tenantId: hotel.id, reason: "" })).rejects.toThrow(/reason/);
-    await expect(startSupportAccess(pool, { staffUserId: sam, tenantId: hotel.id, reason: "help" })).rejects.toThrow(/reason/);
+    await expect(startSupportAccess(pool, { staffUserId: sam, tenantId: hotel.id, reason: "", platformSlug: "platform" })).rejects.toThrow(/reason/);
+    await expect(startSupportAccess(pool, { staffUserId: sam, tenantId: hotel.id, reason: "help", platformSlug: "platform" })).rejects.toThrow(/reason/);
     // the database refuses it too
-    await expect(pool.query("insert into control.support_accesses (staff_user_id, tenant_id, reason, token_hash, expires_at) values ($1, $2, ' ', 'x', now())", [sam, hotel.id])).rejects.toThrow(/reason_check/);
+    await expect(pool.query("insert into control.support_accesses (staff_user_id, tenant_id, reason, handoff_hash, handoff_expires_at, expires_at) values ($1, $2, ' ', 'x', now(), now())", [sam, hotel.id])).rejects.toThrow(/reason_check/);
     // only support staff
-    await expect(startSupportAccess(pool, { staffUserId: bob, tenantId: hotel.id, reason: "Ticket 4711: invoice numbers" })).rejects.toThrow(/support staff/);
+    await expect(startSupportAccess(pool, { staffUserId: bob, tenantId: hotel.id, reason: "Ticket 4711: invoice numbers", platformSlug: "platform" })).rejects.toThrow(/support staff/);
 
-    const access = await startSupportAccess(pool, { staffUserId: sam, tenantId: hotel.id, reason: "Ticket 4711: invoice numbers" });
+    const access = await startSupportAccess(pool, { staffUserId: sam, tenantId: hotel.id, reason: "Ticket 4711: invoice numbers", platformSlug: "platform" });
     expect(access.slug).toBe("alpha");
-    expect(await supportSessionFor(pool, access.token, hotel.id)).toMatchObject({ staffName: "Sam Support", reason: "Ticket 4711: invoice numbers" });
-    // the token opens this tenant only
-    expect(await supportSessionFor(pool, access.token, platform.id)).toBeNull();
+    // the one-time code works once, on its own tenant, and is not itself a session
+    expect(await redeemSupportHandoff(pool, access.handoff, platform.id)).toBeNull();
+    expect(await supportSessionFor(pool, access.handoff, hotel.id, "platform")).toBeNull();
+    const session = (await redeemSupportHandoff(pool, access.handoff, hotel.id))!;
+    expect(session.secret).not.toBe(access.handoff);
+    expect(await redeemSupportHandoff(pool, access.handoff, hotel.id)).toBeNull();
+    expect(await supportSessionFor(pool, session.secret, hotel.id, "platform")).toMatchObject({ staffName: "Sam Support", reason: "Ticket 4711: invoice numbers" });
+    // the session secret opens this tenant only
+    expect(await supportSessionFor(pool, session.secret, platform.id, "platform")).toBeNull();
     const list = await listSupportAccesses(pool, hotel.id);
     expect(list).toEqual([expect.objectContaining({ staffName: "Sam Support", reason: "Ticket 4711: invoice numbers", endedAt: null })]);
-    await endSupportAccess(pool, access.accessId);
-    expect(await supportSessionFor(pool, access.token, hotel.id)).toBeNull();
+    // the Owner ends it
+    await endSupportAccess(pool, access.accessId, platform.id);
+    expect(await supportSessionFor(pool, session.secret, hotel.id, "platform")).not.toBeNull();
+    await endSupportAccess(pool, access.accessId, hotel.id);
+    expect(await supportSessionFor(pool, session.secret, hotel.id, "platform")).toBeNull();
     expect((await listSupportAccesses(pool, hotel.id))[0]!.endedAt).not.toBeNull();
+  });
+
+  it("an access ends with its expiry and when the staff member leaves support", async () => {
+    const open = async () => {
+      const a = await startSupportAccess(pool, { staffUserId: sam, tenantId: hotel.id, reason: "Ticket 4712: room setup check", platformSlug: "platform" });
+      return { id: a.accessId, secret: (await redeemSupportHandoff(pool, a.handoff, hotel.id))!.secret };
+    };
+    const expired = await open();
+    await pool.query("update control.support_accesses set expires_at = now() - interval '1 second' where id = $1", [expired.id]);
+    expect(await supportSessionFor(pool, expired.secret, hotel.id, "platform")).toBeNull();
+    const revoked = await open();
+    expect(await supportSessionFor(pool, revoked.secret, hotel.id, "platform")).not.toBeNull();
+    await pool.query("delete from control.support_staff where user_id = $1", [sam]);
+    expect(await supportSessionFor(pool, revoked.secret, hotel.id, "platform")).toBeNull();
+    await addSupportStaff(pool, sam, null, "platform");
   });
 
   it("the status page reflects an injected incident and the monthly figure", async () => {

@@ -411,6 +411,7 @@ export {
   isSupportStaff,
   listSupportAccesses,
   listTenantsForSupport,
+  redeemSupportHandoff,
   reportIncident,
   scheduleMaintenance,
   startSupportAccess,

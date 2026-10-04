@@ -1,10 +1,8 @@
 import { cache } from "react";
-import { headers } from "next/headers";
-import { findTenantBySlug, type Tenant } from "@hoteloftware/db";
+import { cookies, headers } from "next/headers";
+import { findTenantBySlug, supportSessionFor, type Tenant } from "@hoteloftware/db";
 import { resolveTenantSlugFromHeaders } from "@hoteloftware/domain";
-import { cookies } from "next/headers";
 import { getTenantSession, type TenantSession } from "@hoteloftware/auth";
-import { supportSessionFor } from "@hoteloftware/db";
 import { auth } from "./auth";
 import { pool } from "./db";
 import { env } from "./env";
@@ -30,7 +28,7 @@ export const currentSession = cache(async (): Promise<{ tenant: Tenant; session:
   const session = await getTenantSession(auth(), pool(), await headers(), tenant.id);
   if (session) return { tenant, session };
   // the platform's support staff, opened with a logged reason (ticket 93)
-  const support = await supportSessionFor(pool(), (await cookies()).get(SUPPORT_COOKIE)?.value, tenant.id);
+  const support = await supportSessionFor(pool(), (await cookies()).get(SUPPORT_COOKIE)?.value, tenant.id, env.platformSlug);
   if (!support) return null;
   return {
     tenant,

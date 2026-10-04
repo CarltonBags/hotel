@@ -2,6 +2,8 @@ import { listSupportAccesses } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
+import { ActionForm } from "@/components/form-fields";
+import { endAccessByOwnerAction } from "../../support/actions";
 
 /** Every access of the platform's support to this tenant: who, when, why (ticket 93). */
 export default async function SupportAccessPage() {
@@ -37,7 +39,18 @@ export default async function SupportAccessPage() {
               <td className="p-3 whitespace-nowrap">{when(e.startedAt)}</td>
               <td>{e.staffName}</td>
               <td>{e.reason}</td>
-              <td className="pr-3 whitespace-nowrap">{e.endedAt ? when(e.endedAt) : e.expiresAt > new Date() ? m["support.active"] : when(e.expiresAt)}</td>
+              <td className="pr-3 whitespace-nowrap">
+                {e.endedAt ? (
+                  when(e.endedAt)
+                ) : e.expiresAt > new Date() ? (
+                  <ActionForm action={endAccessByOwnerAction} submitLabel={m["support.endNow"]} className="flex items-center gap-2">
+                    <input type="hidden" name="accessId" value={e.id} />
+                    <span>{m["support.active"]}</span>
+                  </ActionForm>
+                ) : (
+                  when(e.expiresAt)
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

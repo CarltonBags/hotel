@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { dueTourismReports, findProperty, isSupportStaff } from "@hoteloftware/db";
+import { dueTourismReports, findProperty } from "@hoteloftware/db";
+import { isSupportConsoleUser } from "@/lib/support";
 import { endSupportAccessAction } from "./support/actions";
 import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, type PropertyAction } from "@hoteloftware/domain";
 import { IdleLock } from "@/app/device/idle-lock";
@@ -87,7 +88,7 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       accent={shell.accent}
       canManageTenant={can(actor, "manage_tenant_settings")}
       propertyActions={propertyActions}
-      supportStaff={!session.support && (await isSupportStaff(pool(), session.user.id))}
+      supportStaff={(await isSupportConsoleUser()) !== null}
     >
       {idleMinutes ? <IdleLock minutes={idleMinutes} /> : null}
       {/* a front-office user with several properties picks the one they work in first */}

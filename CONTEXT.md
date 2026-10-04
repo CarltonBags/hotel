@@ -563,6 +563,22 @@ _Avoid_: Migration, data load, upload
 The moment a property leaves test mode: test records are cleared, invoice numbering starts, and the first business date is set.
 _Avoid_: Launch, activation, cut-over
 
+**Support Staff**:
+People of the software provider who may open a customer's tenant through a Support Access.
+_Avoid_: Admin, operator, superuser
+
+**Support Access**:
+A time-limited entry of one Support Staff member into one customer's tenant, with a stated reason, visible to and endable by the customer's Owner.
+_Avoid_: Impersonation, login as, backdoor
+
+**Status Page**:
+The public page showing whether the service is up, current and past incidents, and planned Maintenance Windows.
+_Avoid_: Health page, uptime page
+
+**Maintenance Window**:
+A planned period, announced at least seven days ahead and inside the night hours, in which the service may be unavailable.
+_Avoid_: Downtime (Downtime is unplanned), outage
+
 ## Outlets
 
 **Outlet**:

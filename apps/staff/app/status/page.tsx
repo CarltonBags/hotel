@@ -1,7 +1,9 @@
 import { AVAILABILITY_TARGET } from "@hoteloftware/domain";
 import { statusPage } from "@hoteloftware/db";
 import { pool } from "@/lib/db";
+import { cookies } from "next/headers";
 import { deviceMessages } from "@/lib/device";
+import { LANGUAGE_COOKIE } from "@/lib/shell";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +11,8 @@ export const dynamic = "force-dynamic";
 export default async function StatusPage() {
   const m = await deviceMessages();
   const s = await statusPage(pool());
-  const when = (d: Date) => new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Berlin" }).format(d);
+  const de = (await cookies()).get(LANGUAGE_COOKIE)?.value === "de";
+  const when = (d: Date) => new Intl.DateTimeFormat(de ? "de-DE" : "en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Berlin" }).format(d);
   const tone = { operational: "bg-success/15 text-success", degraded: "bg-warning/20", outage: "bg-danger/15 text-danger" }[s.state];
   return (
     <main className="mx-auto grid max-w-2xl gap-6 p-6">
@@ -24,7 +27,7 @@ export default async function StatusPage() {
           </h2>
           {i.updates.map((u, k) => (
             <p key={k} className="text-sm">
-              <span className="font-medium">{u.state}</span> · {when(u.at)} · {u.message}
+              <span className="font-medium">{m[`support.state.${u.state as "investigating" | "identified" | "monitoring" | "resolved"}`]}</span> · {when(u.at)} · {u.message}
             </p>
           ))}
         </section>

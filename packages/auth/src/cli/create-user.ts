@@ -30,7 +30,7 @@ try {
   }
   if (tenantRole === "support") {
     await setTenantRole(pool, { tenantId: tenant.id, userId: user.id, role: "tenant_admin" });
-    await addSupportStaff(pool, user.id, null);
+    await addSupportStaff(pool, user.id, null, process.env.PLATFORM_TENANT_SLUG ?? "platform");
   }
   console.log(`created user ${email} (${user.id}) in tenant ${slug}${tenantRole ? ` as ${tenantRole}` : ""}`);
 } finally {
