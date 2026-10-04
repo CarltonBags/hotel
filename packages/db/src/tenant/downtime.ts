@@ -67,7 +67,7 @@ export async function downtimeSet(pool: Pool, schema: string, propertyId: string
     if (!p) throw new Error("Property not found");
     const rack = (await tx.query<{ id: string; number: string; floor: string; type: string; cleanliness: string; block: string | null; guest: string | null; persons: number | null; departure: string | null; next_guest: string | null; next_arrival: string | null }>(
       `select m.id, m.number, m.floor, t.name as type, m.cleanliness,
-         (select b.kind || ': ' || b.reason from room_blocks b where b.room_id = m.id and b.from_date <= $2 and b.to_date > $2 limit 1) as block,
+         (select b.kind || ': ' || b.reason from room_blocks b where b.room_id = m.id and b.from_date <= $2 and b.to_date > $2 order by b.from_date limit 1) as block,
          occ.guest, occ.persons, occ.departure, nxt.guest as next_guest, nxt.arrival as next_arrival
        from rooms m join room_types t on t.id = m.room_type_id
        left join lateral (
@@ -226,12 +226,13 @@ const ACTION: Record<CatchUpKind, string> = { check_in: "check_in", check_out: "
  * Business Date (a closed day stays closed). The record keeps the real time
  * beside its entry time and is thereby marked as entered after an outage.
  */
-export async function catchUp(pool: Pool, schema: string, provider: PaymentProvider, input: CatchUpInput, userId: string): Promise<void> {
+export async function catchUp(pool: Pool, schema: string, provider: PaymentProvider, propertyId: string, input: CatchUpInput, userId: string): Promise<void> {
   if (!isUuid(input.reservationId)) throw new Error("Reservation not found");
   if (Number.isNaN(input.realAt.getTime())) throw new Error("Give the time it really happened");
   const ctx = await withTenant(pool, schema, async (tx) => {
     const r = (await tx.query<{ property_id: string }>("select property_id from reservations where id = $1", [input.reservationId])).rows[0];
-    if (!r) throw new Error("Reservation not found");
+    // the caller authorised this property: a reservation of another one is not found here
+    if (!r || r.property_id !== propertyId) throw new Error("Reservation not found");
     const outages = (await tx.query<{ started_at: Date; ended_at: Date | null }>("select started_at, ended_at from property_outages where property_id = $1", [r.property_id])).rows;
     const lastClose = (await tx.query<{ at: Date | null }>("select max(closed_at) as at from night_audits where property_id = $1 and status = 'closed'", [r.property_id])).rows[0]!.at;
     return { propertyId: r.property_id, outages: outages.map((o) => ({ startedAt: o.started_at, endedAt: o.ended_at })), lastClose };

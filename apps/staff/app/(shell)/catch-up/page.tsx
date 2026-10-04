@@ -21,16 +21,18 @@ export default async function CatchUpPage() {
   }
   const { tenant } = await requireAllowed("use_downtime", property.id);
   const s = tenant.schemaName;
-  const [outages, arrivals, inHouse, rooms] = await Promise.all([
+  const [outages, arrivals, inHouse, checkedOut, rooms] = await Promise.all([
     listOutages(pool(), s, property.id),
     workspaceList(pool(), s, property.id, "arrivals", property.businessDate),
     workspaceList(pool(), s, property.id, "in_house", property.businessDate),
+    // a stay checked out today on paper may still owe a payment entry
+    workspaceList(pool(), s, property.id, "checked_out", property.businessDate),
     listRooms(pool(), s, property.id),
   ]);
   const when = (d: Date) => new Intl.DateTimeFormat(shell.language === "de" ? "de-DE" : "en-GB", { dateStyle: "short", timeStyle: "short", timeZone: property.timeZone }).format(d);
   const input = "h-9 rounded-xl border border-ink-10 bg-surface px-2 text-sm";
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
-  const stays = [...arrivals, ...inHouse];
+  const stays = [...arrivals, ...inHouse, ...checkedOut];
   return (
     <div className="mx-auto grid max-w-4xl gap-6 p-6">
       <div>

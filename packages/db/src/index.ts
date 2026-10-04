@@ -408,7 +408,7 @@ export {
   type TourismReportData,
   type TourismReportVersion,
 } from "./tenant/tourism-stats";
-export {
+export { claimIncidentsToAlert,
   addSupportStaff,
   endSupportAccess,
   isSupportStaff,

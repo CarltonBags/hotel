@@ -1,14 +1,15 @@
 "use client";
 
 /** Print the set as one job; the day's printing ends the shift reminder (ticket 86). */
-export function PrintButton({ label, propertyId }: { label: string; propertyId: string }) {
+export function PrintButton({ label, propertyId, timeZone }: { label: string; propertyId: string; timeZone: string }) {
   return (
     <button
       type="button"
       data-print
       onClick={() => {
         try {
-          localStorage.setItem(`hs-downtime-printed:${propertyId}`, new Date().toISOString().slice(0, 10));
+          // the property's day, as the reminder reads it
+          localStorage.setItem(`hs-downtime-printed:${propertyId}`, new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date()));
         } catch {
           // a reminder that shows again is no harm
         }

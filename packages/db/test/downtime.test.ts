@@ -97,9 +97,9 @@ describe("downtime reports and catch-up entry", () => {
     const arrival = await book("Kurz", today, 1, rooms[1]);
     const realAt = new Date(Date.now() - 30 * 60_000);
     // not before the outage is logged
-    await expect(catchUp(pool, s(), provider, { kind: "check_in", reservationId: arrival, realAt }, fd)).rejects.toThrow(/Log the outage first/);
+    await expect(catchUp(pool, s(), provider, berlin, { kind: "check_in", reservationId: arrival, realAt }, fd)).rejects.toThrow(/Log the outage first/);
     await logOutage(pool, s(), berlin, { startedAt: new Date(Date.now() - 60 * 60_000), endedAt: new Date(Date.now() - 10 * 60_000), cause: "hotel", note: "Line down" }, fd);
-    await catchUp(pool, s(), provider, { kind: "check_in", reservationId: arrival, realAt }, fd);
+    await catchUp(pool, s(), provider, berlin, { kind: "check_in", reservationId: arrival, realAt }, fd);
     const [res] = (await pool.query(`select checked_in_at, status from ${s()}.reservations where id = $1`, [arrival])).rows;
     expect(res).toMatchObject({ status: "checked_in" });
     expect(Math.abs(res.checked_in_at.getTime() - realAt.getTime())).toBeLessThan(1000);
@@ -108,17 +108,22 @@ describe("downtime reports and catch-up entry", () => {
     expect(change.at.getTime()).toBeGreaterThan(realAt.getTime());
     expect(change.bd).toBe(today);
     // a payment taken during the outage: cash or transfer only
-    await expect(catchUp(pool, s(), provider, { kind: "payment", reservationId: arrival, realAt, tender: "card_terminal", amount: 10 }, fd)).rejects.toThrow(/No card was charged offline/);
-    await catchUp(pool, s(), provider, { kind: "payment", reservationId: arrival, realAt, tender: "bank_transfer", amount: 10, reference: "paper receipt 17" }, fd);
+    await expect(catchUp(pool, s(), provider, berlin, { kind: "payment", reservationId: arrival, realAt, tender: "card_terminal", amount: 10 }, fd)).rejects.toThrow(/No card was charged offline/);
+    await catchUp(pool, s(), provider, berlin, { kind: "payment", reservationId: arrival, realAt, tender: "bank_transfer", amount: 10, reference: "paper receipt 17" }, fd);
     const [pay] = (await pool.query(`select real_at, to_char(business_date, 'YYYY-MM-DD') as bd from ${s()}.payments where reservation_id = $1`, [arrival])).rows;
     expect(pay.bd).toBe(today);
     expect(Math.abs(pay.real_at.getTime() - realAt.getTime())).toBeLessThan(1000);
+  });
+
+  it("a reservation of another property is not found", async () => {
+    const stay = (await pool.query(`select id from ${s()}.reservations where status = 'checked_in' limit 1`)).rows[0].id;
+    await expect(catchUp(pool, s(), provider, "00000000-0000-4000-8000-000000000000", { kind: "check_out", reservationId: stay, realAt: new Date(Date.now() - 30 * 60_000) }, fd)).rejects.toThrow(/Reservation not found/);
   });
 
   it("once the Business Date of the real time is closed, the entry is refused", async () => {
     const stay = (await pool.query(`select id from ${s()}.reservations where status = 'checked_in' limit 1`)).rows[0].id;
     // an audit closed after the outage: the day the payment belongs to is fixed
     await pool.query(`insert into ${s()}.night_audits (property_id, business_date, status, started_by, closed_at, closed_by, report) values ($1, $2, 'closed', 'x', now(), 'x', '{}')`, [berlin, addDays(today, -1)]);
-    await expect(catchUp(pool, s(), provider, { kind: "payment", reservationId: stay, realAt: new Date(Date.now() - 30 * 60_000), tender: "cash", amount: 5 }, fd)).rejects.toThrow(/closed already/);
+    await expect(catchUp(pool, s(), provider, berlin, { kind: "payment", reservationId: stay, realAt: new Date(Date.now() - 30 * 60_000), tender: "cash", amount: 5 }, fd)).rejects.toThrow(/closed already/);
   });
 });

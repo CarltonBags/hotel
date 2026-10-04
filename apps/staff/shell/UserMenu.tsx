@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Check, Moon, Sun } from "lucide-react";
 import { signOut } from "@/app/sign-in/actions";
+import { wipeDowntimeCopy } from "./offline-desk";
 import { useShell } from "./ShellProvider";
 import { onArrowKeys, useDismiss } from "./useDismiss";
 
@@ -114,7 +115,8 @@ export function UserMenu() {
           >
             {t("module.help_centre")}
           </button>
-          <form action={signOut}>
+          {/* signing out leaves no copy of the downtime lists behind (ticket 86) */}
+          <form action={signOut} onSubmit={() => void wipeDowntimeCopy()}>
             <button type="submit" role="menuitem" className={row}>
               {t("shell.signOut")}
             </button>

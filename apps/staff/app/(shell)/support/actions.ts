@@ -7,7 +7,6 @@ import { endSupportAccess, reportIncident, scheduleMaintenance, startSupportAcce
 import { zonedInstant, type IncidentState } from "@hoteloftware/domain";
 import { authorize } from "@/lib/authorize";
 import { isSupportConsoleUser } from "@/lib/support";
-import { alertPropertyManagers } from "@/lib/outage-alert";
 import { pool } from "@/lib/db";
 import { env, tenantUrl } from "@/lib/env";
 import { field, formAction, type FormState } from "@/lib/form";
@@ -56,9 +55,8 @@ export async function reportIncidentAction(_prev: FormState, formData: FormData)
     const userId = await supportStaffId();
     const impact = field(formData, "impact") === "major" ? "major" : "minor";
     await reportIncident(pool(), { title: field(formData, "title"), impact, message: field(formData, "message") }, userId);
-    // an outage on our side reaches every customer's Property Managers, not only the status page (ticket 86)
-    const alerted = impact === "major" ? await alertPropertyManagers(field(formData, "title"), field(formData, "message")) : 0;
-    return { ok: true, message: `Incident published on the status page${alerted ? `; ${alerted} Property Managers alerted` : ""}.` };
+    // a major one reaches every customer's Property Managers too: the worker alerts them within a minute (ticket 86)
+    return { ok: true, message: impact === "major" ? "Incident published on the status page; Property Managers are being alerted." : "Incident published on the status page." };
   });
 }
 

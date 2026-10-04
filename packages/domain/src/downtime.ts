@@ -49,8 +49,8 @@ export function ageMinutes(savedAt: string, now: Date): number {
   return Math.max(0, Math.floor((now.getTime() - Date.parse(savedAt)) / 60_000));
 }
 
-/** The emergency report is renewed every 2 hours while online (and after each Night Audit). */
-export const EMERGENCY_REFRESH_MINUTES = 120;
+/** The kept lists and emergency report are renewed this often while online: at least every 2 hours as decided, and so soon after the Night Audit. */
+export const LIST_REFRESH_MINUTES = 15;
 
 export const CATCH_UP_KINDS = ["check_in", "check_out", "payment", "room_move"] as const;
 export type CatchUpKind = (typeof CATCH_UP_KINDS)[number];

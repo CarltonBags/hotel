@@ -42,7 +42,7 @@ export default async function DowntimePage({ searchParams }: { searchParams: Pro
             </a>
           ))}
         </nav>
-        <PrintButton label={m["downtime.print"]} propertyId={property.id} />
+        <PrintButton label={m["downtime.print"]} propertyId={property.id} timeZone={property.timeZone} />
       </div>
       <DowntimeLists set={set} lists={lists} m={downtimeText(m)} />
       {/* on every printed page */}

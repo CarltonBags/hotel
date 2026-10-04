@@ -40,6 +40,20 @@ export async function endOutageAction(_prev: FormState, formData: FormData): Pro
   });
 }
 
+/** The desk saw the service unreachable from one time to another: logged as an outage of unknown cause, unless one is logged already. */
+export async function logOutageFromDeskAction(propertyId: string, from: string, to: string): Promise<void> {
+  const { tenant, session } = await authorize("use_downtime", propertyId);
+  const startedAt = new Date(from);
+  const endedAt = new Date(to);
+  // a blip under a minute is no outage
+  if (!(endedAt.getTime() - startedAt.getTime() >= 60_000)) return;
+  try {
+    await logOutage(pool(), tenant.schemaName, propertyId, { startedAt, endedAt, cause: "unknown", note: "Seen by the desk" }, session.user.id);
+  } catch {
+    // overlapping one logged already: that one stands
+  }
+}
+
 /** A Catch-up Entry: what happened during the outage, with the time it really happened. */
 export async function catchUpAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
@@ -55,9 +69,9 @@ export async function catchUpAction(_prev: FormState, formData: FormData): Promi
         : kind === "room_move"
           ? { kind, reservationId, realAt, roomId: field(formData, "roomId") }
           : { kind, reservationId, realAt };
-    // the action itself checks the right it needs (check-in, payment …) inside: the desk roles hold them
-    await authorize(kind === "payment" ? "take_payments" : "view_reservations", propertyId);
-    await catchUp(pool(), tenant.schemaName, paymentProvider(), input, session.user.id);
+    // the right the same action needs at the desk: taking payments, or checking in and out (moves included)
+    await authorize(kind === "payment" ? "take_payments" : "check_in", propertyId);
+    await catchUp(pool(), tenant.schemaName, paymentProvider(), propertyId, input, session.user.id);
     revalidatePath("/catch-up");
     return { ok: true, message: "Entered after the outage." };
   });

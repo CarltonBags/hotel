@@ -1,17 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { EmergencyReport } from "@hoteloftware/db";
-import { DOWNTIME_LISTS, EMERGENCY_REFRESH_MINUTES, ageMinutes, downtimeReminderDue } from "@hoteloftware/domain";
+import { DOWNTIME_LISTS, LIST_REFRESH_MINUTES, ageMinutes, downtimeReminderDue } from "@hoteloftware/domain";
+import { logOutageFromDeskAction } from "@/app/(shell)/catch-up/actions";
 import { DowntimeLists, type DowntimeText } from "@/components/downtime-lists";
 
 /**
  * The desk without connection (ticket 86). While online the browser keeps
  * the latest lists and the emergency report, encrypted with a key it gets
- * only signed in and holds in memory; one copy, replaced each time. When
- * the service stops answering, a banner with the time lost and the lists'
- * age covers the app: read only, no changes until back online. Also shows
- * the shift reminder to print the Downtime Reports.
+ * only signed in and holds in memory; one copy, replaced every 15 minutes
+ * and wiped on sign-out. When the service stops answering, a banner with
+ * the time lost and the lists' age covers the app: read only, no changes
+ * until back online; the outage is then logged for the property. The copy
+ * serves the open app: a desk restarted during the outage has the printed
+ * Downtime Reports. Also shows the shift reminder to print them.
  */
 const DB = "hs-downtime";
 const SLOT = "latest";
@@ -78,14 +82,19 @@ export function OfflineDesk({ text, labels, propertyId, reminderAt, timeZone }: 
 
   useEffect(() => {
     refresh().catch(() => undefined);
-    const t = setInterval(() => refresh().catch(() => undefined), EMERGENCY_REFRESH_MINUTES * 60_000);
+    const t = setInterval(() => refresh().catch(() => undefined), LIST_REFRESH_MINUTES * 60_000);
     return () => clearInterval(t);
   }, [refresh]);
 
   // the heartbeat: the browser's own offline signal, and a ping every 20 seconds
   useEffect(() => {
     const down = () => setOfflineSince((s) => s ?? new Date());
-    const up = () => setOfflineSince(null);
+    // back online: the outage this desk saw is logged for the property (another desk may have logged it already)
+    const up = () =>
+      setOfflineSince((since) => {
+        if (since) void logOutageFromDeskAction(propertyId, since.toISOString(), new Date().toISOString()).catch(() => undefined);
+        return null;
+      });
     const beat = async () => {
       try {
         const r = await fetch("/api/downtime/ping", { cache: "no-store" });
@@ -97,13 +106,14 @@ export function OfflineDesk({ text, labels, propertyId, reminderAt, timeZone }: 
     };
     window.addEventListener("offline", down);
     window.addEventListener("online", beat);
+    void beat();
     const t = setInterval(beat, 20_000);
     return () => {
       window.removeEventListener("offline", down);
       window.removeEventListener("online", beat);
       clearInterval(t);
     };
-  }, []);
+  }, [propertyId]);
 
   // offline: open the kept copy with the key held since sign-in
   useEffect(() => {
@@ -114,6 +124,16 @@ export function OfflineDesk({ text, labels, propertyId, reminderAt, timeZone }: 
       const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: kept.iv }, key.current, kept.data);
       setCopy({ report: JSON.parse(new TextDecoder().decode(plain)) as EmergencyReport, savedAt: kept.savedAt });
     })().catch(() => setCopy(null));
+  }, [offlineSince]);
+
+  // offline, everything but the cover is inert: no click, no Tab, no Enter reaches a form underneath
+  useEffect(() => {
+    if (!offlineSince) return;
+    const others = [...document.body.children].filter((e) => !e.hasAttribute("data-offline-root"));
+    for (const e of others) e.setAttribute("inert", "");
+    return () => {
+      for (const e of others) e.removeAttribute("inert");
+    };
   }, [offlineSince]);
 
   // the clock for the age, and the shift reminder
@@ -138,15 +158,16 @@ export function OfflineDesk({ text, labels, propertyId, reminderAt, timeZone }: 
 
   const time = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (offlineSince) {
-    return (
-      <div role="alertdialog" aria-modal="true" data-offline className="fixed inset-0 z-50 overflow-auto bg-canvas p-4">
+    return createPortal(
+      <div role="alertdialog" aria-modal="true" data-offline data-offline-root className="fixed inset-0 z-50 overflow-auto bg-canvas p-4">
         <div className="sticky top-0 mb-4 rounded-2xl bg-danger px-4 py-3 text-sm text-white" data-offline-banner>
           <strong>{labels.banner}</strong> · {labels.since.replace("{time}", time(offlineSince))}
           {copy ? ` · ${labels.age.replace("{time}", time(new Date(copy.savedAt))).replace("{n}", String(ageMinutes(copy.savedAt, now)))}` : ""}
           <div className="mt-1 opacity-90">{labels.disabled}</div>
         </div>
         {copy ? <DowntimeLists set={copy.report} lists={DOWNTIME_LISTS.filter((l) => l !== "registration_forms")} m={text} emergency /> : <p className="text-ink-60">{labels.none}</p>}
-      </div>
+      </div>,
+      document.body,
     );
   }
   return reminder ? (

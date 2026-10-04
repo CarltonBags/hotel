@@ -7,6 +7,7 @@ import { deleteExpiredDemoTenants, findTenantById } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
+import { alertMajorIncidents } from "./outage-alert";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 
 export const QUEUES = {
@@ -26,6 +27,8 @@ export const QUEUES = {
   /** Hourly: scheduled reports due, one job per tenant (ticket 82). */
   reportsAll: "reports.scheduled.all",
   reports: "reports.scheduled",
+  /** Every minute: a major incident on our side alerts the customers' Property Managers (ticket 86). */
+  outageAlerts: "status.outage_alerts",
 } as const;
 
 /**
@@ -145,6 +148,12 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     for (const t of rows) await boss.send(QUEUES.reports, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `reports.scheduled:${t.id}`, singletonSeconds: 300 });
   });
   await boss.schedule(QUEUES.reportsAll, "5 * * * *", {}, { tz: "Europe/Berlin" });
+
+  await boss.work(QUEUES.outageAlerts, async () => {
+    const n = await alertMajorIncidents(pool, { platformSlug: process.env.PLATFORM_TENANT_SLUG ?? "platform", statusUrl: `${(process.env.BETTER_AUTH_URL ?? "").replace(/\/$/, "")}/status` });
+    if (n) console.log(`[outage] ${n} Property Manager(s) alerted`);
+  });
+  await boss.schedule(QUEUES.outageAlerts, "* * * * *", {}, { tz: "Europe/Berlin" });
 
   if (options.tenantCheckCron) {
     await boss.schedule(QUEUES.tenantCheckAll, options.tenantCheckCron, {}, { tz: "Europe/Berlin" });
