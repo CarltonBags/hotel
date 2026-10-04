@@ -261,6 +261,7 @@ export const services = pgTable(
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    minibar: boolean("minibar").notNull().default(false),
   },
   (t) => [
     unique("services_property_id_code_key").on(t.propertyId, t.code),
@@ -1221,6 +1222,8 @@ export const housekeepingTasks = pgTable(
     doneAt: timestamp("done_at", { withTimezone: true }),
     doneBy: text("done_by"),
     priority: boolean("priority").notNull().default(false),
+    version: integer("version").notNull().default(0),
+    skipReason: text("skip_reason"),
   },
   (t) => [
     index("housekeeping_tasks_reservation_idx").on(t.reservationId),
@@ -1228,6 +1231,7 @@ export const housekeepingTasks = pgTable(
     check("housekeeping_tasks_kind_check", sql`${t.kind} in ('departure', 'stayover', 'arrival', 'linen', 'clean')`),
     index("housekeeping_tasks_assignee_idx").on(t.propertyId, t.businessDate, t.assigneeId),
     check("housekeeping_tasks_status_check", sql`${t.status} in ('open', 'in_progress', 'done', 'skipped')`),
+    check("housekeeping_tasks_skip_reason_check", sql`${t.skipReason} in ('declined', 'dnd')`),
   ],
 );
 
@@ -1254,6 +1258,89 @@ export const housekeepingPlans = pgTable(
     publishedBy: text("published_by"),
   },
   (t) => [primaryKey({ columns: [t.propertyId, t.businessDate] })],
+);
+
+export const housekeepingNotes = pgTable(
+  "housekeeping_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    code: text("code"),
+    text: text("text"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    index("housekeeping_notes_reservation_idx").on(t.reservationId),
+    check("housekeeping_notes_code_check", sql`${t.code} in ('feather_allergy', 'baby_cot', 'extra_bed', 'welcome_gift', 'late_checkout', 'pet', 'accessibility')`),
+    check("housekeeping_notes_one_check", sql`(${t.code} is null) <> (${t.text} is null)`),
+  ],
+);
+
+export const maintenanceIssues = pgTable(
+  "maintenance_issues",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    roomId: uuid("room_id").references(() => rooms.id),
+    place: text("place").notNull().default(""),
+    pick: text("pick").notNull(),
+    urgency: text("urgency").notNull(),
+    note: text("note").notNull().default(""),
+    photo: bytea("photo"),
+    photoType: text("photo_type"),
+    status: text("status").notNull().default("open"),
+    reportedAt: timestamp("reported_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    reportedBy: text("reported_by").notNull(),
+    takenAt: timestamp("taken_at", { withTimezone: true }),
+    takenBy: text("taken_by"),
+    fixedAt: timestamp("fixed_at", { withTimezone: true }),
+    fixedBy: text("fixed_by"),
+    fixNote: text("fix_note").notNull().default(""),
+  },
+  (t) => [
+    index("maintenance_issues_open_idx").on(t.propertyId).where(sql`${t.status} <> 'done'`),
+    check("maintenance_issues_place_check", sql`${t.roomId} is not null or length(trim(${t.place})) > 0`),
+    check("maintenance_issues_pick_check", sql`${t.pick} in ('plumbing', 'electrical', 'heating', 'furniture', 'door', 'other')`),
+    check("maintenance_issues_urgency_check", sql`${t.urgency} in ('now', 'today', 'later')`),
+    check("maintenance_issues_status_check", sql`${t.status} in ('open', 'in_progress', 'done')`),
+  ],
+);
+
+export const lostItems = pgTable(
+  "lost_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    roomId: uuid("room_id").notNull().references(() => rooms.id),
+    pick: text("pick").notNull(),
+    note: text("note").notNull().default(""),
+    photo: bytea("photo"),
+    photoType: text("photo_type"),
+    foundAt: timestamp("found_at", { withTimezone: true }).notNull(),
+    foundBy: text("found_by").notNull(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    status: text("status").notNull().default("kept"),
+  },
+  (t) => [
+    index("lost_items_property_idx").on(t.propertyId, t.foundAt.desc()),
+    check("lost_items_pick_check", sql`${t.pick} in ('clothing', 'electronics', 'documents', 'valuables', 'other')`),
+    check("lost_items_status_check", sql`${t.status} in ('kept', 'returned', 'disposed')`),
+  ],
+);
+
+export const phoneChanges = pgTable(
+  "phone_changes",
+  {
+    id: uuid("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(),
+    madeAt: timestamp("made_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    outcome: text("outcome").notNull(),
+    message: text("message").notNull().default(""),
+  },
+  (t) => [check("phone_changes_outcome_check", sql`${t.outcome} in ('applied', 'conflict', 'refused')`)],
 );
 
 export const tenantSchema = {
@@ -1316,4 +1403,8 @@ export const tenantSchema = {
   housekeepingTasks,
   housekeepingMinutes,
   housekeepingPlans,
+  housekeepingNotes,
+  maintenanceIssues,
+  lostItems,
+  phoneChanges,
 };

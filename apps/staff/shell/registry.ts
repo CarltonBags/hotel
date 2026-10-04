@@ -72,7 +72,7 @@ export const MODULES: ModuleDef[] = [
   { id: "housekeeping", group: "housekeeping", label: "module.housekeeping", icon: "Sparkles", hue: "#e0900b", href: "/rooms", requiresProperty: "view_rooms" },
   { id: "housekeeping_tasks", group: "housekeeping", label: "module.housekeeping_tasks", icon: "ClipboardCheck", hue: "#e0900b", href: "/housekeeping", requiresProperty: "assign_housekeeping" },
   soon("maintenance", "housekeeping", "module.maintenance", "Wrench", "#6b7280", 36),
-  soon("lost_found", "housekeeping", "module.lost_found", "PackageSearch", "#b98900", 35),
+  { id: "lost_found", group: "housekeeping", label: "module.lost_found", icon: "PackageSearch", hue: "#b98900", href: "/lost-found", requiresProperty: "view_lost_items" },
   soon("reports", "reports", "module.reports", "ChartColumn", "#4f5bd5", 82),
   { id: "night_audit_reports", group: "reports", label: "module.night_audit_reports", icon: "MoonStar", hue: "#7c5cff", href: "/night-audit/reports", requiresProperty: "view_night_audit_reports" },
   { id: "audit_log", group: "reports", label: "module.audit_log", icon: "List", hue: "#4f5bd5", href: "/audit-log", requiresProperty: "view_audit_log" },

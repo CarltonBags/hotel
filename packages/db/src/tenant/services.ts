@@ -13,12 +13,15 @@ export interface ServiceInput {
   revenueAccount: string;
   postingRhythm: PostingRhythm;
   bookableOnline: boolean;
+  /** Counted on the room sheet's minibar (ticket 35). */
+  minibar?: boolean;
   active?: boolean;
   sortOrder?: number;
 }
 
-export interface Service extends Omit<ServiceInput, "names" | "active" | "sortOrder"> {
+export interface Service extends Omit<ServiceInput, "names" | "active" | "sortOrder" | "minibar"> {
   id: string;
+  minibar: boolean;
   names: Names;
   active: boolean;
   sortOrder: number;
@@ -49,6 +52,7 @@ interface Row {
   revenue_account: string;
   posting_rhythm: PostingRhythm;
   bookable_online: boolean;
+  minibar: boolean;
   active: boolean;
   sort_order: number;
 }
@@ -58,7 +62,7 @@ const SELECT = `select s.id, s.property_id, s.code, s.name, s.names, s.default_p
     (select r.rate from tax_code_rates r
       where r.tax_code_id = t.id and r.valid_from <= (now() at time zone p.time_zone)::date
       order by r.valid_from desc limit 1) as current_rate,
-    s.revenue_account, s.posting_rhythm, s.bookable_online, s.active, s.sort_order
+    s.revenue_account, s.posting_rhythm, s.bookable_online, s.minibar, s.active, s.sort_order
   from services s join tax_codes t on t.id = s.tax_code_id join properties p on p.id = s.property_id`;
 
 function toService(r: Row): Service {
@@ -76,6 +80,7 @@ function toService(r: Row): Service {
     revenueAccount: r.revenue_account,
     postingRhythm: r.posting_rhythm,
     bookableOnline: r.bookable_online,
+    minibar: r.minibar,
     active: r.active,
     sortOrder: r.sort_order,
   };
@@ -100,10 +105,10 @@ export async function createService(pool: Pool, schema: string, input: ServiceIn
     await assertTaxCodeForProperty(tx, input.taxCodeId, input.propertyId);
     try {
       const { rows } = await tx.query<{ id: string }>(
-        `insert into services (property_id, code, name, names, default_price, tax_code_id, revenue_account, posting_rhythm, bookable_online, active, sort_order)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11, (select coalesce(max(sort_order), 0) + 1 from services where property_id = $1)))
+        `insert into services (property_id, code, name, names, default_price, tax_code_id, revenue_account, posting_rhythm, bookable_online, active, sort_order, minibar)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, coalesce($11, (select coalesce(max(sort_order), 0) + 1 from services where property_id = $1)), $12)
          returning id`,
-        [input.propertyId, code, name, JSON.stringify(input.names ?? {}), price, input.taxCodeId, input.revenueAccount.trim(), input.postingRhythm, input.bookableOnline, input.active ?? true, input.sortOrder ?? null],
+        [input.propertyId, code, name, JSON.stringify(input.names ?? {}), price, input.taxCodeId, input.revenueAccount.trim(), input.postingRhythm, input.bookableOnline, input.active ?? true, input.sortOrder ?? null, input.minibar ?? false],
       );
       const found = await tx.query<Row>(`${SELECT} where s.id = $1`, [rows[0]!.id]);
       return toService(found.rows[0]!);
@@ -127,7 +132,7 @@ export async function updateService(pool: Pool, schema: string, propertyId: stri
     try {
       await tx.query(
         `update services set code = $3, name = $4, names = $5, default_price = $6, tax_code_id = $7, revenue_account = $8, posting_rhythm = $9,
-           bookable_online = $10, active = $11, sort_order = $12, updated_at = now()
+           bookable_online = $10, active = $11, sort_order = $12, minibar = $13, updated_at = now()
          where id = $1 and property_id = $2`,
         [
           id,
@@ -142,6 +147,7 @@ export async function updateService(pool: Pool, schema: string, propertyId: stri
           patch.bookableOnline ?? c.bookable_online,
           patch.active ?? c.active,
           patch.sortOrder ?? c.sort_order,
+          patch.minibar ?? c.minibar,
         ],
       );
     } catch (err) {

@@ -311,3 +311,21 @@ export async function deviceSignInList(pool: Pool, device: DeviceInfo): Promise<
   );
   return rows;
 }
+
+/**
+ * A key the phone keeps with the changes it makes, so they are sent later
+ * under the user who made them, also after someone else signed in on the
+ * Device or it locked. Valid for a day, on this Device only.
+ */
+export async function issueChangeKey(pool: Pool, deviceId: string, userId: string): Promise<string> {
+  const key = secret();
+  await pool.query("delete from control.device_change_keys where expires_at < now()");
+  await pool.query("insert into control.device_change_keys (key_hash, device_id, user_id, expires_at) values ($1, $2, $3, now() + interval '1 day')", [hash(key), deviceId, userId]);
+  return key;
+}
+
+/** Whose changes a key carries, if it is valid for this Device. */
+export async function changeKeyUser(pool: Pool, deviceId: string, key: string): Promise<string | null> {
+  const r = (await pool.query<{ user_id: string }>("select user_id from control.device_change_keys where key_hash = $1 and device_id = $2 and expires_at > now()", [hash(key), deviceId])).rows[0];
+  return r?.user_id ?? null;
+}

@@ -506,35 +506,43 @@ export async function postServiceCharge(
   input: { serviceId: string; quantity: number; serviceDate?: string | undefined; unitPrice?: number | undefined },
   userId: string,
 ): Promise<{ id: string; amount: number }> {
+  return withTenant(pool, schema, (tx) => postServiceChargeIn(tx, reservationId, input, userId));
+}
+
+/** postServiceCharge inside the caller's transaction (the minibar from the phone, ticket 35). */
+export async function postServiceChargeIn(
+  tx: PoolClient,
+  reservationId: string,
+  input: { serviceId: string; quantity: number; serviceDate?: string | undefined; unitPrice?: number | undefined; onlyMinibar?: boolean },
+  userId: string,
+): Promise<{ id: string; amount: number }> {
   if (!isUuid(input.serviceId)) throw new Error("Service not found");
-  return withTenant(pool, schema, async (tx) => {
-    const res = await loadReservation(tx, reservationId);
-    requireChargeable(res);
-    const s = await tx.query<ServiceRow & { default_price: string; active: boolean }>(
-      "select id, name, tax_code_id, revenue_account, default_price, active from services where id = $1 and property_id = $2",
-      [input.serviceId, res.property_id],
-    );
-    const service = s.rows[0];
-    if (!service || !service.active) throw new Error("Service not found");
-    const quantity = checkAmount(input.quantity, "Quantity");
-    const unitPrice = input.unitPrice === undefined ? Number(service.default_price) : checkAmount(input.unitPrice, "Price");
-    const amount = roundMoney(quantity * unitPrice);
-    if (amount <= 0) throw new Error("The Service has no price; enter one");
-    await ensureFolios(tx, res, userId);
-    const id = await insertCharge(tx, res, userId, {
-      serviceId: service.id,
-      description: service.name,
-      serviceDate: input.serviceDate ? checkDate(input.serviceDate) : res.businessDate,
-      quantity,
-      unitPrice,
-      amount,
-      taxCodeId: service.tax_code_id,
-      revenueAccount: service.revenue_account,
-      category: "extras",
-      origin: "catalogue",
-    });
-    return { id, amount };
+  const res = await loadReservation(tx, reservationId);
+  requireChargeable(res);
+  const s = await tx.query<ServiceRow & { default_price: string; active: boolean; minibar: boolean }>(
+    "select id, name, tax_code_id, revenue_account, default_price, active, minibar from services where id = $1 and property_id = $2",
+    [input.serviceId, res.property_id],
+  );
+  const service = s.rows[0];
+  if (!service || !service.active || (input.onlyMinibar && !service.minibar)) throw new Error("Service not found");
+  const quantity = checkAmount(input.quantity, "Quantity");
+  const unitPrice = input.unitPrice === undefined ? Number(service.default_price) : checkAmount(input.unitPrice, "Price");
+  const amount = roundMoney(quantity * unitPrice);
+  if (amount <= 0) throw new Error("The Service has no price; enter one");
+  await ensureFolios(tx, res, userId);
+  const id = await insertCharge(tx, res, userId, {
+    serviceId: service.id,
+    description: service.name,
+    serviceDate: input.serviceDate ? checkDate(input.serviceDate) : res.businessDate,
+    quantity,
+    unitPrice,
+    amount,
+    taxCodeId: service.tax_code_id,
+    revenueAccount: service.revenue_account,
+    category: "extras",
+    origin: "catalogue",
   });
+  return { id, amount };
 }
 
 /** A Charge outside the catalogue (Property Manager): a description, a gross amount and a Tax Code of the property's Legal Entity. */

@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { isLanguage, isTheme, type Language, type Theme } from "@hoteloftware/domain";
+import { isFloorLanguage, isLanguage, isTheme, type FloorLanguage, type Language, type Theme } from "@hoteloftware/domain";
 
 type Queryable = Pool | PoolClient;
 
@@ -80,5 +80,20 @@ export async function setPinnedTabs(db: Queryable, userId: string, propertyScope
     `insert into control.user_workspace (user_id, property_scope, pinned_tabs) values ($1, $2, $3)
      on conflict (user_id, property_scope) do update set pinned_tabs = excluded.pinned_tabs, updated_at = now()`,
     [userId, propertyScope, JSON.stringify(pinnedTabs)],
+  );
+}
+
+/** The phone view's language (ticket 35); null until chosen, then the app language is used. */
+export async function getFloorLanguage(db: Queryable, userId: string): Promise<FloorLanguage | null> {
+  const { rows } = await db.query<{ floor_language: FloorLanguage | null }>("select floor_language from control.user_preferences where user_id = $1", [userId]);
+  return rows[0]?.floor_language ?? null;
+}
+
+export async function setFloorLanguage(db: Queryable, userId: string, language: string): Promise<void> {
+  if (!isFloorLanguage(language)) throw new Error(`Unknown language: ${language}`);
+  await db.query(
+    `insert into control.user_preferences (user_id, floor_language) values ($1, $2)
+     on conflict (user_id) do update set floor_language = excluded.floor_language, updated_at = now()`,
+    [userId, language],
   );
 }

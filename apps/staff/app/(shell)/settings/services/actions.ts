@@ -48,6 +48,7 @@ export async function saveService(_prev: FormState, formData: FormData): Promise
       revenueAccount: field(formData, "revenueAccount"),
       postingRhythm: rhythm,
       bookableOnline: formData.get("bookableOnline") === "on",
+      minibar: formData.get("minibar") === "on",
       // a hidden "off" precedes the checkbox so an unticked box still sends the field
       active: formData.getAll("active").includes("on"),
     };
@@ -73,11 +74,12 @@ export async function saveService(_prev: FormState, formData: FormData): Promise
         input.name !== current.name ||
         input.postingRhythm !== current.postingRhythm ||
         input.bookableOnline !== current.bookableOnline ||
+        input.minibar !== current.minibar ||
         input.active !== current.active ||
         GUEST_LANGUAGES.some((l) => (input.names[l] ?? "") !== (current.names[l] ?? ""));
       if (rest) {
         if (!can(actor, "manage_property_settings", p.id)) throw new ForbiddenError("manage_property_settings", p.id);
-        Object.assign(patch, { code: input.code, name: input.name, names: input.names, postingRhythm: input.postingRhythm, bookableOnline: input.bookableOnline, active: input.active });
+        Object.assign(patch, { code: input.code, name: input.name, names: input.names, postingRhythm: input.postingRhythm, bookableOnline: input.bookableOnline, minibar: input.minibar, active: input.active });
       }
       if (Object.keys(patch).length) await updateService(pool(), schema, p.id, id, patch);
     }

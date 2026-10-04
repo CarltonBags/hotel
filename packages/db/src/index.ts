@@ -9,7 +9,9 @@ export { assertContiguous, type Migration } from "./migrations/versions";
 export { findSchemaQualifiedNames, type Finding } from "./tenant/check-tenant-sql";
 export { migrateTenants, type MigrateResult } from "./tenant/migrate-tenants";
 export { findTenantById, findTenantBySlug, provisionTenant, setTenantAccent, type NewTenant, type Tenant } from "./tenant/provision";
-export { getPreferences, getWorkspace, setPinnedTabs, setPreferences, type PinnedTab, type Preferences, type Workspace } from "./control/preferences";
+export {
+  getFloorLanguage,
+  setFloorLanguage, getPreferences, getWorkspace, setPinnedTabs, setPreferences, type PinnedTab, type Preferences, type Workspace } from "./control/preferences";
 export { assertTenantSlug, isTenantSlug, resolveTenantSlug, tenantSchemaFromSlug } from "@hoteloftware/domain";
 export { assertTenantSchemaName, inTenantTransaction, isTenantSchemaName, withTenant } from "./tenant/with-tenant";
 export { controlSchema } from "./control/schema";
@@ -341,3 +343,19 @@ export {
   type BoardTask,
   type HousekeepingBoard,
 } from "./tenant/housekeeping";
+export {
+  addHousekeepingNote,
+  applyPhoneChange,
+  floorDay,
+  floorPhoto,
+  listHousekeepingNotes,
+  listLostItems,
+  removeHousekeepingNote,
+  setLostItemStatus,
+  type FloorDay,
+  type FloorIssue,
+  type FloorNote,
+  type FloorTask,
+  type LostItem,
+  type PhoneChangeOutcome,
+} from "./tenant/floor";

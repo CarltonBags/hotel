@@ -328,33 +328,60 @@ export async function failInspection(pool: Pool, schema: string, roomId: string,
 
 /**
  * A housekeeper's own task of today's published plan: start it, finish it
- * (the room turns Clean) or skip it (a stayover or linen task the guest
- * declined, or do not disturb).
+ * (the room turns Clean), skip it (a stayover or linen task the guest
+ * declined, or do not disturb), or undo a finish or skip of one's own.
  */
-export async function workHousekeepingTask(pool: Pool, schema: string, taskId: string, step: "start" | "done" | "skip", viewer: Viewer): Promise<void> {
+export async function workHousekeepingTask(pool: Pool, schema: string, taskId: string, step: TaskStep, viewer: Viewer, reason?: SkipReason): Promise<void> {
+  await withTenant(pool, schema, (tx) => workHousekeepingTaskIn(tx, taskId, step, viewer, { reason }));
+}
+
+export type TaskStep = "start" | "done" | "skip" | "undo";
+export type SkipReason = "declined" | "dnd";
+
+/** A newer change by someone else (supervisor, front desk) than the one the phone saw. */
+export class TaskChangedMeanwhile extends Error {
+  constructor(readonly roomNumber: string) {
+    super(`Room ${roomNumber} was changed by your supervisor meanwhile; your change was not applied`);
+    this.name = "TaskChangedMeanwhile";
+  }
+}
+
+/** workHousekeepingTask in the caller's transaction; `seen` is the task's version the phone saw (a newer one wins). */
+export async function workHousekeepingTaskIn(tx: PoolClient, taskId: string, step: TaskStep, viewer: Viewer, options: { reason?: SkipReason | undefined; seen?: number } = {}): Promise<void> {
   if (!isUuid(taskId)) throw new Error("Task not found");
-  await withTenant(pool, schema, async (tx) => {
-    const t = (await tx.query<{ property_id: string; room_id: string; assignee_id: string | null; status: string; kind: TaskKind; business_date: string }>(
-      "select property_id, room_id, assignee_id, status, kind, to_char(business_date, 'YYYY-MM-DD') as business_date from housekeeping_tasks where id = $1 for update",
-      [taskId],
-    )).rows[0];
-    if (!t) throw new Error("Task not found");
-    const scope = cleanlinessScope(viewer.actor, t.property_id, "clean");
-    if (scope === "none" || (scope === "own" && t.assignee_id !== viewer.userId)) throw new Error("Not your task");
-    const { businessDate } = await rulesOf(tx, t.property_id);
-    if (t.business_date !== businessDate) throw new Error("Not a task of today");
-    if (scope === "own" && !(await published(tx, t.property_id, businessDate))) throw new Error("Today's plan is not published yet");
-    const allowed: Record<typeof step, string[]> = { start: ["open"], done: ["open", "in_progress"], skip: ["open", "in_progress"] };
-    if (!allowed[step].includes(t.status)) throw new Error(`The task is ${t.status.replace("_", " ")}`);
-    if (step === "skip" && t.kind !== "stayover" && t.kind !== "linen") throw new Error("Only a stayover or linen task can be skipped (guest declined, do not disturb)");
-    if (step === "start") await tx.query("update housekeeping_tasks set status = 'in_progress', started_at = clock_timestamp() where id = $1", [taskId]);
-    if (step === "skip") await tx.query("update housekeeping_tasks set status = 'skipped', done_at = clock_timestamp(), done_by = $2 where id = $1", [taskId, viewer.userId]);
-    if (step === "done") {
-      await tx.query("update housekeeping_tasks set status = 'done', done_at = clock_timestamp(), done_by = $2 where id = $1", [taskId, viewer.userId]);
-      const room = (await tx.query<{ cleanliness: string }>("select cleanliness from rooms where id = $1", [t.room_id])).rows[0]!;
-      if (room.cleanliness === "dirty") await setCleanlinessIn(tx, t.room_id, "clean", viewer.userId);
-    }
-  });
+  const t = (await tx.query<{ property_id: string; room_id: string; room_number: string; assignee_id: string | null; status: string; kind: TaskKind; business_date: string; version: number; done_by: string | null; started_at: Date | null }>(
+    `select t.property_id, t.room_id, r.number as room_number, t.assignee_id, t.status, t.kind, to_char(t.business_date, 'YYYY-MM-DD') as business_date, t.version, t.done_by, t.started_at
+     from housekeeping_tasks t join rooms r on r.id = t.room_id where t.id = $1 for update of t`,
+    [taskId],
+  )).rows[0];
+  if (!t) throw new Error("Task not found");
+  const scope = cleanlinessScope(viewer.actor, t.property_id, "clean");
+  if (scope === "none" || (scope === "own" && t.assignee_id !== viewer.userId)) {
+    // moved to someone else while the phone was offline: the supervisor's change wins
+    if (options.seen !== undefined && scope === "own") throw new TaskChangedMeanwhile(t.room_number);
+    throw new Error("Not your task");
+  }
+  if (options.seen !== undefined && t.version > options.seen) throw new TaskChangedMeanwhile(t.room_number);
+  const { businessDate } = await rulesOf(tx, t.property_id);
+  if (t.business_date !== businessDate) throw new Error("Not a task of today");
+  if (scope === "own" && !(await published(tx, t.property_id, businessDate))) throw new Error("Today's plan is not published yet");
+  const allowed: Record<TaskStep, string[]> = { start: ["open"], done: ["open", "in_progress"], skip: ["open", "in_progress"], undo: ["done", "skipped"] };
+  if (!allowed[step].includes(t.status)) throw new Error(`The task is ${t.status.replace("_", " ")}`);
+  if (step === "skip" && t.kind !== "stayover" && t.kind !== "linen") throw new Error("Only a stayover or linen task can be skipped (guest declined, do not disturb)");
+  if (step === "start") await tx.query("update housekeeping_tasks set status = 'in_progress', started_at = clock_timestamp() where id = $1", [taskId]);
+  if (step === "skip") await tx.query("update housekeeping_tasks set status = 'skipped', skip_reason = $3, done_at = clock_timestamp(), done_by = $2 where id = $1", [taskId, viewer.userId, options.reason ?? "declined"]);
+  if (step === "done") {
+    await tx.query("update housekeeping_tasks set status = 'done', done_at = clock_timestamp(), done_by = $2 where id = $1", [taskId, viewer.userId]);
+    const room = (await tx.query<{ cleanliness: string }>("select cleanliness from rooms where id = $1", [t.room_id])).rows[0]!;
+    if (room.cleanliness === "dirty") await setCleanlinessIn(tx, t.room_id, "clean", viewer.userId);
+  }
+  if (step === "undo") {
+    if (t.done_by !== viewer.userId) throw new Error("Only your own step can be undone");
+    await tx.query("update housekeeping_tasks set status = $2, skip_reason = null, done_at = null, done_by = null where id = $1", [taskId, t.started_at ? "in_progress" : "open"]);
+    // the room goes back to Dirty if this user's Done set it Clean and nobody inspected it since
+    const room = (await tx.query<{ cleanliness: string; cleanliness_by: string | null }>("select cleanliness, cleanliness_by from rooms where id = $1", [t.room_id])).rows[0]!;
+    if (t.status === "done" && room.cleanliness === "clean" && room.cleanliness_by === viewer.userId) await setCleanlinessIn(tx, t.room_id, "dirty", viewer.userId);
+  }
 }
 
 /** Guest here and waiting for the room (Arrived, Waiting for Room): the room's preparation becomes urgent. */

@@ -99,6 +99,11 @@ function ServiceForm({ property, service, taxCodes, rights, m }: { property: Pro
           {!rights.settings && service?.bookableOnline ? <input type="hidden" name="bookableOnline" value="on" /> : null}
           {m["services.bookableOnline"]}
         </label>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" name="minibar" defaultChecked={service?.minibar ?? false} disabled={!rights.settings} />
+          {!rights.settings && service?.minibar ? <input type="hidden" name="minibar" value="on" /> : null}
+          {m["services.minibar"]}
+        </label>
         {service ? (
           <label className="flex items-center gap-1">
             <input type="hidden" name="active" value="off" />
