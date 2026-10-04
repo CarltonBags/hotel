@@ -15,7 +15,7 @@ import { postNoShowFee } from "./folios";
 import { loadGuest } from "./guests";
 import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
-import { markDirty } from "./room-state";
+import { markDirty, outOfOrderOn } from "./room-state";
 
 /**
  * Night Audit (ticket 32, decided in "Night audit and business date"): the
@@ -335,7 +335,7 @@ async function reportIn(
   // the day's entries are those made on this Business Date
   // rooms available: the property's rooms less those Out of Order tonight
   const rooms = Number((await tx.query<{ n: string }>(
-    "select count(*) as n from rooms m where m.property_id = $1 and not exists (select 1 from room_blocks b where b.room_id = m.id and b.kind = 'out_of_order' and b.from_date <= $2 and b.to_date > $2)",
+    `select count(*) as n from rooms m where m.property_id = $1 and not exists (select 1 from room_blocks b where b.room_id = m.id and ${outOfOrderOn("b", "$2::date", "$2::date + 1")})`,
     [p.id, bd],
   )).rows[0]!.n);
   const occupied = Number((await tx.query<{ n: string }>(

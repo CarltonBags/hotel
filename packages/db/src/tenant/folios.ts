@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import {
+  addDays,
   ROUTING_CATEGORIES,
   earlyDepartureFee,
   folioBalance,
@@ -20,7 +21,7 @@ import { rateOn } from "./tax-rate";
 import { cityTaxOfStay, dropCityTaxNights, fixCityTaxPassOn, recordCityTaxNights, type StayCityTax } from "./city-tax";
 import { paymentsOf, type Payment } from "./payments";
 import { withTenant } from "./with-tenant";
-import { roomReadiness } from "./room-state";
+import { assertNotOutOfOrder, roomReadiness } from "./room-state";
 
 /**
  * Check-in, Folios and Charges ("Folio, billing and invoicing domain model",
@@ -364,6 +365,8 @@ export async function checkIn(pool: Pool, schema: string, id: string, userId: st
       [res.id, res.businessDate],
     );
     if (!room.rows.length) throw new Error("Assign a room for tonight before check-in");
+    // a room Out of Order tonight takes no guest: the stay moves to another room first
+    await assertNotOutOfOrder(tx, room.rows[0]!.room_id, res.businessDate, addDays(res.businessDate, 1));
     const readiness = await roomReadiness(tx, room.rows[0]!.room_id);
     const notReadyReason = options.notReadyReason?.trim().slice(0, 300) || null;
     if (!readiness.ready && !notReadyReason) throw new RoomNotReady(room.rows[0]!.number, readiness.cleanliness);

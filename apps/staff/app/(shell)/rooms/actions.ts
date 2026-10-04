@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { assignHousekeeping, createRoomBlock, endRoomBlock, propertyOfRoom, setCleanliness, setInspectionRequired } from "@hoteloftware/db";
+import { assignHousekeeping, createRoomBlock, endRoomBlock, listTenantUsers, propertyOfRoom, setCleanliness, setInspectionRequired } from "@hoteloftware/db";
 import type { Cleanliness, RoomBlockKind } from "@hoteloftware/domain";
 import { authorize, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -49,7 +49,12 @@ export async function endBlockAction(blockId: string): Promise<FormState> {
 
 export async function assignHousekeepingAction(roomId: string, assigneeId: string | null): Promise<FormState> {
   return formAction(async () => {
-    const { schema, viewer } = await scope({ roomId: String(roomId) });
+    const { schema, viewer, propertyId } = await scope({ roomId: String(roomId) });
+    const { tenant } = await requirePrincipal();
+    // the assignee must be a Housekeeper of this property
+    if (assigneeId && !(await listTenantUsers(pool(), tenant.id)).some((u) => u.id === String(assigneeId) && u.propertyRoles.some((r) => r.propertyId === propertyId && r.role === "housekeeper"))) {
+      throw new Error("Not a Housekeeper of this property");
+    }
     await assignHousekeeping(pool(), schema, String(roomId), assigneeId ? String(assigneeId) : null, viewer);
     revalidatePath("/rooms");
     return { ok: true, message: "Saved." };
@@ -58,8 +63,8 @@ export async function assignHousekeepingAction(roomId: string, assigneeId: strin
 
 export async function inspectionAction(propertyId: string, required: boolean): Promise<FormState> {
   return formAction(async () => {
-    const { tenant } = await authorize("manage_property_settings", String(propertyId));
-    await setInspectionRequired(pool(), tenant.schemaName, String(propertyId), required === true);
+    const { tenant, session, actor } = await authorize("manage_property_settings", String(propertyId));
+    await setInspectionRequired(pool(), tenant.schemaName, String(propertyId), required === true, { userId: session.user.id, actor });
     revalidatePath("/rooms");
     return { ok: true, message: "Saved." };
   });

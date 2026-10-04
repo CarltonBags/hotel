@@ -21,8 +21,8 @@ const optionalDate = (v: unknown) => (typeof v === "string" && v ? v : undefined
  * stay first. A room not ready for a guest needs a reason (ticket 33): the
  * answer then says which room and its Cleanliness.
  */
-export async function checkInAction(reservationId: string, roomId?: string | null, notReadyReason?: string | null): Promise<FormState & { notReady?: string }> {
-  let notReady: string | undefined;
+export async function checkInAction(reservationId: string, roomId?: string | null, notReadyReason?: string | null): Promise<FormState & { notReady?: { room: string; cleanliness: string } }> {
+  let notReady: { room: string; cleanliness: string } | undefined;
   const state = await formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "check_in");
     if (roomId) {
@@ -32,7 +32,7 @@ export async function checkInAction(reservationId: string, roomId?: string | nul
     try {
       await checkIn(pool(), schema, reservation.id, userId, { notReadyReason: notReadyReason ? String(notReadyReason) : null });
     } catch (err) {
-      if (err instanceof RoomNotReady) notReady = `${err.roomNumber} · ${err.cleanliness}`;
+      if (err instanceof RoomNotReady) notReady = { room: err.roomNumber, cleanliness: err.cleanliness };
       throw err;
     }
     revalidatePath(`/reservations/${reservation.id}`);

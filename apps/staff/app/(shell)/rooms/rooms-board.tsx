@@ -70,7 +70,7 @@ export function RoomsBoard({
             <div className="text-xs text-ink-80">
               {r.occupiedBy ? (
                 <Link href={`/reservations/${r.occupiedBy.reservationId}`} className="underline">
-                  {m["rs.occupied"]} · {r.occupiedBy.guestSurname} · {fill(m["rs.until"], { date: r.occupiedBy.departure })}
+                  {m["rs.occupied"]} · {r.occupiedBy.guestSurname} ({r.occupiedBy.guests}) · {fill(m["rs.until"], { date: r.occupiedBy.departure })}
                 </Link>
               ) : (
                 <span className="text-ink-60">{m["rs.vacant"]}</span>
@@ -88,6 +88,7 @@ export function RoomsBoard({
             {r.blocks.map((b) => (
               <div key={b.id} data-block={b.kind} className={`flex flex-wrap items-center gap-1 rounded-lg px-2 py-1 text-xs ${b.kind === "out_of_order" ? "bg-danger/10" : "bg-warning/10"}`}>
                 <strong>{m[`rooms.block.${b.kind}`]}</strong> {b.from} – {b.to} · {b.reason}
+                {b.kind === "out_of_order" && b.conflicts.length ? <span className="w-full text-danger">{fill(m["rs.conflicts"], { list: b.conflicts.join(", ") })}</span> : null}
                 {(b.kind === "out_of_order" ? rights.outOfOrder : rights.outOfService) ? (
                   <button type="button" disabled={pending} onClick={() => run(() => endBlockAction(b.id))} className={`${button} ml-auto h-6`}>
                     {m["rs.endBlock"]}

@@ -89,12 +89,17 @@ describe("room state", () => {
     await createRoomBlock(pool, s(), { roomId: room("107").id, kind: "out_of_service", from: day(3), to: day(5), reason: "TV broken" }, asPm);
     const cal = await loadCalendar(pool, s(), berlin, day(2), 4);
     const free = cal.roomTypes[0]!.days.map((d) => d.free);
-    // the stay assigned to 110 is a conflict to move; it still counts as a reservation
-    expect(free).toEqual([10, 7, 8, 10]);
+    // the stay assigned to 110 is a conflict to move: one room, counted once
+    expect(free).toEqual([10, 8, 8, 10]);
     const other = await book(day(4), day(5));
     await expect(assignRoom(pool, s(), other, fd, room("109").id)).rejects.toThrow(/Out of Order/);
     await expect(createRoomBlock(pool, s(), { roomId: room("109").id, kind: "out_of_service", from: day(4), to: day(6), reason: "x" }, asPm)).rejects.toThrow(/already blocked/);
     await expect(createRoomBlock(pool, s(), { roomId: room("101").id, kind: "out_of_order", from: day(4), to: day(6), reason: "x" }, { userId: fd, actor: { propertyRoles: [{ propertyId: berlin, role: "front_desk" }] } })).rejects.toThrow(/Not allowed/);
+    // a block cancelled before it began takes nothing out of sale
+    const future = await createRoomBlock(pool, s(), { roomId: room("104").id, kind: "out_of_order", from: day(6), to: day(8), reason: "Paint" }, asPm);
+    await endRoomBlock(pool, s(), future.id, asPm);
+    const later = await book(day(5), day(7));
+    await assignRoom(pool, s(), later, fd, room("104").id);
   });
 
   it("the room picker puts rooms the guest's preferences match first and shows blocks and the next stay", async () => {
@@ -139,13 +144,24 @@ describe("room state", () => {
     const b = await createRoomBlock(pool, s(), { roomId: room("106").id, kind: "out_of_service", from: today, to: day(2), reason: "Noise" }, asPm);
     await endRoomBlock(pool, s(), b.id, asPm);
     expect(await cleanliness("106")).toBe("dirty");
-    // moving from tonight: the room left needs cleaning
-    await moveRoomInHouse(pool, s(), stay, fd, room("108").id, day(1));
+    // moving from tonight: the room left needs cleaning (a guest who arrived yesterday)
+    await pool.query(`update ${s()}.reservations set arrival = arrival - 1 where id = $1`, [stay]);
+    await pool.query(`update ${s()}.room_assignments set from_date = from_date - 1 where reservation_id = $1`, [stay]);
+    await moveRoomInHouse(pool, s(), stay, fd, room("108").id, today);
+    expect(await cleanliness("105")).toBe("dirty");
+    await setCleanliness(pool, s(), room("108").id, "inspected", asPm);
     await pool.query(`update ${s()}.properties set night_audit_from = '00:00' where id = $1`, [berlin]);
-    await setCleanliness(pool, s(), room("105").id, "inspected", asPm);
     // the day's missing arrivals are decided first (none of this test's concern)
     await pool.query(`update ${s()}.reservations set status = 'cancelled' where property_id = $1 and status = 'confirmed' and arrival <= $2`, [berlin, today]);
     await closeNightAudit(pool, s(), berlin, fd, { now: new Date(`${day(1)}T03:00:00Z`) });
-    expect(await cleanliness("105")).toBe("dirty");
+    // the room the guest sleeps in tonight is Dirty after the audit
+    expect(await cleanliness("108")).toBe("dirty");
+  });
+
+  it("a stay assigned into a room put Out of Order cannot check in there", async () => {
+    // the Business Date is tomorrow by now (the audit above closed today)
+    const stay = await book(day(1), day(2), "107");
+    await createRoomBlock(pool, s(), { roomId: room("107").id, kind: "out_of_order", from: day(1), to: day(2), reason: "Leak" }, asPm);
+    await expect(checkIn(pool, s(), stay, fd)).rejects.toThrow(/Out of Order/);
   });
 });

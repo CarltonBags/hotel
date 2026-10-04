@@ -26,7 +26,7 @@ export function CheckInButton({ reservationId, needsRoom = false, compact = fals
     startTransition(async () => {
       const res = await checkInAction(reservationId, roomId ?? null, why ?? null);
       setError(res.notReady ? null : (res.error ?? null));
-      setNotReady(res.notReady ? { room: res.notReady, roomId: null } : null);
+      setNotReady(res.notReady ? { room: `${res.notReady.room} · ${m[`rooms.cleanliness.${res.notReady.cleanliness as "dirty"}`] ?? res.notReady.cleanliness}`, roomId: null } : null);
       // the room chosen is assigned by now: the reason is asked outside the room dialog
       if (res.notReady) setChoices(null);
       if (!res.error) {

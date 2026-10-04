@@ -22,6 +22,15 @@ import {
  * rooms of their own tasks.
  */
 
+/**
+ * The one Out of Order test: block `b` takes its room out of sale on some
+ * night of [from, to). A block cancelled before it began (no night) never does.
+ */
+export const outOfOrderOn = (b: string, from: string, to: string) => `(${b}.kind = 'out_of_order' and ${b}.to_date > ${b}.from_date and ${b}.from_date < ${to} and ${b}.to_date > ${from})`;
+/** Any block (Out of Order or Service) on some night of [from, to). */
+const blockOn = (b: string, from: string, to: string) => `(${b}.to_date > ${b}.from_date and ${b}.from_date < ${to} and ${b}.to_date > ${from})`;
+const BLOCK_RIGHT = { out_of_order: "manage_out_of_order", out_of_service: "manage_out_of_service" } as const;
+
 export interface Viewer {
   userId: string;
   actor: Actor;
@@ -67,6 +76,8 @@ export interface RoomBlock {
   to: string;
   reason: string;
   createdBy: string;
+  /** Stays still assigned to the room on blocked nights (Out of Order: to move), floor view. */
+  conflicts: string[];
 }
 
 export interface RoomState {
@@ -79,8 +90,8 @@ export interface RoomState {
   section: string | null;
   cleanliness: Cleanliness;
   ready: boolean;
-  /** Occupied tonight (Business Date): the stay in it, floor view only. */
-  occupiedBy: { reservationId: string; confirmationNumber: string; guestSurname: string; departure: string } | null;
+  /** Occupied tonight (Business Date): the stay in it, floor view only (surname, dates, number of guests). */
+  occupiedBy: { reservationId: string; confirmationNumber: string; guestSurname: string; departure: string; guests: number } | null;
   /** An arrival for tonight assigned to the room. */
   arrival: { reservationId: string; confirmationNumber: string; guestSurname: string } | null;
   /** Blocks in force tonight or later. */
@@ -90,7 +101,7 @@ export interface RoomState {
 
 const BLOCK_COLUMNS = "id, room_id, kind, to_char(from_date, 'YYYY-MM-DD') as from_date, to_char(to_date, 'YYYY-MM-DD') as to_date, reason, created_by";
 type BlockRow = { id: string; room_id: string; kind: RoomBlockKind; from_date: string; to_date: string; reason: string; created_by: string };
-const toBlock = (b: BlockRow): RoomBlock => ({ id: b.id, roomId: b.room_id, kind: b.kind, from: b.from_date, to: b.to_date, reason: b.reason, createdBy: b.created_by });
+const toBlock = (b: BlockRow & { conflicts?: string[] | null }): RoomBlock => ({ id: b.id, roomId: b.room_id, kind: b.kind, from: b.from_date, to: b.to_date, reason: b.reason, createdBy: b.created_by, conflicts: b.conflicts ?? [] });
 
 /** The property's rooms with their state on the Business Date; a Housekeeper gets only their own rooms. */
 export async function listRoomStates(pool: Pool, schema: string, propertyId: string, viewer: Viewer): Promise<{ businessDate: string; inspectionRequired: boolean; rooms: RoomState[] }> {
@@ -107,13 +118,21 @@ export async function listRoomStates(pool: Pool, schema: string, propertyId: str
       [propertyId],
     )).rows.filter((r) => !own || own.has(r.id));
     const ids = rows.map((r) => r.id);
-    const stays = (await tx.query<{ room_id: string; reservation_id: string; confirmation_number: string; last_name: string; departure: string; status: string; arrival: string }>(
-      `select a.room_id, r.id as reservation_id, b.confirmation_number, g.last_name, to_char(r.departure, 'YYYY-MM-DD') as departure, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival
+    const stays = (await tx.query<{ room_id: string; reservation_id: string; confirmation_number: string; last_name: string; departure: string; status: string; arrival: string; guests: number }>(
+      `select a.room_id, r.id as reservation_id, b.confirmation_number, g.last_name, to_char(r.departure, 'YYYY-MM-DD') as departure, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival,
+         r.adults + coalesce(array_length(r.child_ages, 1), 0) as guests
        from room_assignments a join reservations r on r.id = a.reservation_id join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id
        where a.room_id = any($1::uuid[]) and a.from_date <= $2 and a.to_date > $2 and r.status in ('checked_in', 'confirmed')`,
       [ids, businessDate],
     )).rows;
-    const blocks = (await tx.query<BlockRow>(`select ${BLOCK_COLUMNS} from room_blocks where room_id = any($1::uuid[]) and to_date > $2 and to_date > from_date order by from_date`, [ids, businessDate])).rows.map(toBlock);
+    const blocks = (await tx.query<BlockRow & { conflicts: string[] | null }>(
+      `select ${BLOCK_COLUMNS},
+         (select array_agg(bk.confirmation_number || ' · ' || g.last_name order by a.from_date) from room_assignments a join reservations r on r.id = a.reservation_id
+            join bookings bk on bk.id = r.booking_id join guests g on g.id = r.primary_guest_id
+           where a.room_id = room_blocks.room_id and a.from_date < room_blocks.to_date and a.to_date > room_blocks.from_date and r.status in ('confirmed', 'checked_in')) as conflicts
+       from room_blocks where room_id = any($1::uuid[]) and to_date > $2 and to_date > from_date order by from_date`,
+      [ids, businessDate],
+    )).rows.map(toBlock);
     const tasks = (await tx.query<{ id: string; room_id: string; assignee_id: string | null; status: string }>(
       "select id, room_id, assignee_id, status from housekeeping_tasks where room_id = any($1::uuid[]) and business_date = $2 order by created_at",
       [ids, businessDate],
@@ -135,7 +154,7 @@ export async function listRoomStates(pool: Pool, schema: string, propertyId: str
           section: m.section,
           cleanliness: m.cleanliness,
           ready: isReady(m.cleanliness, inspectionRequired),
-          occupiedBy: inHouse ? { reservationId: inHouse.reservation_id, confirmationNumber: inHouse.confirmation_number, guestSurname: inHouse.last_name, departure: inHouse.departure } : null,
+          occupiedBy: inHouse ? { reservationId: inHouse.reservation_id, confirmationNumber: inHouse.confirmation_number, guestSurname: inHouse.last_name, departure: inHouse.departure, guests: inHouse.guests } : null,
           arrival: arriving ? { reservationId: arriving.reservation_id, confirmationNumber: arriving.confirmation_number, guestSurname: arriving.last_name } : null,
           blocks: blocks.filter((b) => b.roomId === m.id),
           task: task ? { id: task.id, assigneeId: task.assignee_id, status: task.status } : null,
@@ -167,6 +186,7 @@ export async function setCleanliness(pool: Pool, schema: string, roomId: string,
 export interface BlockConflict {
   reservationId: string;
   confirmationNumber: string;
+  /** Floor view: the surname only. */
   guestName: string;
   from: string;
   to: string;
@@ -193,18 +213,19 @@ export async function createRoomBlock(
   return withTenant(pool, schema, async (tx) => {
     const room = (await tx.query<{ property_id: string }>("select property_id from rooms where id = $1", [input.roomId])).rows[0];
     if (!room) throw new Error("Room not found");
-    if (!can(viewer.actor, input.kind === "out_of_order" ? "manage_out_of_order" : "manage_out_of_service", room.property_id)) throw new Error("Not allowed to set this Room Block");
+    // availability changes: the property lock first, as for every reservation writer
     await lockProperty(tx, room.property_id);
+    if (!can(viewer.actor, BLOCK_RIGHT[input.kind], room.property_id)) throw new Error("Not allowed to set this Room Block");
     const { businessDate } = await businessDateOf(tx, room.property_id);
     if (input.from < businessDate) throw new Error("A block starts on the Business Date or later");
-    const overlap = (await tx.query("select 1 from room_blocks where room_id = $1 and from_date < $3 and to_date > $2 and to_date > from_date", [input.roomId, input.from, input.to])).rows.length;
+    const overlap = (await tx.query(`select 1 from room_blocks b where b.room_id = $1 and ${blockOn("b", "$2", "$3")}`, [input.roomId, input.from, input.to])).rows.length;
     if (overlap) throw new Error("The room is already blocked on some of those nights");
     const { rows } = await tx.query<{ id: string }>(
       "insert into room_blocks (property_id, room_id, kind, from_date, to_date, reason, created_by) values ($1, $2, $3, $4, $5, $6, $7) returning id",
       [room.property_id, input.roomId, input.kind, input.from, input.to, reason, viewer.userId],
     );
     const conflicts = (await tx.query<{ reservation_id: string; confirmation_number: string; guest: string; from_date: string; to_date: string }>(
-      `select r.id as reservation_id, b.confirmation_number, trim(g.first_name || ' ' || g.last_name) as guest, to_char(a.from_date, 'YYYY-MM-DD') as from_date, to_char(a.to_date, 'YYYY-MM-DD') as to_date
+      `select r.id as reservation_id, b.confirmation_number, g.last_name as guest, to_char(a.from_date, 'YYYY-MM-DD') as from_date, to_char(a.to_date, 'YYYY-MM-DD') as to_date
        from room_assignments a join reservations r on r.id = a.reservation_id join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id
        where a.room_id = $1 and a.from_date < $3 and a.to_date > $2 and r.status in ('confirmed', 'checked_in') order by a.from_date`,
       [input.roomId, input.from, input.to],
@@ -217,11 +238,13 @@ export async function createRoomBlock(
 export async function endRoomBlock(pool: Pool, schema: string, blockId: string, viewer: Viewer): Promise<void> {
   if (!isUuid(blockId)) throw new Error("Block not found");
   await withTenant(pool, schema, async (tx) => {
-    const b = (await tx.query<BlockRow & { property_id: string }>(`select ${BLOCK_COLUMNS}, property_id from room_blocks where id = $1 for update`, [blockId])).rows[0];
-    if (!b) throw new Error("Block not found");
-    if (!can(viewer.actor, b.kind === "out_of_order" ? "manage_out_of_order" : "manage_out_of_service", b.property_id)) throw new Error("Not allowed to end this Room Block");
+    const owner = (await tx.query<{ property_id: string }>("select property_id from room_blocks where id = $1", [blockId])).rows[0];
+    if (!owner) throw new Error("Block not found");
+    await lockProperty(tx, owner.property_id);
+    const b = (await tx.query<BlockRow & { property_id: string }>(`select ${BLOCK_COLUMNS}, property_id from room_blocks where id = $1 for update`, [blockId])).rows[0]!;
+    if (!can(viewer.actor, BLOCK_RIGHT[b.kind], b.property_id)) throw new Error("Not allowed to end this Room Block");
     const { businessDate } = await businessDateOf(tx, b.property_id);
-    if (b.to_date <= businessDate) throw new Error("The block has already ended");
+    if (b.to_date <= businessDate || b.to_date === b.from_date) throw new Error("The block has already ended");
     // a block not begun yet is cancelled; one in force ends tonight
     const end = b.from_date > businessDate ? b.from_date : businessDate;
     await tx.query("update room_blocks set to_date = $2, ended_at = clock_timestamp(), ended_by = $3 where id = $1", [blockId, end, viewer.userId]);
@@ -229,7 +252,7 @@ export async function endRoomBlock(pool: Pool, schema: string, blockId: string, 
   });
 }
 
-/** Give a room's Housekeeping Task of the Business Date to a Housekeeper (null: unassigned). */
+/** Give a room's Housekeeping Task of the Business Date to a Housekeeper (null: unassigned); the caller checked the assignee is one at the property. */
 export async function assignHousekeeping(pool: Pool, schema: string, roomId: string, assigneeId: string | null, viewer: Viewer): Promise<void> {
   if (!isUuid(roomId)) throw new Error("Room not found");
   await withTenant(pool, schema, async (tx) => {
@@ -251,7 +274,10 @@ export async function outOfOrderByNight(tx: PoolClient, propertyId: string, from
     `select m.room_type_id, to_char(d, 'YYYY-MM-DD') as date, count(*)::int as n
      from room_blocks b join rooms m on m.id = b.room_id
      cross join lateral generate_series(greatest(b.from_date, $2::date), least(b.to_date, $3::date) - 1, interval '1 day') d
-     where b.property_id = $1 and b.kind = 'out_of_order' and b.from_date < $3::date and b.to_date > $2::date
+     where b.property_id = $1 and ${outOfOrderOn("b", "$2::date", "$3::date")}
+       -- a room a stay still holds that night is already counted with the stays: one room, counted once
+       and not exists (select 1 from room_assignments a join reservations r on r.id = a.reservation_id
+                       where a.room_id = b.room_id and a.from_date <= d and a.to_date > d and r.status in ('confirmed', 'checked_in'))
      group by m.room_type_id, d`,
     [propertyId, from, to],
   );
@@ -260,22 +286,21 @@ export async function outOfOrderByNight(tx: PoolClient, propertyId: string, from
 
 /** Refuse a room Out of Order on any of the nights. */
 export async function assertNotOutOfOrder(tx: PoolClient, roomId: string, from: string, to: string): Promise<void> {
-  const b = (await tx.query<{ from_date: string }>(
-    "select to_char(from_date, 'YYYY-MM-DD') as from_date from room_blocks where room_id = $1 and kind = 'out_of_order' and from_date < $3 and to_date > $2 limit 1",
-    [roomId, from, to],
-  )).rows[0];
+  const b = (await tx.query<{ from_date: string }>(`select to_char(b.from_date, 'YYYY-MM-DD') as from_date from room_blocks b where b.room_id = $1 and ${outOfOrderOn("b", "$2", "$3")} limit 1`, [roomId, from, to])).rows[0];
   if (b) throw new Error("The room is Out of Order on some of those nights");
 }
 
 /** The property's ready rule for check-in. */
 export async function roomReadiness(tx: PoolClient, roomId: string): Promise<{ cleanliness: Cleanliness; ready: boolean }> {
-  const r = (await tx.query<{ cleanliness: Cleanliness; inspection_required: boolean }>("select m.cleanliness, p.inspection_required from rooms m join properties p on p.id = m.property_id where m.id = $1", [roomId])).rows[0]!;
+  const r = (await tx.query<{ cleanliness: Cleanliness; inspection_required: boolean }>("select m.cleanliness, p.inspection_required from rooms m join properties p on p.id = m.property_id where m.id = $1", [roomId])).rows[0];
+  if (!r) throw new Error("Room not found");
   return { cleanliness: r.cleanliness, ready: isReady(r.cleanliness, r.inspection_required) };
 }
 
-/** The property's inspection rule: Inspected rooms only, or Clean is enough. */
-export async function setInspectionRequired(pool: Pool, schema: string, propertyId: string, required: boolean): Promise<void> {
+/** The property's inspection rule: Inspected rooms only, or Clean is enough (Property Manager). */
+export async function setInspectionRequired(pool: Pool, schema: string, propertyId: string, required: boolean, viewer: Viewer): Promise<void> {
   if (!isUuid(propertyId)) throw new Error("Property not found");
+  if (!can(viewer.actor, "manage_property_settings", propertyId)) throw new Error("Not allowed to change the property's settings");
   await withTenant(pool, schema, (tx) => tx.query("update properties set inspection_required = $2 where id = $1", [propertyId, required === true]));
 }
 

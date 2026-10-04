@@ -23,7 +23,7 @@ import { lockProperty } from "./property-lock";
 import { followStay, syncStayCharges } from "./folios";
 import { REASON_TEXT, loadQuoteData, quoteFor, writeNights } from "./reservations";
 import { withTenant } from "./with-tenant";
-import { assertNotOutOfOrder, markDirty, roomOfNight } from "./room-state";
+import { assertNotOutOfOrder, markDirty, outOfOrderOn, roomOfNight } from "./room-state";
 
 /**
  * Changes to a Reservation after booking ("Reservation and inventory domain
@@ -402,12 +402,14 @@ async function roomTaken(tx: PoolClient, roomId: string, from: string, to: strin
 
 /** `typeFrom`: segments ending by this night are nights already slept in a room of the earlier room type. */
 async function writeSegments(tx: PoolClient, r: ResRow, segs: AssignmentSegment[], typeFrom?: string): Promise<void> {
+  const businessDate = (await tx.query<{ d: string }>("select to_char(business_date, 'YYYY-MM-DD') as d from properties where id = $1", [r.property_id])).rows[0]!.d;
   for (const s of segs) {
     const room = await tx.query("select 1 from rooms where id = $1 and room_type_id = $2", [s.roomId, r.room_type_id]);
     if (!room.rowCount && !(typeFrom && s.to <= typeFrom)) throw new Error("The room must be of the reservation's room type");
     if (await roomTaken(tx, s.roomId, s.from, s.to, r.id)) throw new Error("The room is taken by another reservation on those nights");
-    // nights already slept keep their room whatever happened to it since
-    if (!(typeFrom && s.to <= typeFrom)) await assertNotOutOfOrder(tx, s.roomId, typeFrom && s.from < typeFrom ? typeFrom : s.from, s.to);
+    // nights already slept (before the Business Date, or before a move) keep their room whatever happened to it since
+    const from = [s.from, businessDate, typeFrom ?? s.from].sort().at(-1)!;
+    if (from < s.to) await assertNotOutOfOrder(tx, s.roomId, from, s.to);
   }
   await tx.query("delete from room_assignments where reservation_id = $1", [r.id]);
   for (const s of segs) await tx.query("insert into room_assignments (reservation_id, room_id, from_date, to_date) values ($1, $2, $3, $4)", [r.id, s.roomId, s.from, s.to]);
@@ -564,7 +566,7 @@ export async function listRoomChoices(pool: Pool, schema: string, id: string, op
     );
     const blocks = (await tx.query<{ room_id: string; kind: RoomBlockKind; from_date: string; to_date: string; reason: string }>(
       `select room_id, kind, to_char(from_date, 'YYYY-MM-DD') as from_date, to_char(to_date, 'YYYY-MM-DD') as to_date, reason from room_blocks
-       where room_id = any($1::uuid[]) and from_date < $3 and to_date > $2 order by from_date`,
+       where room_id = any($1::uuid[]) and from_date < $3 and to_date > $2 and to_date > from_date order by from_date`,
       [rows.map((x) => x.id), start, r.departure],
     )).rows;
     // the guest's preferences, matched against the rooms' features (by name or code)
@@ -618,7 +620,7 @@ export async function listFreeRooms(pool: Pool, schema: string, id: string, from
          and not exists (select 1 from room_assignments a join reservations x on x.id = a.reservation_id
                          where a.room_id = m.id and a.from_date < $3 and a.to_date > $2 and x.status = any($5::text[]) and x.id <> $4)
          and not exists (select 1 from room_assignments own where own.room_id = m.id and own.reservation_id = $4 and own.from_date < $3 and own.to_date > $2)
-         and not exists (select 1 from room_blocks ob where ob.room_id = m.id and ob.kind = 'out_of_order' and ob.from_date < $3 and ob.to_date > $2)
+         and not exists (select 1 from room_blocks ob where ob.room_id = m.id and ${outOfOrderOn("ob", "$2", "$3")})
        order by m.room_type_id <> $1, m.number`,
       [r.room_type_id, start, r.departure, id, OCCUPYING_STATUSES, options.anyType === true, r.property_id],
     );

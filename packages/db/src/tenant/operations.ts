@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { addDays, includesBreakfast, occupancyPercent, personsByMealPlan, type MealPlan, type PersonsByMealPlan, type ReservationStatus, type WorkspaceRow } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { withTenant } from "./with-tenant";
+import { outOfOrderOn } from "./room-state";
 
 /**
  * Operational lists of a property (permission matrix "Operational lists"):
@@ -167,7 +168,7 @@ export async function todaySummary(pool: Pool, schema: string, propertyId: strin
          (select count(*)::int from reservations r where r.property_id = $1 and ${rule("inHouse", "$2")}) as in_house,
          (select count(*)::int from reservations r where r.property_id = $1 and ${rule("staying", "$2")}) as staying,
          (select count(*)::int from rooms m where m.property_id = $1
-            and not exists (select 1 from room_blocks b where b.room_id = m.id and b.kind = 'out_of_order' and b.from_date <= $2::date and b.to_date > $2::date)) as rooms`,
+            and not exists (select 1 from room_blocks b where b.room_id = m.id and ${outOfOrderOn("b", "$2::date", "$2::date + 1")})) as rooms`,
       [propertyId, date],
     );
     const r = rows[0]!;
