@@ -1188,6 +1188,25 @@ const catalog = {
 
   "services.minibar": { en: "Minibar item (counted on the room sheet)", de: "Minibar-Artikel (im Zimmerblatt gezählt)" },
 
+  // calendar availability (ticket 24)
+  "cal.view": { en: "View", de: "Ansicht" },
+  "cal.view.rooms": { en: "Rooms", de: "Zimmer" },
+  "cal.view.availability": { en: "Availability", de: "Verfügbarkeit" },
+  "cal.roomType": { en: "Room type", de: "Zimmertyp" },
+  "cal.occupancy": { en: "Occupancy", de: "Auslastung" },
+  "cal.cell": { en: "Reservations of the night", de: "Reservierungen der Nacht" },
+  "cal.pickCell": { en: "Select a cell to see the reservations behind it.", de: "Eine Zelle wählen, um die Reservierungen dahinter zu sehen." },
+  "cal.cellSummary": { en: "{free} free of {rooms} · {staying} staying · {leaving} leaving", de: "{free} frei von {rooms} · {staying} im Haus · {leaving} reisen ab" },
+  "cal.noStays": { en: "No reservations that night.", de: "Keine Reservierungen in dieser Nacht." },
+  "cal.role.arrives": { en: "arrives", de: "reist an" },
+  "cal.role.staying": { en: "staying", de: "im Haus" },
+  "cal.role.leaves": { en: "leaves", de: "reist ab" },
+  "cal.night1": { en: "1 night", de: "1 Nacht" },
+  "cal.outOfOrderN": { en: "{n} Out of Order", de: "{n} außer Betrieb" },
+  "cal.nightsN": { en: "{n} nights", de: "{n} Nächte" },
+  "cal.allProperties": { en: "All properties", de: "Alle Betriebe" },
+  "cal.openHotel": { en: "Open calendar", de: "Kalender öffnen" },
+
   // rates grid tools (ticket 19)
   "tools.title": { en: "Tools", de: "Werkzeuge" },
   "tools.paste": { en: "Paste from a spreadsheet", de: "Aus Tabelle einfügen" },

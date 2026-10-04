@@ -4,7 +4,7 @@
  */
 import { addDays } from "./rates-grid";
 import type { AssignmentSegment } from "./reservation-edit";
-import type { ReservationStatus } from "./reservations";
+import { OCCUPYING_STATUSES, type ReservationStatus } from "./reservations";
 import { nightsOf } from "./stay-quote";
 
 /** Visible days the Rooms view offers. */
@@ -80,3 +80,29 @@ export function packLanes<T extends { arrival: string; departure: string }>(bars
   }
   return lanes;
 }
+
+interface CellStay {
+  roomTypeId: string;
+  status: ReservationStatus;
+  arrival: string;
+  departure: string;
+}
+
+/** Restriction marks of a calendar day, the same in the Rooms and the Availability view. */
+export function restrictionMarks(day: { stopSell: boolean; minStay: number | null; closedToArrival: boolean; closedToDeparture: boolean; maxStay: number | null }): string {
+  return [day.stopSell ? "STOP" : "", day.minStay ? `${day.minStay}N` : "", day.closedToArrival ? "CTA" : "", day.closedToDeparture ? "CTD" : "", day.maxStay ? `≤${day.maxStay}` : ""].filter(Boolean).join(" ");
+}
+
+/**
+ * The reservations behind an Availability cell (room type by night): those
+ * taking a room that night (Confirmed or Checked-in, arrival up to the night,
+ * departure after it), and those leaving that morning.
+ */
+export function cellReservations<R extends CellStay>(reservations: R[], roomTypeId: string, date: string): { staying: R[]; leaving: R[] } {
+  const ofType = reservations.filter((r) => r.roomTypeId === roomTypeId);
+  return {
+    staying: ofType.filter((r) => OCCUPYING_STATUSES.includes(r.status) && r.arrival <= date && r.departure > date),
+    leaving: ofType.filter((r) => r.status !== "cancelled" && r.status !== "no_show" && r.departure === date),
+  };
+}
+

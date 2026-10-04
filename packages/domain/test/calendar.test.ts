@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dropOutcome, packLanes, type CalendarBar } from "../src/calendar";
+import { cellReservations, dropOutcome, packLanes, type CalendarBar } from "../src/calendar";
 
 /** Seam: what dropping a reservation bar on the Rooms view means (prototype "Dragging" rules) and lane packing. */
 describe("calendar drops", () => {
@@ -43,5 +43,15 @@ describe("lanes", () => {
       { id: "c", arrival: "2026-12-09", departure: "2026-12-11" },
     ]);
     expect(lanes.map((l) => l.map((x) => x.id))).toEqual([["a", "c"], ["b"]]);
+  });
+});
+
+describe("availability cells", () => {
+  const r = (roomTypeId: string, status: "confirmed" | "checked_in" | "checked_out" | "cancelled", arrival: string, departure: string) => ({ roomTypeId, status, arrival, departure });
+  it("lists who takes a room that night and who leaves that morning", () => {
+    const list = [r("d", "confirmed", "2026-12-07", "2026-12-09"), r("d", "checked_in", "2026-12-05", "2026-12-08"), r("d", "cancelled", "2026-12-07", "2026-12-09"), r("s", "confirmed", "2026-12-07", "2026-12-09"), r("d", "checked_out", "2026-12-04", "2026-12-07")];
+    const cell = cellReservations(list, "d", "2026-12-07");
+    expect(cell.staying).toEqual([list[0], list[1]]);
+    expect(cell.leaving).toEqual([list[4]]);
   });
 });

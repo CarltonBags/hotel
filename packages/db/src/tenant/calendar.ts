@@ -21,8 +21,10 @@ export interface CalendarRoom {
 
 export interface CalendarDay {
   date: string;
-  /** Rooms of the type not taken by Confirmed or Checked-in reservations. */
+  /** Rooms of the type not taken by Confirmed or Checked-in reservations, nor Out of Order. */
   free: number;
+  /** Rooms of the type Out of Order that night (not for sale, not occupied). */
+  outOfOrder: number;
   /** Lowest price of the public, active Rate Plans at base occupancy; null without a price. */
   lowestPrice: number | null;
   /** Stop sell on every public plan that has a price. */
@@ -125,6 +127,7 @@ export async function loadCalendar(pool: Pool, schema: string, propertyId: strin
         return {
           date,
           free: t.rooms - data.roomsTaken(t.id, date),
+          outOfOrder: data.outOfOrder(t.id, date),
           lowestPrice: lowest?.price ?? null,
           stopSell: priced.length > 0 && priced.every((x) => x.restriction.stopSell),
           minStay: lowest && lowest.restriction.minStayArrival !== null && lowest.restriction.minStayArrival > 1 ? lowest.restriction.minStayArrival : null,
