@@ -12,6 +12,7 @@ import {
   formatCurrency,
   localeFor,
   packLanes,
+  restrictionMarks,
   weekdayIndex,
   type AssignmentSegment,
   type CalendarBar,
@@ -24,7 +25,7 @@ import type { CalendarData, CalendarReservation, CalendarRoom, CalendarRoomType,
 import { fill, type Messages } from "@/i18n/messages";
 import { useShell } from "@/shell/ShellProvider";
 import { MARKER_STYLE } from "../rates/marker-style";
-import { ViewToggle } from "./calendar-availability";
+import { ViewToggle } from "./view-toggle";
 import { applyDrop, dropOnRoom, previewDrop, undoDrop, type DropResult, type StayMove } from "./actions";
 
 interface Props {
@@ -356,7 +357,7 @@ export function CalendarRooms({ property, data, today, markers, range, canEdit, 
                       {dw > 60 ? (
                         <span className="text-[11px] text-ink-60">
                           {day.lowestPrice !== null ? money(day.lowestPrice) : "—"}
-                          {restrictionMarks(day) ? ` · ${restrictionMarks(day)}` : ""}
+                          {restrictionMarks({ ...day, stopSell: false }) ? ` · ${restrictionMarks({ ...day, stopSell: false })}` : ""}
                         </span>
                       ) : null}
                     </div>
@@ -495,9 +496,6 @@ export function CalendarRooms({ property, data, today, markers, range, canEdit, 
 }
 
 /** The grid's compact marks: 2N minimum stay, CTA, CTD, ≤7 maximum stay. */
-function restrictionMarks(day: { minStay: number | null; closedToArrival: boolean; closedToDeparture: boolean; maxStay: number | null }): string {
-  return [day.minStay ? `${day.minStay}N` : "", day.closedToArrival ? "CTA" : "", day.closedToDeparture ? "CTD" : "", day.maxStay ? `≤${day.maxStay}` : ""].filter(Boolean).join(" ");
-}
 
 /** Index of the first offset above `y` (offsets ascending). */
 function upperBound(offsets: number[], y: number): number {

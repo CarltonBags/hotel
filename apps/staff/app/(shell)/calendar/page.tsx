@@ -1,6 +1,6 @@
 import { CALENDAR_RANGES, DATA_KINDS, addDays, can, isCalendarDate } from "@hoteloftware/domain";
 import { listEventMarkers, loadCalendar } from "@hoteloftware/db";
-import { requireAllowed, requirePrincipal } from "@/lib/authorize";
+import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { LiveRefresh } from "@/shell/LiveRefresh";
@@ -20,8 +20,9 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
   const property = shell.properties.find((p) => p.id === shell.scope);
   if (!property) {
     // "All properties": the Availability view with one block per hotel the user may see reservations of
-    const { tenant, actor } = await requirePrincipal();
-    const visible = shell.scope === "all" ? shell.properties.filter((p) => can(actor, "view_reservations", p.id)) : [];
+    const { tenant, actor } = shell.principal;
+    // front-office users never get "All properties" (their scope is one property)
+    const visible = shell.scope === "all" && !shell.frontOffice ? shell.properties.filter((p) => can(actor, "view_reservations", p.id)) : [];
     if (!visible.length) {
       return (
         <div className="mx-auto max-w-3xl p-6">
@@ -30,15 +31,18 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
         </div>
       );
     }
-    const blocks = [];
-    for (const p of visible) {
-      const from = isCalendarDate(sp.from) ? sp.from : addDays(p.businessDate, -1);
-      const [data, markers] = await Promise.all([
-        loadCalendar(pool(), tenant.schemaName, p.id, from, range),
-        listEventMarkers(pool(), tenant.schemaName, p.id, { from, to: addDays(from, range - 1) }),
-      ]);
-      blocks.push({ property: { id: p.id, name: p.name, currency: p.currency, country: p.country }, data, markers, today: p.businessDate });
-    }
+    const blocks = await Promise.all(
+      visible.map(async (p) => {
+        // each hotel from three days before its own Business Date, as its Rooms view
+        const from = isCalendarDate(sp.from) ? sp.from : addDays(p.businessDate, -3);
+        const [data, markers] = await Promise.all([
+          loadCalendar(pool(), tenant.schemaName, p.id, from, range),
+          listEventMarkers(pool(), tenant.schemaName, p.id, { from, to: addDays(from, range - 1) }),
+        ]);
+        // the blocks show free rooms only: no guest data goes to the browser
+        return { property: { id: p.id, name: p.name, currency: p.currency, country: p.country }, data: { ...data, reservations: [], sections: [], features: [] }, markers, today: p.businessDate };
+      }),
+    );
     return (
       <>
         <LiveRefresh kind={DATA_KINDS.reservations} propertyIds={visible.map((p) => p.id)} />

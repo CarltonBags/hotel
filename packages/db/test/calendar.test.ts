@@ -13,6 +13,7 @@ import { createGuest } from "../src/tenant/guests";
 import { createBooking, findReservation } from "../src/tenant/reservations";
 import { assignRoom, moveRoom, previewReservationChange, reservationHistory, restoreAssignments } from "../src/tenant/reservation-changes";
 import { loadCalendar } from "../src/tenant/calendar";
+import { createRoomBlock } from "../src/tenant/room-state";
 import { cellReservations } from "@hoteloftware/domain";
 import { resetTestDatabase, testPool } from "./helpers";
 
@@ -83,7 +84,15 @@ describe("calendar", () => {
     expect(res.segments).toEqual([{ roomId: rooms[0]!.id, from: "2026-12-07", to: "2026-12-10" }]);
     expect(cal.reservations.find((r) => r.id === r2)!.segments).toEqual([]);
     // the Availability view's cell lists exactly the stays its free count leaves out
-    for (const day of d.days) expect(cellReservations(cal.reservations, d.id, day.date).staying.length).toBe(d.rooms.length - day.free);
+    for (const day of d.days) expect(cellReservations(cal.reservations, d.id, day.date).staying.length).toBe(d.rooms.length - day.free - day.outOfOrder);
+  });
+
+  it("an Out of Order room is neither free nor a stay behind the cell", async () => {
+    await createRoomBlock(pool, tenant.schemaName, { roomId: rooms[1]!.id, kind: "out_of_order", from: "2026-12-15", to: "2026-12-17", reason: "Leak" }, { userId: fd, actor: { tenantRole: "owner", propertyRoles: [] } });
+    const cal = await loadCalendar(pool, tenant.schemaName, berlin, "2026-12-15", 2);
+    const d = cal.roomTypes.find((t) => t.code === "DBL")!;
+    expect(d.days.map((x) => [x.free, x.outOfOrder])).toEqual([[1, 1], [1, 1]]);
+    for (const day of d.days) expect(cellReservations(cal.reservations, d.id, day.date).staying.length).toBe(d.rooms.length - day.free - day.outOfOrder);
   });
 
   it("previews a date change with old and new dates and the price difference, without changing anything", async () => {

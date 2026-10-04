@@ -19,11 +19,14 @@ export function AllPropertiesCalendar(props: {
   const { m } = props;
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const open = (id: string) =>
+  // the hotel's Calendar in the Availability view, on the same dates
+  const open = (id: string, from: string) => {
+    if (pending) return;
     startTransition(async () => {
       await setPropertyScope(id);
-      router.push("/calendar");
+      router.push(`/calendar?view=availability&from=${from}&range=${props.range}`);
     });
+  };
   return (
     <div className="grid gap-5 p-5">
       <h1 className="text-xl font-medium">
@@ -32,13 +35,20 @@ export function AllPropertiesCalendar(props: {
       {props.blocks.length === 0 ? <p className="text-ink-60">{m["cal.pickProperty"]}</p> : null}
       {props.blocks.map((b) => (
         <section key={b.property.id} aria-label={b.property.name} data-block={b.property.name} className="overflow-hidden rounded-2xl bg-surface shadow-card">
-          <button type="button" disabled={pending} onClick={() => open(b.property.id)} className="flex w-full items-center justify-between border-b border-ink-10 px-5 py-3 text-left hover:bg-ink-5">
+          <button type="button" disabled={pending} onClick={() => open(b.property.id, b.data.from)} className="flex w-full items-center justify-between border-b border-ink-10 px-5 py-3 text-left hover:bg-ink-5">
             <span className="font-medium">{b.property.name}</span>
             <span className="flex items-center gap-1 text-[13px] text-accent">
               {m["cal.openHotel"]} <ArrowRight size={14} />
             </span>
           </button>
-          <div onClick={() => open(b.property.id)} className="flex cursor-pointer">
+          <div
+            role="link"
+            tabIndex={0}
+            aria-label={`${m["cal.openHotel"]}: ${b.property.name}`}
+            onClick={() => open(b.property.id, b.data.from)}
+            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open(b.property.id, b.data.from))}
+            className="flex cursor-pointer"
+          >
             <AvailabilityMatrix property={b.property} data={b.data} today={b.today} range={props.range} markers={b.markers} language={props.language} m={m} compact />
           </div>
         </section>

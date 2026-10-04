@@ -139,6 +139,8 @@ export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival:
     ageBands: bands.rows.map((b) => ({ id: b.id, minAge: b.min_age, maxAge: b.max_age })),
     /** Rooms of the type not for sale on a night: taken by reservations, or Out of Order. */
     roomsTaken: (roomTypeId: string, date: string) => (occ.get(`${roomTypeId}|${date}`) ?? 0) + (outOfOrder.get(`${roomTypeId}|${date}`) ?? 0),
+    /** Rooms of the type Out of Order on a night. */
+    outOfOrder: (roomTypeId: string, date: string) => outOfOrder.get(`${roomTypeId}|${date}`) ?? 0,
     price: (planId: string, roomTypeId: string, date: string) => price.get(`${planId}|${roomTypeId}|${date}`) ?? null,
     restriction,
   };

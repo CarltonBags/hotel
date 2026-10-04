@@ -4,10 +4,11 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { CALENDAR_RANGES, addDays, cellReservations, datesFrom, formatCurrency, localeFor, occupancyPercent, weekdayIndex, type CalendarRange, type Language } from "@hoteloftware/domain";
+import { CALENDAR_RANGES, addDays, cellReservations, datesFrom, formatCurrency, localeFor, occupancyPercent, restrictionMarks, weekdayIndex, type CalendarRange, type Language } from "@hoteloftware/domain";
 import type { CalendarData, CalendarDay, EventMarker } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 import { MARKER_STYLE } from "../rates/marker-style";
+import { ViewToggle } from "./view-toggle";
 
 /** Free rooms as a heat map: none left, few left, plenty. */
 function tone(day: CalendarDay): string {
@@ -17,24 +18,6 @@ function tone(day: CalendarDay): string {
   return "bg-success/10";
 }
 
-function marks(day: CalendarDay): string {
-  return [day.stopSell && "STOP", day.minStay && `min ${day.minStay}`, day.closedToArrival && "CTA", day.closedToDeparture && "CTD", day.maxStay && `≤${day.maxStay}`].filter(Boolean).join(" ");
-}
-
-/** Rooms / Availability: the Calendar's two views of one property. */
-export function ViewToggle({ view, from, range, m }: { view: "rooms" | "availability"; from: string; range: number; m: Messages }) {
-  const cls = (on: boolean) => `flex h-8 items-center rounded-full px-3 text-[13px] ${on ? "bg-ink text-canvas" : "text-ink-80 hover:bg-ink-5"}`;
-  return (
-    <div className="flex gap-1 rounded-full bg-surface-2 p-1" role="group" aria-label={m["cal.view"]}>
-      <Link href={`/calendar?from=${from}&range=${range}`} aria-pressed={view === "rooms"} className={cls(view === "rooms")}>
-        {m["cal.view.rooms"]}
-      </Link>
-      <Link href={`/calendar?from=${from}&range=${range}&view=availability`} aria-pressed={view === "availability"} className={cls(view === "availability")}>
-        {m["cal.view.availability"]}
-      </Link>
-    </div>
-  );
-}
 
 /**
  * The Availability matrix (Calendar prototype variant C): room types by
@@ -101,20 +84,26 @@ export function AvailabilityMatrix(props: {
                 </th>
                 {t.days.slice(0, dates.length).map((x) => {
                   const on = picked?.typeId === t.id && picked.date === x.date;
+                  const content = (
+                    <>
+                      <span className="text-[16px] font-semibold">{x.free}</span>
+                      {x.lowestPrice !== null ? <span className="text-[10px] text-ink-60">{money(x.lowestPrice)}</span> : null}
+                      {restrictionMarks(x) ? <span className="text-[9px] font-semibold text-ink-80">{restrictionMarks(x)}</span> : null}
+                    </>
+                  );
+                  const cls = `flex h-14 w-full flex-col items-center justify-center leading-tight ${tone(x)} ${on ? "outline outline-2 -outline-offset-2 outline-ink" : ""}`;
                   return (
                     <td key={x.date} className="border-b border-r border-canvas p-0">
-                      <button
-                        type="button"
-                        data-cell={`${t.code}|${x.date}`}
-                        data-free={x.free}
-                        disabled={compact}
-                        onClick={() => setPicked({ typeId: t.id, date: x.date })}
-                        className={`flex h-14 w-full flex-col items-center justify-center leading-tight ${tone(x)} ${on ? "outline outline-2 -outline-offset-2 outline-ink" : ""}`}
-                      >
-                        <span className="text-[16px] font-semibold">{x.free}</span>
-                        {!compact && x.lowestPrice !== null ? <span className="text-[10px] text-ink-60">{money(x.lowestPrice)}</span> : null}
-                        {!compact && marks(x) ? <span className="text-[9px] font-semibold text-ink-80">{marks(x)}</span> : null}
-                      </button>
+                      {/* compact blocks open the hotel as a whole, so their cells are not buttons */}
+                      {compact ? (
+                        <div data-cell={`${t.code}|${x.date}`} data-free={x.free} className={cls}>
+                          {content}
+                        </div>
+                      ) : (
+                        <button type="button" data-cell={`${t.code}|${x.date}`} data-free={x.free} onClick={() => setPicked({ typeId: t.id, date: x.date })} className={cls}>
+                          {content}
+                        </button>
+                      )}
                     </td>
                   );
                 })}
@@ -123,11 +112,13 @@ export function AvailabilityMatrix(props: {
             <tr>
               <th className="sticky left-0 z-10 h-10 bg-surface-2 px-4 text-left text-[13px] font-semibold">{m["cal.occupancy"]}</th>
               {dates.map((d, i) => {
-                const counts = data.roomTypes.map((t) => ({ rooms: t.rooms.length, free: t.days[i]!.free }));
-                const rooms = counts.reduce((n, c) => n + c.rooms, 0);
+                // occupied rooms of the rooms available (Out of Order rooms are neither)
+                const days = data.roomTypes.map((t) => ({ rooms: t.rooms.length, day: t.days[i]! }));
+                const available = days.reduce((n, x) => n + x.rooms - x.day.outOfOrder, 0);
+                const occupied = days.reduce((n, x) => n + x.rooms - x.day.free - x.day.outOfOrder, 0);
                 return (
                   <td key={d} data-occupancy={d} className="bg-surface-2 text-[12px] text-ink-80">
-                    {rooms ? `${occupancyPercent(counts.reduce((n, c) => n + c.rooms - c.free, 0), rooms)}%` : "–"}
+                    {available > 0 ? `${occupancyPercent(occupied, available)}%` : "–"}
                   </td>
                 );
               })}
@@ -146,6 +137,7 @@ export function AvailabilityMatrix(props: {
               <h2 className="text-lg font-semibold">{type.name}</h2>
               <p className="text-[13px] text-ink-60">
                 {fill(m["cal.cellSummary"], { free: String(day.free), rooms: String(type.rooms.length), staying: String(cell.staying.length), leaving: String(cell.leaving.length) })}
+                {day.outOfOrder ? ` · ${fill(m["cal.outOfOrderN"], { n: String(day.outOfOrder) })}` : ""}
                 {day.lowestPrice !== null ? ` · ${money(day.lowestPrice)}` : ""}
               </p>
               <ul className="mt-3 space-y-2" data-testid="cell-reservations">
@@ -159,7 +151,7 @@ export function AvailabilityMatrix(props: {
                         <span className="min-w-0 flex-1">
                           <span className="block font-medium">{r.guestLastName}</span>
                           <span className="block text-[11px] text-ink-60">
-                            {m[`cal.role.${role}`]} · {fill(m["cal.nightsN"], { n: String(nights) })} · {m[`res.status.${r.status}`]}
+                            {m[`cal.role.${role}`]} · {nights === 1 ? m["cal.night1"] : fill(m["cal.nightsN"], { n: String(nights) })} · {m[`res.status.${r.status}`]}
                           </span>
                         </span>
                         <span className="rounded-full bg-surface px-2 text-[11px] text-ink-60">{r.confirmationNumber}</span>

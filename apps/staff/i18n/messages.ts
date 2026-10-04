@@ -1201,6 +1201,8 @@ const catalog = {
   "cal.role.arrives": { en: "arrives", de: "reist an" },
   "cal.role.staying": { en: "staying", de: "im Haus" },
   "cal.role.leaves": { en: "leaves", de: "reist ab" },
+  "cal.night1": { en: "1 night", de: "1 Nacht" },
+  "cal.outOfOrderN": { en: "{n} Out of Order", de: "{n} außer Betrieb" },
   "cal.nightsN": { en: "{n} nights", de: "{n} Nächte" },
   "cal.allProperties": { en: "All properties", de: "Alle Betriebe" },
   "cal.openHotel": { en: "Open calendar", de: "Kalender öffnen" },
