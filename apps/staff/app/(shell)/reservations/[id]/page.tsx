@@ -18,10 +18,11 @@ import { FolioPanel } from "./folio-panel";
 import { RegistrationStatus } from "./guest-details";
 import { GuestDrawerButton } from "./guest-drawer-button";
 import { ReservationActions } from "./reservation-actions";
+import { HousekeepingNotes } from "./housekeeping-notes";
 
 /** One Reservation as a record tab: stay, guests, stored nightly prices, check-in and its folios. */
 export default async function ReservationPage({ params }: { params: Promise<{ id: string }> }) {
-  const { tenant } = await requirePrincipal();
+  const { tenant, actor } = await requirePrincipal();
   const { id } = await params;
   const v = await reservationView(id);
   if (!v) notFound();
@@ -95,6 +96,8 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
           {r.childAges.length ? ` · ${fill(m["res.children"], { ages: r.childAges.join(", ") })}` : ""}
         </p>
       </section>
+
+      <HousekeepingNotes schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} m={m} />
 
       <section aria-label={m["res.guests"]} className="grid gap-1 rounded-2xl bg-surface-2 p-5 text-sm">
         <h2 className="mb-1 font-medium">{m["res.guests"]}</h2>

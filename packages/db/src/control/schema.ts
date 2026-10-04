@@ -106,7 +106,8 @@ export const userPreferences = control.table("user_preferences", {
   theme: text("theme").notNull().default("system"),
   quickAccess: jsonb("quick_access"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+  floorLanguage: text("floor_language"),
+}, (t) => [check("user_preferences_floor_language_check", sql`${t.floorLanguage} in ('de', 'en', 'pl', 'ro', 'bg', 'hr', 'hu', 'tr', 'uk', 'ar')`)]);
 
 export const userWorkspace = control.table(
   "user_workspace",
@@ -251,7 +252,19 @@ export const pinEvents = control.table(
   (t) => [index("pin_events_user_idx").on(t.userId, t.at.desc()), check("pin_events_kind_check", sql`${t.kind} in ('success', 'wrong', 'lock', 'reset', 'changed')`)],
 );
 
+export const deviceChangeKeys = control.table(
+  "device_change_keys",
+  {
+    keyHash: text("key_hash").primaryKey(),
+    deviceId: uuid("device_id").notNull().references(() => devices.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("device_change_keys_device_idx").on(t.deviceId)],
+);
+
 export const controlSchema = {
+  deviceChangeKeys,
   devices,
   deviceUsers,
   deviceEnrolments,

@@ -47,7 +47,7 @@ export async function pinSignInAction(_prev: FormState, formData: FormData): Pro
   await takeSignInCookies(response, tenant);
   const token = (await cookies()).get(DEVICE_COOKIE)?.value;
   if (token) await keepDeviceToken(token);
-  redirect(body.mustChange ? "/device/pin" : "/");
+  redirect(body.mustChange ? "/device/pin" : "/floor");
 }
 
 /** A request on use, so the server counts the Device as active (its idle lock is checked there too). */
@@ -70,6 +70,6 @@ export async function changePinAction(_prev: FormState, formData: FormData): Pro
     const pin = String(formData.get("pin") ?? "");
     if (pin !== String(formData.get("repeat") ?? "")) throw new Error("The two PINs differ");
     await chooseOwnPin((await auth().$context).password.hash, pool(), { tenantId: current.tenant.id, userId: current.session.user.id, pin });
-    redirect("/");
+    redirect("/floor");
   });
 }

@@ -1186,6 +1186,32 @@ const catalog = {
   "action.saving": { en: "Saving…", de: "Speichern…" },
   "action.saved": { en: "Saved.", de: "Gespeichert." },
 
+  "services.minibar": { en: "Minibar item (counted on the room sheet)", de: "Minibar-Artikel (im Zimmerblatt gezählt)" },
+
+  // phone view, Housekeeping Notes, Lost and Found (ticket 35)
+  "hknotes.title": { en: "Housekeeping Notes", de: "Hinweise für die Zimmerreinigung" },
+  "hknotes.help": { en: "Shown on the housekeeper's phone in their language; free text as written.", de: "Erscheinen auf dem Telefon der Zimmerreinigung in deren Sprache; freier Text wie geschrieben." },
+  "hknotes.add": { en: "Add note", de: "Hinweis hinzufügen" },
+  "hknotes.free": { en: "Free text", de: "Freier Text" },
+  "hknotes.feather_allergy": { en: "Feather allergy", de: "Federallergie" },
+  "hknotes.baby_cot": { en: "Baby cot", de: "Babybett" },
+  "hknotes.extra_bed": { en: "Extra bed", de: "Zustellbett" },
+  "hknotes.welcome_gift": { en: "Welcome gift", de: "Willkommensgeschenk" },
+  "hknotes.late_checkout": { en: "Late checkout", de: "Später Check-out" },
+  "hknotes.pet": { en: "Pet", de: "Haustier" },
+  "hknotes.accessibility": { en: "Accessibility need", de: "Barrierefreiheit" },
+  "lost.none": { en: "Nothing found yet.", de: "Noch keine Fundsachen." },
+  "lost.room": { en: "Room", de: "Zimmer" },
+  "lost.status": { en: "Status", de: "Status" },
+  "lost.status.kept": { en: "Kept", de: "Aufbewahrt" },
+  "lost.status.returned": { en: "Returned to the guest", de: "An den Gast zurückgegeben" },
+  "lost.status.disposed": { en: "Disposed of", de: "Entsorgt" },
+  "lost.pick.clothing": { en: "Clothing", de: "Kleidung" },
+  "lost.pick.electronics": { en: "Electronics", de: "Elektronik" },
+  "lost.pick.documents": { en: "Documents", de: "Dokumente" },
+  "lost.pick.valuables": { en: "Valuables", de: "Wertsachen" },
+  "lost.pick.other": { en: "Other", de: "Anderes" },
+
   // devices and PIN Sign-in (ticket 14)
   "dev.help": { en: "Shared phones and tablets of the property, and the people who sign in on them by PIN.", de: "Gemeinsam genutzte Telefone und Tablets des Betriebs und die Personen, die sich darauf mit PIN anmelden." },
   "dev.pickProperty": { en: "Choose a property in the navbar first.", de: "Wählen Sie zuerst oben einen Betrieb." },

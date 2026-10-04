@@ -129,6 +129,18 @@ export const PROPERTY_ACTIONS = {
   assign_housekeeping: ["property_manager", "housekeeping_supervisor"],
   /** Matrix "View Cleanliness and Room Blocks" (a Housekeeper only own rooms: roomViewScope). */
   view_rooms: ["property_manager", "front_desk", "housekeeping_supervisor", "housekeeper", "maintenance"],
+  /** Report a Maintenance Issue (decided: anyone at the property; the queue and file storage come with ticket 36). */
+  report_maintenance_issues: ["property_manager", "front_desk", "housekeeping_supervisor", "housekeeper", "maintenance", "service", "spa_staff"],
+  /** Work the Maintenance queue: take an issue, mark it fixed. */
+  work_maintenance: ["property_manager", "maintenance"],
+  /** Record an item found in a room (Lost and Found). */
+  record_lost_items: ["property_manager", "front_desk", "housekeeping_supervisor", "housekeeper", "maintenance"],
+  /** See Lost and Found. */
+  view_lost_items: ["property_manager", "front_desk", "housekeeping_supervisor"],
+  /** Count the minibar on the room sheet; posted as Charges to the stay in the room. */
+  post_minibar: ["property_manager", "front_desk", "housekeeping_supervisor", "housekeeper"],
+  /** Housekeeping Notes on a reservation for floor staff. */
+  manage_housekeeping_notes: ["property_manager", "front_desk", "housekeeping_supervisor"],
   /** Enrol and revoke Devices of the property, choose who signs in on them (Property Manager). */
   manage_devices: ["property_manager"],
   /** Create Housekeeper users, reset their PIN and unlock them (amendment "Shared-device login"); the Property Manager for every user. */

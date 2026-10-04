@@ -11,7 +11,9 @@ import {
   deviceByToken,
   getTenantSession,
   listDevices,
+  changeKeyUser,
   chooseOwnPin,
+  issueChangeKey,
   pinEvents,
   pinStates,
   redeemEnrolment,
@@ -121,6 +123,15 @@ describe("devices and PIN sign-in", () => {
     const hash = (await auth.$context).password.hash;
     await chooseOwnPin(hash, pool, { tenantId: alpha.id, userId: hannaId, pin: "4826" });
     await expect(chooseOwnPin(hash, pool, { tenantId: alpha.id, userId: hannaId, pin: "9157" })).rejects.toThrow(/supervisor/);
+  });
+
+  it("changes made offline carry a key for their user, valid on this Device only", async () => {
+    const key = await issueChangeKey(pool, deviceId, hannaId);
+    expect(await changeKeyUser(pool, deviceId, key)).toBe(hannaId);
+    const { code } = await createEnrolment(pool, { tenantId: alpha.id, propertyId: PROPERTY, kind: "staff", name: "Other", createdBy: managerId });
+    const other = await redeemEnrolment(pool, { tenantId: alpha.id, code });
+    expect(await changeKeyUser(pool, other.deviceId, key)).toBeNull();
+    expect(await changeKeyUser(pool, deviceId, "made-up")).toBeNull();
   });
 
   it("Front Desk and other full-credential roles cannot use PIN Sign-in", async () => {

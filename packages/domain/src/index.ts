@@ -224,3 +224,20 @@ export {
   type TaskRules,
 } from "./housekeeping";
 export { PIN_MAX_TRIES, PIN_ROLES, canUsePin, deviceIdleMinutes, mayLookAfterPinUser, pinProblem, pinRolesFor } from "./devices";
+export {
+  FLOOR_LANGUAGES,
+  HOUSEKEEPING_NOTE_CODES,
+  LOST_PICKS,
+  PROBLEM_PICKS,
+  URGENCIES,
+  floorSections,
+  isFloorLanguage,
+  isRtl,
+  parsePhoneOp,
+  type FloorLanguage,
+  type HousekeepingNoteCode,
+  type LostPick,
+  type PhoneOp,
+  type ProblemPick,
+  type Urgency,
+} from "./floor";
