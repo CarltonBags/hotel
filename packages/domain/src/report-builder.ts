@@ -10,8 +10,8 @@ import type { CellKind } from "./reports";
 export const DATA_SETS = ["room_nights", "reservations", "charges", "payments", "housekeeping_tasks"] as const;
 export type DataSet = (typeof DATA_SETS)[number];
 
-/** What a column shows, deciding who may add it. */
-export type Sensitivity = "plain" | "guest" | "contact" | "money";
+/** What a column shows, deciding who may add it: revenue figures (Revenue may), money movements (Accounting and the Property Manager). */
+export type Sensitivity = "plain" | "guest" | "contact" | "revenue" | "money";
 
 export interface BuilderColumn {
   key: string;
@@ -34,7 +34,7 @@ export const DATA_SET_COLUMNS: Record<DataSet, BuilderColumn[]> = {
     col("source", "Source", "Quelle", "text"),
     col("guest", "Guest", "Gast", "text", "guest"),
     col("country", "Country of residence", "Wohnsitzland", "text"),
-    col("price", "Night price (gross)", "Nachtpreis (brutto)", "money", "money", false),
+    col("price", "Night price (gross)", "Nachtpreis (brutto)", "money", "revenue", false),
     col("nights", "Room nights", "Zimmernächte", "int", "plain", false),
   ],
   reservations: [
@@ -52,7 +52,7 @@ export const DATA_SET_COLUMNS: Record<DataSet, BuilderColumn[]> = {
     col("country", "Country of residence", "Wohnsitzland", "text"),
     col("adults", "Adults", "Erwachsene", "int", "plain", false),
     col("nights", "Nights", "Nächte", "int", "plain", false),
-    col("total", "Stay total (gross)", "Aufenthalt gesamt (brutto)", "money", "money", false),
+    col("total", "Stay total (gross)", "Aufenthalt gesamt (brutto)", "money", "revenue", false),
     col("count", "Reservations", "Reservierungen", "int", "plain", false),
   ],
   charges: [
@@ -63,8 +63,8 @@ export const DATA_SET_COLUMNS: Record<DataSet, BuilderColumn[]> = {
     col("tax_code", "Tax Code", "Steuerschlüssel", "text"),
     col("confirmation", "Confirmation", "Buchungsnummer", "text"),
     col("guest", "Guest", "Gast", "text", "guest"),
-    col("net", "Net", "Netto", "money", "money", false),
-    col("gross", "Gross", "Brutto", "money", "money", false),
+    col("net", "Net", "Netto", "money", "revenue", false),
+    col("gross", "Gross", "Brutto", "money", "revenue", false),
     col("count", "Charges", "Buchungen", "int", "plain", false),
   ],
   payments: [
@@ -88,21 +88,21 @@ export const DATA_SET_COLUMNS: Record<DataSet, BuilderColumn[]> = {
   ],
 };
 
-/** The right a data set needs at a property at all. */
+/** The right a data set needs at a property at all, besides the builder's own. */
 export const DATA_SET_RIGHT: Record<DataSet, PropertyAction> = {
   room_nights: "view_reservations",
   reservations: "view_reservations",
-  charges: "view_folio",
-  payments: "view_folio",
+  charges: "view_revenue_reports",
+  payments: "view_financial_reports",
   housekeeping_tasks: "view_housekeeping_reports",
 };
 
 /** The right each sensitive kind of column needs, as everywhere else in the app (permission matrix). */
-const SENSITIVE_RIGHT: Record<Exclude<Sensitivity, "plain">, PropertyAction> = { guest: "view_guests", contact: "view_guest_contacts", money: "view_folio" };
+const SENSITIVE_RIGHT: Record<Exclude<Sensitivity, "plain">, PropertyAction> = { guest: "view_guests", contact: "view_guest_contacts", revenue: "view_revenue_reports", money: "view_financial_reports" };
 
 /** The columns of a data set this actor may add at every one of these properties. */
 export function allowedColumns(actor: Actor, dataSet: DataSet, propertyIds: string[]): BuilderColumn[] {
-  if (!propertyIds.length || !propertyIds.every((p) => can(actor, DATA_SET_RIGHT[dataSet], p))) return [];
+  if (!propertyIds.length || !propertyIds.every((p) => can(actor, "use_report_builder", p) && can(actor, DATA_SET_RIGHT[dataSet], p))) return [];
   return DATA_SET_COLUMNS[dataSet].filter((c) => {
     const s = c.sensitivity;
     return s === "plain" || propertyIds.every((p) => can(actor, SENSITIVE_RIGHT[s], p));
@@ -130,14 +130,10 @@ export function checkDefinition(actor: Actor, def: BuilderDefinition, propertyId
   if (!columns.length) return { problem: "Choose at least one column" };
   for (const k of [...columns, ...def.groupBy, ...def.filters.map((f) => f.column)]) if (!allowed.has(k)) return { problem: `The column ${k} is not available to you` };
   for (const g of def.groupBy) if (!allowed.get(g)!.groupable) return { problem: `Group by text columns only (${g})` };
+  for (const g of def.groupBy) if (!columns.includes(g)) return { problem: `Show the column you group by (${g})` };
   for (const f of def.filters) if (!(FILTER_OPS as readonly string[]).includes(f.op) || typeof f.value !== "string" || f.value.length > 100) return { problem: "A filter is incomplete" };
-  if (def.filters.length > 5 || def.groupBy.length > 2) return { problem: "At most five filters and two groupings" };
+  if (def.filters.length > 3 || def.groupBy.length > 2) return { problem: "At most three filters and two groupings" };
   // grouped: every shown text column must be a group, numbers are summed
   if (def.groupBy.length) for (const k of columns) if (allowed.get(k)!.groupable && !def.groupBy.includes(k)) return { problem: `Group by ${k} too, or leave it out` };
   return { ok: { dataSet: def.dataSet, columns, filters: def.filters, groupBy: [...new Set(def.groupBy)], totals: def.totals === true } };
-}
-
-/** Whether a table holds guest-level data (exports of it are logged with their row count, like all exports). */
-export function guestLevel(def: BuilderDefinition): boolean {
-  return def.columns.some((k) => ["guest", "email", "phone"].includes(k)) && def.groupBy.length === 0;
 }

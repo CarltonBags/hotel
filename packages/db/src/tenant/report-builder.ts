@@ -109,16 +109,24 @@ export async function runBuilder(pool: Pool, schema: string, def: BuilderDefinit
   }
   const grouped = def.groupBy.length > 0;
   const select = def.columns.map((k, i) => (grouped && !meta.get(k)!.groupable ? `sum(${expr(k)}) as c${i}` : `${expr(k)} as c${i}`));
+  const groups = def.groupBy.map((g) => `c${def.columns.indexOf(g)}`).join(", ");
+  // grouped or not, at most the limit (grouping by a confirmation number is a line per stay)
   const sql = `select ${select.join(", ")} from ${src.from} where ${where.join(" and ")}
-    ${grouped ? `group by ${def.groupBy.map((g) => `c${def.columns.indexOf(g)}`).join(", ")} order by ${def.groupBy.map((g) => `c${def.columns.indexOf(g)}`).join(", ")}` : `order by ${src.date}, 1 limit ${limit + 1}`}`;
-  const rows = await withTenant(pool, schema, async (tx) => (await tx.query<Record<string, unknown>>(sql, args)).rows);
-  const truncated = !grouped && rows.length > limit;
+    ${grouped ? `group by ${groups} order by ${groups}` : `order by ${src.date}, 1`} limit ${limit + 1}`;
+  const numeric = def.columns.filter((k) => meta.get(k)!.kind !== "text");
+  // totals over everything that matched, not only the lines shown
+  const totalsSql = `select ${numeric.map((k) => `sum(${expr(k)}) as ${k}`).join(", ") || "1 as none"} from ${src.from} where ${where.join(" and ")}`;
+  const { rows, sums } = await withTenant(pool, schema, async (tx) => ({
+    rows: (await tx.query<Record<string, unknown>>(sql, args)).rows,
+    sums: def.totals ? (await tx.query<Record<string, unknown>>(totalsSql, args)).rows[0]! : {},
+  }));
+  const truncated = rows.length > limit;
   const columns: ReportColumn[] = def.columns.map((k) => ({ key: k, label: meta.get(k)!.label[scope.language], kind: meta.get(k)!.kind }));
   const value = (k: string, v: unknown) => (v === null || v === undefined ? null : meta.get(k)!.kind === "text" ? String(v) : Number(v));
   const out: ReportRow[] = rows.slice(0, limit).map((r) => ({ cells: Object.fromEntries(def.columns.map((k, i) => [k, value(k, r[`c${i}`])])) }));
   if (def.totals) {
     out.push({
-      cells: Object.fromEntries(def.columns.map((k, i) => [k, meta.get(k)!.kind === "text" ? (i === 0 ? (scope.language === "de" ? "Gesamt" : "Total") : "") : roundMoney(out.reduce((s, r) => s + Number(r.cells[k] ?? 0), 0))])),
+      cells: Object.fromEntries(def.columns.map((k, i) => [k, meta.get(k)!.kind === "text" ? (i === 0 ? (scope.language === "de" ? "Gesamt" : "Total") : "") : roundMoney(Number(sums[k] ?? 0))])),
       emphasis: true,
       ref: "total",
     });
@@ -138,17 +146,11 @@ export interface SavedReport {
 }
 
 /** Save a report: private, or shared with the property's users who may see its data set. */
-export async function saveReport(pool: Pool, schema: string, input: { id?: string; ownerId: string; propertyId: string; name: string; definition: BuilderDefinition; shared: boolean }): Promise<string> {
+export async function saveReport(pool: Pool, schema: string, input: { ownerId: string; propertyId: string; name: string; definition: BuilderDefinition; shared: boolean }): Promise<string> {
   if (!isUuid(input.propertyId)) throw new Error("Choose a property");
   const name = input.name.trim().slice(0, 120);
   if (!name) throw new Error("Name the report");
   return withTenant(pool, schema, async (tx) => {
-    if (input.id) {
-      if (!isUuid(input.id)) throw new Error("Report not found");
-      const n = (await tx.query("update saved_reports set name = $3, definition = $4, shared = $5, property_id = $6, updated_at = now() where id = $1 and owner_id = $2", [input.id, input.ownerId, name, JSON.stringify(input.definition), input.shared, input.propertyId])).rowCount;
-      if (!n) throw new Error("Only its owner changes a saved report");
-      return input.id;
-    }
     const { rows } = await tx.query<{ id: string }>("insert into saved_reports (owner_id, property_id, name, definition, shared) values ($1, $2, $3, $4, $5) returning id", [input.ownerId, input.propertyId, name, JSON.stringify(input.definition), input.shared]);
     return rows[0]!.id;
   });

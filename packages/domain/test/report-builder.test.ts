@@ -12,10 +12,13 @@ describe("report builder rights", () => {
     expect(checkDefinition(at(["revenue"]), { dataSet: "reservations", columns: ["confirmation", "email"], filters: [], groupBy: [], totals: false }, ["p1"])).toEqual({ problem: "The column email is not available to you" });
   });
 
-  it("Front Desk may add contact columns; no data set without its base right", () => {
-    expect(allowedColumns(at(["front_desk"]), "reservations", ["p1"]).map((c) => c.key)).toContain("email");
-    expect(allowedColumns(at(["housekeeper"]), "reservations", ["p1"])).toEqual([]);
-    expect(allowedColumns(at(["revenue"]), "charges", ["p1"])).toEqual([]);
+  it("the builder is for Property Manager, Accounting and Revenue; Revenue builds revenue figures, not money movements", () => {
+    expect(allowedColumns(at(["front_desk"]), "reservations", ["p1"])).toEqual([]);
+    expect(allowedColumns(at(["housekeeping_supervisor"]), "housekeeping_tasks", ["p1"])).toEqual([]);
+    expect(allowedColumns(at(["revenue"]), "reservations", ["p1"]).map((c) => c.key)).toContain("total");
+    expect(allowedColumns(at(["revenue"]), "charges", ["p1"]).map((c) => c.key)).toEqual(expect.arrayContaining(["net", "gross"]));
+    expect(allowedColumns(at(["revenue"]), "payments", ["p1"])).toEqual([]);
+    expect(allowedColumns(at(["accounting"]), "reservations", ["p1"]).map((c) => c.key)).toContain("email");
   });
 
   it("grouping: text columns only, every shown text column grouped", () => {

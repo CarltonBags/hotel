@@ -4,6 +4,13 @@ import { allowedAmong } from "./authorize";
 import { loadShell } from "./shell";
 
 export type BuilderQuery = Record<string, string | string[] | undefined>;
+
+/** A query string as the builder reads it: repeated keys kept. */
+export function queryMap(params: URLSearchParams): BuilderQuery {
+  const out: Record<string, string[]> = {};
+  for (const [k, v] of params) (out[k] ??= []).push(v);
+  return out;
+}
 const all = (q: BuilderQuery, k: string) => (Array.isArray(q[k]) ? (q[k] as string[]) : q[k] ? [q[k] as string] : []);
 const one = (q: BuilderQuery, k: string) => all(q, k)[0] ?? "";
 
@@ -12,7 +19,9 @@ export async function builderFrom(q: BuilderQuery): Promise<{ dataSet: DataSet; 
   const shell = await loadShell();
   const { actor } = shell.principal;
   const language = shell.language === "de" ? "de" : "en";
-  const inScope = shell.scope === "all" || !shell.scope ? shell.properties : shell.properties.filter((p) => p.id === shell.scope);
+  // a saved report opens at its own property (prop), else the navbar's scope
+  const requested = shell.properties.find((p) => p.id === one(q, "prop"));
+  const inScope = requested ? [requested] : shell.scope === "all" || !shell.scope ? shell.properties : shell.properties.filter((p) => p.id === shell.scope);
   // the data sets the user may open at every property in scope
   const available: DataSet[] = [];
   for (const d of DATA_SETS) if ((await allowedAmong(DATA_SET_RIGHT[d], inScope)).length === inScope.length && inScope.length) available.push(d);
@@ -37,8 +46,8 @@ export async function offeredColumns(dataSet: DataSet, properties: Property[]) {
 }
 
 /** The query that reopens a definition. */
-export function builderQuery(def: BuilderDefinition, range: { from: string; to: string }): string {
-  const q = new URLSearchParams({ set: def.dataSet, from: range.from, to: range.to });
+export function builderQuery(def: BuilderDefinition, range: { from: string; to: string }, propertyId?: string): string {
+  const q = new URLSearchParams({ set: def.dataSet, from: range.from, to: range.to, ...(propertyId ? { prop: propertyId } : {}) });
   for (const c of def.columns) q.append("col", c);
   def.filters.forEach((f, i) => {
     q.set(`fc${i + 1}`, f.column);

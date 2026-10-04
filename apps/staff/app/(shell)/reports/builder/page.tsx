@@ -1,4 +1,4 @@
-import { DATA_SET_RIGHT, DATA_SETS, FILTER_OPS, can, formatCell } from "@hoteloftware/domain";
+import { DATA_SETS, FILTER_OPS, checkDefinition, formatCell } from "@hoteloftware/domain";
 import { listSavedReports, runBuilder } from "@hoteloftware/db";
 import { ActionForm } from "@/components/form-fields";
 import { pool } from "@/lib/db";
@@ -22,9 +22,15 @@ export default async function BuilderPage({ searchParams }: { searchParams: Prom
     );
   }
   const columns = await offeredColumns(b.dataSet, b.properties);
-  const table = b.def ? await runBuilder(pool(), tenant.schemaName, b.def, { propertyIds: b.properties.map((p) => p.id), from: b.from, to: b.to, language: b.language }) : null;
-  // shared reports: those of a property where this user may open the report's data set
-  const saved = await listSavedReports(pool(), tenant.schemaName, session.user.id, (r) => can(actor, DATA_SET_RIGHT[r.definition.dataSet], r.propertyId) && shell.properties.some((p) => p.id === r.propertyId));
+  let table = null;
+  let failed: string | null = b.problem;
+  try {
+    table = b.def ? await runBuilder(pool(), tenant.schemaName, b.def, { propertyIds: b.properties.map((p) => p.id), from: b.from, to: b.to, language: b.language }) : null;
+  } catch (err) {
+    failed = err instanceof Error && !("code" in err) ? err.message : "Cannot build the report";
+  }
+  // shared reports: of a property this user works at, and only if every column and filter in it is one they may see there
+  const saved = await listSavedReports(pool(), tenant.schemaName, session.user.id, (r) => shell.properties.some((p) => p.id === r.propertyId) && "ok" in checkDefinition(actor, r.definition, [r.propertyId]));
   const locale = b.language === "de" ? "de-DE" : "en-GB";
   const chosen = new Set(b.def?.columns ?? []);
   const input = "h-9 rounded-xl border border-ink-10 bg-surface px-2 text-sm";
@@ -116,9 +122,9 @@ export default async function BuilderPage({ searchParams }: { searchParams: Prom
           </button>
         </div>
       </form>
-      {b.problem ? (
+      {failed ? (
         <p role="alert" className="text-sm text-danger">
-          {b.problem}
+          {failed}
         </p>
       ) : null}
       {table ? (
@@ -172,7 +178,7 @@ export default async function BuilderPage({ searchParams }: { searchParams: Prom
         <ul className="grid gap-1">
           {saved.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-2" data-saved-report={r.name}>
-              <a href={`/reports/builder?${builderQuery(r.definition, b)}`} className="text-accent underline">
+              <a href={`/reports/builder?${builderQuery(r.definition, b, r.propertyId)}`} className="text-accent underline">
                 {r.name}
               </a>
               <span className="text-xs text-ink-60">
