@@ -170,6 +170,8 @@ export const PROPERTY_ACTIONS = {
   view_revenue_reports: ["property_manager", "accounting", "revenue"],
   /** Housekeeping performance. */
   view_housekeeping_reports: ["property_manager", "housekeeping_supervisor"],
+  /** The report builder and raw data export ("builder and budget for Property Manager, Accounting and Revenue within their rights"). */
+  use_report_builder: ["property_manager", "accounting", "revenue"],
   /** See the Budget and Forecast ("builder and budget for Property Manager, Accounting and Revenue"). */
   view_budget: ["property_manager", "accounting", "revenue"],
   /** Enter or import the Budget and Forecast (ticket 83: "by Property Manager or Revenue"). */

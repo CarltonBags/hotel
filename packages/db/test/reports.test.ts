@@ -20,6 +20,7 @@ import { createCityTaxRule } from "../src/tenant/city-tax";
 import { createRoomBlock } from "../src/tenant/room-state";
 import { runReport, type ReportRequest } from "../src/tenant/reports";
 import { getBudget, setBudget } from "../src/tenant/budget";
+import { deleteSavedReport, listSavedReports, runBuilder, saveReport } from "../src/tenant/report-builder";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -139,6 +140,30 @@ describe("fixed reports", () => {
     // the weeks of the month add up to the month's budget
     const weeks = t.rows.filter((r) => !r.emphasis);
     expect(Math.round(weeks.reduce((sum, r) => sum + Number(r.cells.netRoomRevenue_budget ?? 0), 0) * 100) / 100).toBe(9000.55);
+  });
+
+  it("report builder: grouped charges with totals; filtered reservations; contains is literal", async () => {
+    const scope = { propertyIds: [berlin], from: today, to: addDays(today, 1), language: "en" as const };
+    const t = await runBuilder(pool, s(), { dataSet: "charges", columns: ["category", "net", "count"], filters: [], groupBy: ["category"], totals: true }, scope);
+    const acc = t.rows.find((r) => r.cells.category === "accommodation")!;
+    expect(acc.cells).toMatchObject({ net: 200, count: 2 });
+    expect(t.rows.at(-1)!.cells.category).toBe("Total");
+    const r = await runBuilder(pool, s(), { dataSet: "reservations", columns: ["confirmation", "status", "nights"], filters: [{ column: "status", op: "eq", value: "checked_in" }], groupBy: [], totals: false }, { ...scope, to: today });
+    expect(r.rows.map((x) => x.cells.status)).toEqual(["checked_in"]);
+    const none = await runBuilder(pool, s(), { dataSet: "reservations", columns: ["confirmation"], filters: [{ column: "status", op: "contains", value: "%" }], groupBy: [], totals: false }, { ...scope, to: today });
+    expect(none.rows).toEqual([]);
+  });
+
+  it("saved reports: private to their owner, shared ones only where the caller says the colleague may see them", async () => {
+    const def = { dataSet: "reservations" as const, columns: ["confirmation"], filters: [], groupBy: [], totals: false };
+    const mine = await saveReport(pool, s(), { ownerId: pm, propertyId: berlin, name: "Mine", definition: def, shared: false });
+    await saveReport(pool, s(), { ownerId: pm, propertyId: berlin, name: "Shared Berlin", definition: def, shared: true });
+    await saveReport(pool, s(), { ownerId: pm, propertyId: zurich, name: "Shared Zürich", definition: def, shared: true });
+    // a colleague at Berlin only
+    const colleague = await listSavedReports(pool, s(), "user_colleague", (r) => r.propertyId === berlin);
+    expect(colleague.map((r) => r.name)).toEqual(["Shared Berlin"]);
+    expect((await listSavedReports(pool, s(), pm, () => false)).map((r) => r.name).sort()).toEqual(["Mine", "Shared Berlin", "Shared Zürich"]);
+    await expect(deleteSavedReport(pool, s(), mine, "user_colleague")).rejects.toThrow(/owner/);
   });
 
   it("every report kind runs and ends in a total line", async () => {

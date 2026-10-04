@@ -252,3 +252,4 @@ export * from "./report-text";
 export * from "./downtime";
 export * from "./registration";
 export * from "./budget";
+export * from "./report-builder";

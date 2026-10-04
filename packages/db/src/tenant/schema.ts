@@ -1669,6 +1669,21 @@ export const budgetMonths = pgTable(
   ],
 );
 
+export const savedReports = pgTable(
+  "saved_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerId: text("owner_id").notNull(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    name: text("name").notNull(),
+    definition: jsonb("definition").notNull(),
+    shared: boolean("shared").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check("saved_reports_name_check", sql`length(trim(${t.name})) between 1 and 120`), index("saved_reports_owner_idx").on(t.ownerId), index("saved_reports_shared_idx").on(t.propertyId).where(sql`${t.shared}`)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1749,4 +1764,5 @@ export const tenantSchema = {
   registrationPersons,
   budgets,
   budgetMonths,
+  savedReports,
 };

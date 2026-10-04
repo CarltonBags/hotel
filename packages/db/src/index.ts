@@ -457,3 +457,4 @@ export {
   type TabletState,
 } from "./tenant/registration";
 export { getBudget, setBudget } from "./tenant/budget";
+export { BUILDER_ROW_LIMIT, RAW_ROW_LIMIT, deleteSavedReport, listSavedReports, runBuilder, saveReport, type SavedReport } from "./tenant/report-builder";
