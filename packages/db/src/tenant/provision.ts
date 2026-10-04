@@ -40,7 +40,7 @@ export async function provisionTenant(pool: Pool, input: NewTenant, migrations: 
     const testMode = input.trial !== undefined || input.testMode === true;
     const { rows } = await client.query<{ id: string }>(
       `insert into control.tenants (slug, name, schema_name, trial_kind, trial_ends_at, live_at)
-       values ($1, $2, $3, $4, case when $4::text is null then null else now() + make_interval(days => $5) end, case when $6 then null else now() end) returning id`,
+       values ($1, $2, $3, $4, case when $4::text is null then null else now() + make_interval(hours => 24 * $5) end, case when $6 then null else now() end) returning id`,
       [input.slug, input.name, schemaName, input.trial ?? null, TRIAL_DAYS, testMode],
     );
     const id = rows[0]!.id;
