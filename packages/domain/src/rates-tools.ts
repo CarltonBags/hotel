@@ -1,12 +1,13 @@
 /**
  * Tools of the Rates grid (ticket 19, decided in "Rates grid screen
  * prototype"): paste from a spreadsheet, copy a period by weekday, fill
- * prices to the horizon. Like the bulk planner they run in the browser for
- * the preview and on the server for Apply.
+ * prices to the horizon. The server plans them from the stored prices both
+ * for the preview and for Apply (the grid in the browser shows only a few
+ * weeks); the browser only reads the pasted text.
  */
 import { roundMoney } from "./money";
-import { OPEN_RESTRICTION, RESTRICTION_FIELDS, type Restriction } from "./rates";
-import { addDays, weekdayIndex, type GridRow, type GridState } from "./rates-grid";
+import { RESTRICTION_FIELDS, type Restriction } from "./rates";
+import { addDays, daysBetween, weekdayIndex, type GridRow, type GridState } from "./rates-grid";
 
 export interface ToolPlan {
   prices: { ratePlanId: string; roomTypeId: string; date: string; price: number }[];
@@ -16,10 +17,15 @@ export interface ToolPlan {
 
 const MAX_PASTE_CELLS = 5000;
 
-/** A number as typed in a spreadsheet: "1.234,50", "1,234.50", "99,9" or "120". */
+/**
+ * A number as typed in a spreadsheet: "1.234,50", "1,234.50", "99,9" or
+ * "120". A single separator followed by exactly three digits ("1,234",
+ * "1.234") could be either thousands or decimals, so it is refused.
+ */
 function amount(text: string): number | null {
   const t = text.replace(/[\s€$£]|CHF/g, "");
   if (!t) return null;
+  if (/^\d+[.,]\d{3}$/.test(t)) return NaN;
   const lastDot = t.lastIndexOf(".");
   const lastComma = t.lastIndexOf(",");
   const decimal = lastComma > lastDot ? "," : ".";
@@ -36,7 +42,7 @@ export function parsePaste(text: string): (number | null)[][] {
   const out = lines.map((line, i) =>
     line.split(sep).map((cell, j) => {
       const n = amount(cell);
-      if (n !== null && (Number.isNaN(n) || n < 0)) throw new Error(`Not a price at row ${i + 1}, column ${j + 1}: "${cell.trim()}"`);
+      if (n !== null && (Number.isNaN(n) || n < 0)) throw new Error(`Not a clear price at row ${i + 1}, column ${j + 1}: "${cell.trim()}" (write 1234 or 1234,00)`);
       return n === null ? null : roundMoney(n);
     }),
   );
@@ -87,7 +93,7 @@ export function planPaste(block: (number | null)[][], rows: GridRow[], anchor: n
  * weekday (shorter than a week).
  */
 export function copySourceDate(source: { from: string; to: string }, targetFrom: string, target: string): string | null {
-  const offset = Math.round((Date.parse(`${target}T00:00:00Z`) - Date.parse(`${targetFrom}T00:00:00Z`)) / 86_400_000);
+  const offset = daysBetween(targetFrom, target);
   let s = addDays(source.from, offset);
   const shift = ((weekdayIndex(target) - weekdayIndex(s) + 10) % 7) - 3;
   s = addDays(s, shift);
@@ -100,22 +106,26 @@ export function copySourceDate(source: { from: string; to: string }, targetFrom:
 export function planCopyPeriod(input: { rows: GridRow[]; source: { from: string; to: string }; targetFrom: string }, state: GridState): ToolPlan {
   const { source, targetFrom } = input;
   if (source.to < source.from) throw new Error("The source range ends before it starts");
-  const days = Math.round((Date.parse(`${source.to}T00:00:00Z`) - Date.parse(`${source.from}T00:00:00Z`)) / 86_400_000) + 1;
+  const days = daysBetween(source.from, source.to) + 1;
   if (days > 400) throw new Error("Copy at most 400 days at once");
   const prices: ToolPlan["prices"] = [];
   const restrictions: ToolPlan["restrictions"] = [];
   for (let k = 0; k < days; k++) {
     const t = addDays(targetFrom, k);
     const s = copySourceDate(source, targetFrom, t);
-    if (!s || (t >= source.from && t <= source.to)) continue;
+    // read from the state before the copy, so a target overlapping its source still copies the old values
+    if (!s || s === t) continue;
     for (const r of input.rows) {
       if (!r.basePlanId) {
         const p = state.price(r.ratePlanId, r.roomTypeId, s);
         if (p !== null && p !== state.price(r.ratePlanId, r.roomTypeId, t)) prices.push({ ratePlanId: r.ratePlanId, roomTypeId: r.roomTypeId, date: t, price: p });
       }
+      // a derived row's inherited fields follow its base; only its own fields are copied
+      const own = RESTRICTION_FIELDS.filter((f) => !(r.basePlanId && r.inherits?.[f]));
       const from = state.restriction(r.ratePlanId, r.roomTypeId, s);
       const to = state.restriction(r.ratePlanId, r.roomTypeId, t);
-      if (RESTRICTION_FIELDS.some((f) => from[f] !== to[f])) restrictions.push({ ratePlanId: r.ratePlanId, roomTypeId: r.roomTypeId, date: t, patch: { ...OPEN_RESTRICTION, ...from } });
+      const differ = own.filter((f) => from[f] !== to[f]);
+      if (differ.length) restrictions.push({ ratePlanId: r.ratePlanId, roomTypeId: r.roomTypeId, date: t, patch: Object.fromEntries(differ.map((f) => [f, from[f]])) as Partial<Restriction> });
     }
   }
   return { prices, restrictions, preview: summarise(prices, restrictions, floorsOf(input.rows)) };

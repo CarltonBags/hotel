@@ -70,6 +70,7 @@ export { roundMoney } from "./money";
 export {
   PRICE_ACTIONS,
   addDays,
+  daysBetween,
   cellKey,
   datesFrom,
   planBulkEdit,

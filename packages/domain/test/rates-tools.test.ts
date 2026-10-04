@@ -16,6 +16,10 @@ describe("rates grid tools", () => {
       [1234.5, 99.9, 140],
     ]);
     expect(() => parsePaste("120\tabc")).toThrow(/row 1, column 2/);
+    // thousands or decimals? refused rather than guessed
+    expect(() => parsePaste("1,234")).toThrow(/clear price/);
+    expect(() => parsePaste("1.234")).toThrow(/clear price/);
+    expect(parsePaste("1.234,00\t1,234.00")).toEqual([[1234, 1234]]);
   });
 
   it("a 7 by 5 paste lands on the cells from the focused one; derived rows are skipped", () => {
@@ -40,6 +44,20 @@ describe("rates grid tools", () => {
     // Friday and Saturday take Friday's and Saturday's prices, Monday Monday's
     expect([at("2026-11-27"), at("2026-11-28"), at("2026-11-30")]).toEqual([150, 180, 99]);
     expect(plan.restrictions.find((r) => r.date === "2026-11-28")?.patch).toMatchObject({ minStayArrival: 2 });
+  });
+
+  it("copies a range onto itself shifted by a week from the values before the copy; inherited fields stay with the base", () => {
+    const prices: Record<string, number> = {};
+    for (let i = 0; i < 14; i++) prices[`A|x|2026-11-${String(2 + i).padStart(2, "0")}`] = 100 + i;
+    const derived = row("D", "x", { basePlanId: "A", derivation: { kind: "percent", value: -10 }, inherits: { stopSell: true, closedToArrival: true, closedToDeparture: true, minStayArrival: false, minStayThrough: true, maxStay: true } });
+    const state = stateOf(prices, { "D|x|2026-11-02": { minStayArrival: 3, stopSell: true } });
+    const plan = planCopyPeriod({ rows: [row("A", "x"), derived], source: { from: "2026-11-02", to: "2026-11-15" }, targetFrom: "2026-11-09" }, state);
+    // 9 Nov takes 2 Nov's old price, 15 Nov takes 8 Nov's: the overlap copies values from before
+    expect(plan.prices.find((p) => p.date === "2026-11-09")?.price).toBe(100);
+    expect(plan.prices.find((p) => p.date === "2026-11-15")?.price).toBe(106);
+    expect(plan.prices).toHaveLength(14);
+    // only the derived row's own field is copied, not the inherited stop sell
+    expect(plan.restrictions.find((r) => r.ratePlanId === "D" && r.date === "2026-11-09")?.patch).toEqual({ minStayArrival: 3 });
   });
 
   it("fills to the horizon by repeating the last full week, or base price with weekend factor", () => {

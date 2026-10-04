@@ -72,6 +72,11 @@ export function addDays(date: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Days from one YYYY-MM-DD date to another (negative when earlier). */
+export function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
+
 export function datesFrom(from: string, count: number): string[] {
   return Array.from({ length: count }, (_, i) => addDays(from, i));
 }

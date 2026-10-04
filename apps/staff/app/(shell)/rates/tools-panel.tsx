@@ -4,18 +4,19 @@ import { useState, useTransition } from "react";
 import { CalendarRange, ClipboardPaste, Copy, Flag, MoveRight, Trash2, TriangleAlert } from "lucide-react";
 import type { EventMarker, PriceEnd, RatesTool } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
+import { MARKER_STYLE } from "./marker-style";
 import { addEventMarker, removeEventMarker, runTool, type GridActionState, type ToolState } from "./actions";
 
 type Preview = NonNullable<ToolState["toolPreview"]>;
 type RowKey = { ratePlanId: string; roomTypeId: string };
 
 /** What a tool will change, as the server computed it, with Apply and Cancel. */
-export function ToolReview({ title, preview, pending, onApply, onCancel, m }: { title: string; preview: Preview; pending: boolean; onApply: () => void; onCancel: () => void; m: Messages }) {
+export function ToolReview({ title, preview, pending, onApply, onCancel, m, note }: { title: string; preview: Preview; pending: boolean; onApply: () => void; onCancel: () => void; m: Messages; note?: string | undefined }) {
   return (
     <div data-testid="tool-preview" className="rounded-[12px] border border-ink-10 p-3 text-[13px]">
       <div className="font-semibold">{title}</div>
       <div className="mt-1 text-ink-80">{fill(m["bulk.cells"], { cells: String(preview.cells), rows: String(preview.rows) })}</div>
-      {preview.skipped > 0 ? <div className="mt-1 text-ink-60">{fill(m["tools.skipped"], { n: String(preview.skipped) })}</div> : null}
+      {note ? <div className="mt-1 text-ink-60">{note}</div> : preview.skipped > 0 ? <div className="mt-1 text-ink-60">{fill(m["tools.skipped"], { n: String(preview.skipped) })}</div> : null}
       {preview.belowFloor > 0 ? (
         <div className="mt-1 flex items-start gap-1.5 text-danger">
           <TriangleAlert size={13} className="mt-0.5 shrink-0" />
@@ -85,8 +86,14 @@ export function ToolsPanel(props: {
   const [pending, startTransition] = useTransition();
   const inp = "h-9 w-full rounded-[10px] border border-ink-10 bg-surface-2 px-3 text-[14px]";
   const keys = props.rows.map(({ ratePlanId, roomTypeId }) => ({ ratePlanId, roomTypeId }));
-  // the rows whose prices end before the horizon (the banner's), whatever is selected
-  const fillRows = props.priceEnds.map(({ ratePlanId, roomTypeId }) => ({ ratePlanId, roomTypeId }));
+  // the rows whose prices end before the horizon (the banner's); with a selection, those in it
+  const inSelection = new Set(props.rows.map((r) => `${r.ratePlanId}|${r.roomTypeId}`));
+  const ending = props.selection ? props.priceEnds.filter((e) => inSelection.has(`${e.ratePlanId}|${e.roomTypeId}`)) : props.priceEnds;
+  const fillRows = ending.map(({ ratePlanId, roomTypeId }) => ({ ratePlanId, roomTypeId }));
+  const rowName = (k: RowKey) => {
+    const e = props.priceEnds.find((x) => x.ratePlanId === k.ratePlanId && x.roomTypeId === k.roomTypeId);
+    return e ? `${e.ratePlanName} · ${e.roomTypeCode}` : "?";
+  };
   const toggle = (k: typeof open) => {
     tool.cancel();
     setOpen((o) => (o === k ? null : k));
@@ -131,6 +138,11 @@ export function ToolsPanel(props: {
       {open === "fill" ? (
         <div className="space-y-2 pb-2">
           <p className="text-[11px] text-ink-60">{fill(m["tools.fillHelp"], { date: day(props.horizon), n: String(fillRows.length) })}</p>
+          <ul className="text-[11px] text-ink-80">
+            {ending.map((e) => (
+              <li key={`${e.ratePlanId}|${e.roomTypeId}`}>{rowName(e)}</li>
+            ))}
+          </ul>
           <div className="flex gap-1">
             {(["repeat_week", "base"] as const).map((k) => (
               <button key={k} type="button" aria-pressed={mode === k} onClick={() => setMode(k)} className={`h-9 flex-1 rounded-[10px] text-[12px] ${mode === k ? "bg-ink text-canvas" : "bg-surface-2"}`}>
@@ -160,7 +172,15 @@ export function ToolsPanel(props: {
       ) : null}
 
       {tool.review && (open === "copy" || open === "fill") ? (
-        <ToolReview title={open === "copy" ? m["tools.copy"] : m["tools.fill"]} preview={tool.review.preview} pending={tool.pending} onApply={tool.apply} onCancel={tool.cancel} m={m} />
+        <ToolReview
+          title={open === "copy" ? m["tools.copy"] : m["tools.fill"]}
+          preview={tool.review.preview}
+          pending={tool.pending}
+          onApply={tool.apply}
+          onCancel={tool.cancel}
+          m={m}
+          note={tool.review.preview.skippedRows.length ? fill(m["tools.noFullWeek"], { rows: tool.review.preview.skippedRows.map(rowName).join(", ") }) : undefined}
+        />
       ) : null}
 
       {head("markers", Flag, m["tools.markers"])}
@@ -170,7 +190,7 @@ export function ToolsPanel(props: {
             {props.markers.length === 0 ? <li className="text-ink-40">{m["tools.noMarkers"]}</li> : null}
             {props.markers.map((mk) => (
               <li key={mk.id} className="flex items-center gap-2">
-                <Flag size={12} className="text-[#e0457b]" />
+                <Flag size={12} className={MARKER_STYLE.text} />
                 <span className="flex-1">
                   {mk.name} · {day(mk.from)}
                   {mk.to !== mk.from ? ` – ${day(mk.to)}` : ""}

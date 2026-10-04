@@ -23,6 +23,7 @@ import {
 import type { CalendarData, CalendarReservation, CalendarRoom, CalendarRoomType, ChangePreview, EventMarker } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 import { useShell } from "@/shell/ShellProvider";
+import { MARKER_STYLE } from "../rates/marker-style";
 import { applyDrop, dropOnRoom, previewDrop, undoDrop, type DropResult, type StayMove } from "./actions";
 
 interface Props {
@@ -326,7 +327,7 @@ export function CalendarRooms({ property, data, today, markers, range, canEdit, 
             {dates.map((d) => {
               const on = markers.filter((x) => x.from <= d && x.to >= d);
               return (
-              <div key={d} aria-current={d === today ? "date" : undefined} title={on.map((x) => x.name).join(", ") || undefined} data-marker={on.map((x) => x.name).join(", ") || undefined} className={`flex shrink-0 flex-col items-center justify-center text-[12px] ${on.length ? "border-t-2 border-[#e0457b] bg-[#e0457b]/10" : ""} ${d === today ? "font-semibold text-accent" : weekdayIndex(d) >= 5 ? "text-ink-80" : "text-ink-60"}`} style={{ width: dw }}>
+              <div key={d} aria-current={d === today ? "date" : undefined} title={on.map((x) => x.name).join(", ") || undefined} data-marker={on.map((x) => x.name).join(", ") || undefined} className={`flex shrink-0 flex-col items-center justify-center text-[12px] ${on.length ? `${MARKER_STYLE.top} ${MARKER_STYLE.day}` : ""} ${d === today ? "font-semibold text-accent" : weekdayIndex(d) >= 5 ? "text-ink-80" : "text-ink-60"}`} style={{ width: dw }}>
                 <span>{fmtWd.format(new Date(`${d}T00:00:00Z`))}</span>
                 <span className="text-[13px]">{show(d)}</span>
               </div>

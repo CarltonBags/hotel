@@ -75,12 +75,14 @@ export async function undo(propertyId: string): Promise<GridActionState> {
 
 export interface ToolState extends GridActionState {
   /** What the tool changes, computed on the server from the stored prices. */
-  toolPreview?: { cells: number; rows: number; belowFloor: number; skipped: number };
+  toolPreview?: { cells: number; rows: number; belowFloor: number; skipped: number; skippedRows: { ratePlanId: string; roomTypeId: string }[] };
 }
 
 function checkTool(tool: RatesTool): RatesTool {
-  if (!Array.isArray(tool.rows) || tool.rows.length === 0 || tool.rows.length > 200) throw new Error("Select the rows first");
-  if (tool.kind === "paste" && (!Array.isArray(tool.block) || tool.block.length === 0)) throw new Error("Nothing to paste");
+  if (!["paste", "copy", "fill"].includes(tool?.kind)) throw new Error("Unknown tool");
+  // a fill takes every row whose prices end; paste and copy the rows in view
+  if (!Array.isArray(tool.rows) || tool.rows.length === 0 || tool.rows.length > (tool.kind === "fill" ? 2000 : 200)) throw new Error("Select the rows first");
+  if (tool.kind === "paste" && (!Array.isArray(tool.block) || tool.block.length === 0 || tool.block.length > 200 || tool.block.some((r) => !Array.isArray(r) || r.length > 400))) throw new Error("Paste at most 200 rows by 400 days");
   if (tool.kind === "fill" && tool.mode.kind !== "repeat_week" && tool.mode.kind !== "base") throw new Error("Choose how to fill");
   return tool;
 }
@@ -90,7 +92,7 @@ export async function runTool(propertyId: string, tool: RatesTool, expectedCells
   return formAction(async () => {
     const { schema, property, userId } = await scoped(propertyId);
     const r = await applyRatesTool(pool(), schema, property.id, userId, checkTool(tool), expectedCells);
-    const toolPreview = { ...r.preview, skipped: r.skipped };
+    const toolPreview = { ...r.preview, skipped: r.skipped, skippedRows: r.skippedRows };
     if (expectedCells === null) return { ok: true, toolPreview };
     if (r.stale) return { error: "The prices changed since the preview. Check the new preview and apply.", toolPreview };
     revalidatePath(PATH);

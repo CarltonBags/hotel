@@ -6,6 +6,7 @@ import {
   derivedPrice,
   effectiveRestriction,
   addDays,
+  daysBetween,
   planBulkEdit,
   planCopyPeriod,
   planFill,
@@ -323,17 +324,25 @@ export async function applyRatesTool(
   userId: string,
   tool: RatesTool,
   expectedCells: number | null,
-): Promise<{ changeId: string | null; preview: ToolPlan["preview"]; stale: boolean; skipped: number }> {
+): Promise<{ changeId: string | null; preview: ToolPlan["preview"]; stale: boolean; skipped: number; skippedRows: { ratePlanId: string; roomTypeId: string }[] }> {
   return withTenant(pool, schema, async (tx) => {
     await lockProperty(tx, propertyId);
     const bd = (await tx.query<{ d: string }>("select to_char(business_date, 'YYYY-MM-DD') as d from properties where id = $1", [propertyId])).rows[0]?.d;
     if (!bd) throw new Error("Property not found");
     const horizon = addDays(bd, PRICE_HORIZON_DAYS);
+    // tools write between the Business Date and the horizon, in bounded blocks
+    const inWindow = (d: string, what: string) => {
+      if (d < bd || d > horizon) throw new Error(`${what} must lie between the Business Date and the horizon`);
+    };
     let plan: ToolPlan;
     let skipped = 0;
+    let skippedRows: { ratePlanId: string; roomTypeId: string }[] = [];
     if (tool.kind === "paste") {
-      const width = Math.max(0, ...tool.block.map((r) => r.length));
+      if (tool.block.length > 200 || tool.block.some((r) => !Array.isArray(r) || r.length > 400)) throw new Error("Paste at most 200 rows by 400 days");
+      const width = tool.block.reduce((w, r) => Math.max(w, r.length), 0);
       const anchor = checkDate(tool.anchorDate);
+      inWindow(anchor, "Pasted prices");
+      inWindow(addDays(anchor, Math.max(0, width - 1)), "Pasted prices");
       const { rows, state } = await loadGridState(tx, propertyId, anchor, addDays(anchor, Math.max(0, width - 1)));
       const pick = tool.rows.map((k) => rows.find((r) => r.ratePlanId === k.ratePlanId && r.roomTypeId === k.roomTypeId));
       if (pick.some((r) => !r)) throw new Error("A row of the paste is not at this property");
@@ -343,17 +352,21 @@ export async function applyRatesTool(
     } else if (tool.kind === "copy") {
       const source = { from: checkDate(tool.source.from), to: checkDate(tool.source.to) };
       const target = checkDate(tool.targetFrom);
-      const span = Math.round((Date.parse(source.to) - Date.parse(source.from)) / 86_400_000);
+      const span = daysBetween(source.from, source.to);
+      if (span < 0 || span >= 400) throw new Error("Copy 1 to 400 days at once");
+      inWindow(target, "The copy");
+      inWindow(addDays(target, span), "The copy");
       const lo = source.from < target ? source.from : target;
       const hi = addDays(target, span) > source.to ? addDays(target, span) : source.to;
       const { rows, state } = await loadGridState(tx, propertyId, lo, hi);
       const pick = tool.rows.map((k) => rows.find((r) => r.ratePlanId === k.ratePlanId && r.roomTypeId === k.roomTypeId));
       if (pick.some((r) => !r)) throw new Error("A row to copy is not at this property");
       plan = planCopyPeriod({ rows: pick as GridRow[], source, targetFrom: target }, state);
-    } else {
+    } else if (tool.kind === "fill") {
+      if (tool.mode?.kind !== "repeat_week" && tool.mode?.kind !== "base") throw new Error("Choose how to fill");
       const ends = await tx.query<{ rate_plan_id: string; room_type_id: string; last_date: string | null }>(
         `select rt.rate_plan_id, rt.room_type_id, (select to_char(max(r.date), 'YYYY-MM-DD') from rates r where r.rate_plan_id = rt.rate_plan_id and r.room_type_id = rt.room_type_id) as last_date
-         from rate_plan_room_types rt join rate_plans p on p.id = rt.rate_plan_id where p.property_id = $1 and p.kind = 'base'`,
+         from rate_plan_room_types rt join rate_plans p on p.id = rt.rate_plan_id where p.property_id = $1 and p.kind = 'base' and p.active`,
         [propertyId],
       );
       const wanted = tool.rows.map((k) => ends.rows.find((e) => e.rate_plan_id === k.ratePlanId && e.room_type_id === k.roomTypeId));
@@ -366,14 +379,17 @@ export async function applyRatesTool(
       );
       plan = filled;
       skipped = filled.skipped.length;
+      skippedRows = filled.skipped;
+    } else {
+      throw new Error("Unknown tool");
     }
-    if (expectedCells === null) return { changeId: null, preview: plan.preview, stale: false, skipped };
+    if (expectedCells === null) return { changeId: null, preview: plan.preview, stale: false, skipped, skippedRows };
     if (plan.preview.cells === 0) throw new Error("Nothing would change");
-    if (plan.preview.cells !== expectedCells) return { changeId: null, preview: plan.preview, stale: true, skipped };
+    if (plan.preview.cells !== expectedCells) return { changeId: null, preview: plan.preview, stale: true, skipped, skippedRows };
     const changeId = randomUUID();
     await setRatesIn(tx, propertyId, userId, changeId, plan.prices);
     await setRestrictionsIn(tx, propertyId, userId, plan.restrictions, changeId);
-    return { changeId, preview: plan.preview, stale: false, skipped };
+    return { changeId, preview: plan.preview, stale: false, skipped, skippedRows };
   });
 }
 
@@ -402,6 +418,7 @@ export async function createEventMarker(pool: Pool, schema: string, propertyId: 
   const from = checkDate(input.from);
   const to = checkDate(input.to || input.from);
   if (to < from) throw new Error("The end date is before the start date");
+  if (daysBetween(from, to) >= 366) throw new Error("An Event Marker spans at most a year");
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query<{ id: string }>("insert into event_markers (property_id, name, from_date, to_date, created_by) values ($1, $2, $3, $4, $5) returning id", [propertyId, name, from, to, userId]);
     return { id: rows[0]!.id, name, from, to };
