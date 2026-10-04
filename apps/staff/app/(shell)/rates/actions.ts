@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { PRICE_ACTIONS, RESTRICTION_FIELDS, addDays, isOneOf, roundMoney, type BulkEdit, type BulkPreview } from "@hoteloftware/domain";
-import { applyBulkEdit, applyGridEdit, listBelowFloor, undoLastChange } from "@hoteloftware/db";
+import { applyBulkEdit, applyGridEdit, applyRatesTool, createEventMarker, deleteEventMarker, listBelowFloor, undoLastChange, type RatesTool } from "@hoteloftware/db";
 import { pool } from "@/lib/db";
 import { formAction } from "@/lib/form";
 import { propertyFor } from "@/lib/property-scope";
@@ -70,5 +70,50 @@ export async function undo(propertyId: string): Promise<GridActionState> {
     const result = await undoLastChange(pool(), schema, property.id, userId);
     revalidatePath(PATH);
     return { ok: true, notice: `Undone: ${result.cells} cells restored.` };
+  });
+}
+
+export interface ToolState extends GridActionState {
+  /** What the tool changes, computed on the server from the stored prices. */
+  toolPreview?: { cells: number; rows: number; belowFloor: number; skipped: number; skippedRows: { ratePlanId: string; roomTypeId: string }[] };
+}
+
+function checkTool(tool: RatesTool): RatesTool {
+  if (!["paste", "copy", "fill"].includes(tool?.kind)) throw new Error("Unknown tool");
+  // a fill takes every row whose prices end; paste and copy the rows in view
+  if (!Array.isArray(tool.rows) || tool.rows.length === 0 || tool.rows.length > (tool.kind === "fill" ? 2000 : 200)) throw new Error("Select the rows first");
+  if (tool.kind === "paste" && (!Array.isArray(tool.block) || tool.block.length === 0 || tool.block.length > 200 || tool.block.some((r) => !Array.isArray(r) || r.length > 400))) throw new Error("Paste at most 200 rows by 400 days");
+  if (tool.kind === "fill" && tool.mode.kind !== "repeat_week" && tool.mode.kind !== "base") throw new Error("Choose how to fill");
+  return tool;
+}
+
+/** Paste, copy period or fill to the horizon: preview without expected cells, apply with them. */
+export async function runTool(propertyId: string, tool: RatesTool, expectedCells: number | null): Promise<ToolState> {
+  return formAction(async () => {
+    const { schema, property, userId } = await scoped(propertyId);
+    const r = await applyRatesTool(pool(), schema, property.id, userId, checkTool(tool), expectedCells);
+    const toolPreview = { ...r.preview, skipped: r.skipped, skippedRows: r.skippedRows };
+    if (expectedCells === null) return { ok: true, toolPreview };
+    if (r.stale) return { error: "The prices changed since the preview. Check the new preview and apply.", toolPreview };
+    revalidatePath(PATH);
+    return { ok: true, toolPreview, ...(r.preview.belowFloor ? { warning: `${r.preview.belowFloor} prices are below the Price Floor. Saved, and listed for the Property Manager.` } : { notice: `Saved: ${r.preview.cells} cells. Undo reverts it.` }) };
+  });
+}
+
+export async function addEventMarker(propertyId: string, input: { name: string; from: string; to: string }): Promise<GridActionState> {
+  return formAction(async () => {
+    const { schema, property, userId } = await scoped(propertyId);
+    await createEventMarker(pool(), schema, property.id, userId, input);
+    revalidatePath(PATH);
+    return { ok: true, notice: "Event Marker saved." };
+  });
+}
+
+export async function removeEventMarker(propertyId: string, id: string): Promise<GridActionState> {
+  return formAction(async () => {
+    const { schema, property } = await scoped(propertyId);
+    await deleteEventMarker(pool(), schema, property.id, id);
+    revalidatePath(PATH);
+    return { ok: true, notice: "Event Marker removed." };
   });
 }

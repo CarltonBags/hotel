@@ -1343,6 +1343,24 @@ export const phoneChanges = pgTable(
   (t) => [check("phone_changes_outcome_check", sql`${t.outcome} in ('applied', 'conflict', 'refused')`)],
 );
 
+export const eventMarkers = pgTable(
+  "event_markers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    name: text("name").notNull(),
+    fromDate: date("from_date").notNull(),
+    toDate: date("to_date").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    index("event_markers_property_idx").on(t.propertyId, t.fromDate),
+    check("event_markers_name_check", sql`length(trim(${t.name})) between 1 and 60`),
+    check("event_markers_dates_check", sql`${t.toDate} >= ${t.fromDate} and ${t.toDate} - ${t.fromDate} < 366`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1407,4 +1425,5 @@ export const tenantSchema = {
   maintenanceIssues,
   lostItems,
   phoneChanges,
+  eventMarkers,
 };

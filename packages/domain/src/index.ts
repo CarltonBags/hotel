@@ -70,6 +70,7 @@ export { roundMoney } from "./money";
 export {
   PRICE_ACTIONS,
   addDays,
+  daysBetween,
   cellKey,
   datesFrom,
   planBulkEdit,
@@ -241,3 +242,4 @@ export {
   type ProblemPick,
   type Urgency,
 } from "./floor";
+export { copySourceDate, parsePaste, planCopyPeriod, planFill, planPaste, type FillMode, type ToolPlan } from "./rates-tools";

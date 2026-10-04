@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronLeft, ChevronRight, CircleDashed, History, Link2, TriangleAlert, Undo2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, CircleDashed, Flag, History, Link2, TriangleAlert, Undo2, X } from "lucide-react";
 import {
   OPEN_RESTRICTION,
   RESTRICTION_FIELDS,
@@ -10,6 +10,7 @@ import {
   cellKey,
   datesFrom,
   localeFor,
+  parsePaste,
   planBulkEdit,
   weekdayIndex,
   type BulkEdit,
@@ -19,10 +20,12 @@ import {
   type Restriction,
   type RestrictionField,
 } from "@hoteloftware/domain";
-import type { BelowFloor, PriceEnd, RateChange } from "@hoteloftware/db";
+import type { BelowFloor, EventMarker, PriceEnd, RateChange } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 import { applyBulk, saveCell, undo, type GridActionState } from "./actions";
 import type { GridCell, GridRowView } from "./grid-data";
+import { ToolReview, ToolsPanel, useTool } from "./tools-panel";
+import { MARKER_STYLE } from "./marker-style";
 
 interface PlanInfo {
   id: string;
@@ -44,6 +47,10 @@ interface Props {
   belowFloor: BelowFloor[];
   priceEnds: PriceEnd[];
   changes: (Omit<RateChange, "at"> & { at: string; userName: string })[];
+  /** Event Markers from the grid's first day to the horizon. */
+  markers: EventMarker[];
+  /** Prices are kept up to this date. */
+  horizon: string;
   language: Language;
   m: Messages;
 }
@@ -174,6 +181,52 @@ export function RatesGrid(props: Props) {
       router.refresh();
     });
 
+  // a block pasted from a spreadsheet lands from the focused cell, after a preview
+  const pasteTool = useTool(property.id, (r) => {
+    report(r);
+    router.refresh();
+  });
+  const onPaste = (e: React.ClipboardEvent) => {
+    if (edit !== null) return;
+    e.preventDefault();
+    const date = dates[focus.d];
+    if (!date) return;
+    try {
+      const block = parsePaste(e.clipboardData.getData("text/plain"));
+      if (!block.length) return;
+      pasteTool.preview({ kind: "paste", block, rows: rows.slice(focus.i, focus.i + block.length).map((r) => ({ ratePlanId: r.ratePlanId, roomTypeId: r.roomTypeId })), anchorDate: date });
+      // show where the block lands
+      const width = Math.max(...block.map((r) => r.length));
+      select(focus, { i: Math.min(rows.length - 1, focus.i + block.length - 1), d: Math.min(dates.length - 1, focus.d + width - 1) });
+    } catch (err) {
+      setMessage({ kind: "error", text: err instanceof Error ? err.message : m["grid.badPrice"] });
+    }
+  };
+
+  const markersOn = (d: string) => props.markers.filter((x) => x.from <= d && x.to >= d);
+  // an Event Marker picked in the bulk panel selects its dates for the selected rows (all rows without a selection);
+  // the grid moves to the marker first when it is not in view
+  const [pendingMarker, setPendingMarker] = useState<{ marker: EventMarker; i0: number; i1: number } | null>(null);
+  const selectMarker = (mk: EventMarker, i0: number, i1: number) => {
+    const last = dates[dates.length - 1]!;
+    select({ i: i0, d: dates.indexOf(mk.from) }, { i: i1, d: dates.indexOf(mk.to > last ? last : mk.to) });
+    if (mk.to > last) setMessage({ kind: "hint", text: m["tools.markerLonger"] });
+  };
+  const pickMarker = (mk: EventMarker) => {
+    const i0 = sel ? Math.min(sel.a.i, sel.b.i) : 0;
+    const i1 = sel ? Math.max(sel.a.i, sel.b.i) : rows.length - 1;
+    if (dates.includes(mk.from)) return selectMarker(mk, i0, i1);
+    setPendingMarker({ marker: mk, i0, i1 });
+    router.push(`/rates?from=${addDays(mk.from, -3)}`);
+  };
+  useEffect(() => {
+    // runs when the shown days change: select the marker if it arrived in view, else forget it
+    if (!pendingMarker) return;
+    if (dates.includes(pendingMarker.marker.from)) selectMarker(pendingMarker.marker, pendingMarker.i0, Math.min(pendingMarker.i1, rows.length - 1));
+    setPendingMarker(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dates]);
+
   const onKey = (e: React.KeyboardEvent) => {
     if (edit !== null) {
       if (e.key === "Enter") {
@@ -267,20 +320,33 @@ export function RatesGrid(props: Props) {
             {rows.length === 0 ? (
               <p className="p-6 text-ink-60">{m["grid.noPlans"]}</p>
             ) : (
-              <div ref={box} tabIndex={0} onKeyDown={onKey} role="grid" aria-label={m["module.rates"]} className="min-h-0 flex-1 overflow-auto outline-none">
+              <div ref={box} tabIndex={0} onKeyDown={onKey} onPaste={onPaste} role="grid" aria-label={m["module.rates"]} className="min-h-0 flex-1 overflow-auto outline-none">
                 <div style={{ width: LEFT + dates.length * CW }}>
-                  <div className="sticky top-0 z-20 flex h-11 border-b border-ink-10 bg-surface">
+                  <div className="sticky top-0 z-20 flex h-14 border-b border-ink-10 bg-surface">
                     <div className="sticky left-0 z-10 shrink-0 bg-surface" style={{ width: LEFT }} />
-                    {dates.map((d) => {
+                    {dates.map((d, di) => {
                       const weekend = weekdayIndex(d) >= 5;
+                      const on = markersOn(d);
+                      // a marker's name on its first day in view
+                      const starts = on.filter((x) => x.from === d || di === 0);
                       return (
                         <div
                           key={d}
                           role="columnheader"
                           aria-current={d === today ? "date" : undefined}
-                          className={`flex shrink-0 flex-col items-center justify-center text-[11px] leading-tight ${d === today ? "font-semibold text-accent" : weekend ? "text-ink-80" : "text-ink-60"} ${weekend ? "bg-ink-5" : ""}`}
+                          title={on.map((x) => x.name).join(", ") || undefined}
+                          data-marker={on.map((x) => x.name).join(", ") || undefined}
+                          className={`flex shrink-0 flex-col items-center justify-center overflow-visible text-[11px] leading-tight ${d === today ? "font-semibold text-accent" : weekend ? "text-ink-80" : "text-ink-60"} ${on.length ? MARKER_STYLE.day : weekend ? "bg-ink-5" : ""}`}
                           style={{ width: CW }}
                         >
+                          <span className={`h-3 w-full truncate px-1 text-left text-[9px] font-semibold ${MARKER_STYLE.text}`}>
+                            {starts.length ? (
+                              <>
+                                <Flag size={8} className="mr-0.5 inline" />
+                                {starts.map((x) => x.name).join(", ")}
+                              </>
+                            ) : null}
+                          </span>
                           <span>{wd(d)}</span>
                           <span className="text-[12px]">{day(d)}</span>
                         </div>
@@ -375,6 +441,11 @@ export function RatesGrid(props: Props) {
                 </div>
               </div>
             )}
+            {pasteTool.review ? (
+              <div className="border-t border-ink-10 p-3">
+                <ToolReview title={m["tools.paste"]} preview={pasteTool.review.preview} pending={pasteTool.pending} onApply={pasteTool.apply} onCancel={pasteTool.cancel} m={m} />
+              </div>
+            ) : null}
             <div
               role={message.kind === "hint" ? "status" : "alert"}
               className={`flex min-h-9 shrink-0 items-center border-t border-ink-10 px-5 text-[12px] ${message.kind === "error" ? "text-danger" : message.kind === "warning" ? "text-warning" : "text-ink-60"}`}
@@ -395,7 +466,23 @@ export function RatesGrid(props: Props) {
               if (r.ok) setSel(null);
               router.refresh();
             }}
-          />
+            onPickMarker={pickMarker}
+          >
+            <ToolsPanel
+              propertyId={property.id}
+              rows={(sel ? rows.slice(Math.min(sel.a.i, sel.b.i), Math.max(sel.a.i, sel.b.i) + 1) : rows).map((r) => ({ ratePlanId: r.ratePlanId, roomTypeId: r.roomTypeId }))}
+              selection={sel ? { from: dates[Math.min(sel.a.d, sel.b.d)]!, to: dates[Math.max(sel.a.d, sel.b.d)]! } : null}
+              priceEnds={props.priceEnds}
+              markers={props.markers}
+              horizon={props.horizon}
+              day={day}
+              m={m}
+              onDone={(r) => {
+                report(r);
+                router.refresh();
+              }}
+            />
+          </BulkPanel>
         </div>
       </div>
     </div>
@@ -424,9 +511,11 @@ type BulkProps = Props & {
   weekdayNames: string[];
   cellOf: (row: GridRowView, d: string) => GridCell;
   onApplied: (r: GridActionState) => void;
+  onPickMarker: (marker: EventMarker) => void;
+  children: React.ReactNode;
 };
 
-function BulkPanel({ property, rows, dates, sel, clear, day, weekdayNames, cellOf, onApplied, belowFloor, changes, language, m }: BulkProps) {
+function BulkPanel({ property, rows, dates, sel, clear, day, weekdayNames, cellOf, onApplied, onPickMarker, belowFloor, changes, markers, language, m, children }: BulkProps) {
   const [weekdays, setWeekdays] = useState<boolean[]>([true, true, true, true, true, true, true]);
   const [action, setAction] = useState<PriceAction>("keep");
   const [value, setValue] = useState("");
@@ -517,6 +606,28 @@ function BulkPanel({ property, rows, dates, sel, clear, day, weekdayNames, cellO
             </button>
           ) : null}
         </div>
+        {markers.length ? (
+          <label className="mt-2 flex items-center gap-2 text-[12px] text-ink-60">
+            <Flag size={13} className={MARKER_STYLE.text} />
+            <select
+              aria-label={m["bulk.marker"]}
+              value=""
+              onChange={(e) => {
+                const mk = markers.find((x) => x.id === e.target.value);
+                if (mk) onPickMarker(mk);
+              }}
+              className="h-8 flex-1 rounded-[10px] border border-ink-10 bg-surface-2 px-2 text-[13px] text-ink"
+            >
+              <option value="">{m["bulk.marker"]}</option>
+              {markers.map((mk) => (
+                <option key={mk.id} value={mk.id}>
+                  {mk.name} · {day(mk.from)}
+                  {mk.to !== mk.from ? ` – ${day(mk.to)}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {!edit ? (
           <p className="mt-2 text-[13px] text-ink-60">{m["bulk.empty"]}</p>
         ) : (
@@ -642,6 +753,8 @@ function BulkPanel({ property, rows, dates, sel, clear, day, weekdayNames, cellO
             </button>
           </div>
         )}
+
+        {children}
 
         <section aria-label={m["grid.belowFloorTitle"]} className="mt-5">
           <h3 className="flex items-center gap-1.5 text-[12px] font-semibold text-danger">

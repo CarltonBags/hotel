@@ -20,15 +20,18 @@ import {
   type Language,
   type ReservationStatus,
 } from "@hoteloftware/domain";
-import type { CalendarData, CalendarReservation, CalendarRoom, CalendarRoomType, ChangePreview } from "@hoteloftware/db";
+import type { CalendarData, CalendarReservation, CalendarRoom, CalendarRoomType, ChangePreview, EventMarker } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 import { useShell } from "@/shell/ShellProvider";
+import { MARKER_STYLE } from "../rates/marker-style";
 import { applyDrop, dropOnRoom, previewDrop, undoDrop, type DropResult, type StayMove } from "./actions";
 
 interface Props {
   property: { id: string; name: string; currency: string; country: string };
   data: CalendarData;
   today: string;
+  /** Event Markers over the loaded days (ticket 19). */
+  markers: EventMarker[];
   range: CalendarRange;
   canEdit: boolean;
   language: Language;
@@ -54,7 +57,7 @@ const STATUS_BAR: Partial<Record<ReservationStatus, string>> = {
   checked_out: "bg-ink-10 text-ink-80",
 };
 
-export function CalendarRooms({ property, data, today, range, canEdit, language, m }: Props) {
+export function CalendarRooms({ property, data, today, markers, range, canEdit, language, m }: Props) {
   const router = useRouter();
   const { openRecord } = useShell();
   const [pending, startTransition] = useTransition();
@@ -321,12 +324,15 @@ export function CalendarRooms({ property, data, today, range, canEdit, language,
             <div className="sticky left-0 z-10 flex shrink-0 items-center bg-surface px-4 text-[12px] font-semibold uppercase tracking-wide text-ink-40" style={{ width: LEFT }}>
               {m["cal.room"]}
             </div>
-            {dates.map((d) => (
-              <div key={d} aria-current={d === today ? "date" : undefined} className={`flex shrink-0 flex-col items-center justify-center text-[12px] ${d === today ? "font-semibold text-accent" : weekdayIndex(d) >= 5 ? "text-ink-80" : "text-ink-60"}`} style={{ width: dw }}>
+            {dates.map((d) => {
+              const on = markers.filter((x) => x.from <= d && x.to >= d);
+              return (
+              <div key={d} aria-current={d === today ? "date" : undefined} title={on.map((x) => x.name).join(", ") || undefined} data-marker={on.map((x) => x.name).join(", ") || undefined} className={`flex shrink-0 flex-col items-center justify-center text-[12px] ${on.length ? `${MARKER_STYLE.top} ${MARKER_STYLE.day}` : ""} ${d === today ? "font-semibold text-accent" : weekdayIndex(d) >= 5 ? "text-ink-80" : "text-ink-60"}`} style={{ width: dw }}>
                 <span>{fmtWd.format(new Date(`${d}T00:00:00Z`))}</span>
                 <span className="text-[13px]">{show(d)}</span>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {rows.slice(first, last).map((row, i) => {
