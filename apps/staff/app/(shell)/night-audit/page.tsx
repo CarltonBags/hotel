@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { can, formatCurrency } from "@hoteloftware/domain";
-import { nightAuditView } from "@hoteloftware/db";
+import { listTenantUsers, nightAuditView } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
@@ -33,6 +33,7 @@ export default async function NightAuditPage() {
     </Link>
   );
   const w = view.warnings;
+  const names = w.openShifts.length ? new Map((await listTenantUsers(pool(), tenant.id)).map((u) => [u.id, u.name])) : new Map<string, string>();
   return (
     <div className="mx-auto grid max-w-4xl gap-4 p-6">
       <div>
@@ -103,6 +104,21 @@ export default async function NightAuditPage() {
             </ul>
           </div>
         ))}
+        <div data-warning="na.openShifts">
+          <h3 className="text-ink-80">
+            {m["na.openShifts"]} ({w.openShifts.length})
+          </h3>
+          <ul className="grid gap-0.5">
+            {w.openShifts.map((x) => (
+              <li key={x.registerName}>
+                <Link href="/cash" className="underline">
+                  {x.registerName}
+                </Link>
+                <span className="text-ink-60"> · {names.get(x.userId) ?? "?"} · {when.format(x.openedAt)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </section>
     </div>
   );

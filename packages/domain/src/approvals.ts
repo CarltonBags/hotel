@@ -4,7 +4,7 @@
  * screen with their credentials or remotely on a request, which expires after
  * 24 hours and is used once.
  */
-export const APPROVAL_KINDS = ["refund_over_limit", "price_below_floor", "complimentary"] as const;
+export const APPROVAL_KINDS = ["refund_over_limit", "price_below_floor", "complimentary", "paid_out_over_limit"] as const;
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 
 export const APPROVAL_TTL_HOURS = 24;
