@@ -8,7 +8,8 @@ alter table properties add column hk_shift_minutes integer not null default 480 
 -- a room type may follow its own rhythms (null: the property's)
 alter table room_types add column hk_stayover_rhythm text
   constraint room_types_hk_stayover_rhythm_check check (hk_stayover_rhythm in ('daily', 'every_2', 'every_3', 'on_request'));
-alter table room_types add column hk_linen_every integer constraint room_types_hk_linen_every_check check (hk_linen_every > 0);
+-- 0: no linen change for this room type
+alter table room_types add column hk_linen_every integer constraint room_types_hk_linen_every_check check (hk_linen_every >= 0);
 
 -- minutes a task takes in a room of the type (missing: the defaults)
 create table housekeeping_minutes (
@@ -28,6 +29,12 @@ alter table housekeeping_tasks add column note text not null default '';
 alter table housekeeping_tasks add column started_at timestamptz;
 alter table housekeeping_tasks add column done_at timestamptz;
 alter table housekeeping_tasks add column done_by text;
+-- a guest Arrived and Waiting for Room: the room comes first
+alter table housekeeping_tasks add column priority boolean not null default false;
+create index housekeeping_tasks_reservation_idx on housekeeping_tasks(reservation_id);
+
+-- the guest is here and waits for the room (Arrived, Waiting for Room)
+alter table reservations add column waiting_for_room_since timestamptz;
 
 -- the day's plan: a draft until the supervisor publishes it to the housekeepers
 create table housekeeping_plans (

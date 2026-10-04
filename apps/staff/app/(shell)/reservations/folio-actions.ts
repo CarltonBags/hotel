@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { ROUTING_CATEGORIES, isOneOf } from "@hoteloftware/domain";
-import { RoomNotReady, addFixedCharge, addFolio, assignRoom, cancelCheckIn, checkIn, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, setRouting, voidCharge } from "@hoteloftware/db";
+import { setWaitingForRoom, RoomNotReady, addFixedCharge, addFolio, assignRoom, cancelCheckIn, checkIn, moveCharge, postFreeTextCharge, postServiceCharge, removeFixedCharge, setRouting, voidCharge } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
@@ -151,5 +151,16 @@ export async function cancelCheckInAction(reservationId: string): Promise<FormSt
     revalidatePath("/");
     await announceReservations(tenantId, reservation.propertyId);
     return { ok: true, message: "Check-in cancelled." };
+  });
+}
+
+/** The guest is here and waits for the room: its preparation becomes a priority on the housekeeping board (ticket 34). */
+export async function waitingForRoomAction(reservationId: string, waiting: boolean): Promise<FormState> {
+  return formAction(async () => {
+    const { schema, tenantId, reservation, userId, actor } = await reservationScope(reservationId, "check_in");
+    await setWaitingForRoom(pool(), schema, reservation.id, waiting === true, { userId, actor });
+    revalidatePath(`/reservations/${reservation.id}`);
+    await announceReservations(tenantId, reservation.propertyId);
+    return { ok: true, message: "Saved." };
   });
 }

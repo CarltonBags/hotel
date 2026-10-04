@@ -3,11 +3,13 @@
 import { revalidatePath } from "next/cache";
 import {
   TaskStarted,
+  createSection,
   failInspection,
   generateHousekeepingTasks,
-  listTenantUsers,
   moveHousekeepingTask,
   propertyOfRoom,
+  propertyOfTask,
+  updateRoom,
   proposeHousekeeping,
   publishHousekeeping,
   setCleanliness,
@@ -18,6 +20,7 @@ import type { StayoverRhythm, TaskKind } from "@hoteloftware/domain";
 import { authorize, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { formAction, type FormState } from "@/lib/form";
+import { housekeepersAt } from "@/lib/housekeepers";
 
 /** The supervisor's board (ticket 34): Housekeeping Supervisor and Property Manager of the property. */
 
@@ -28,10 +31,7 @@ async function supervisor(propertyId: string) {
   return { tenant, schema: tenant.schemaName, viewer: { userId: session.user.id, actor } };
 }
 
-/** The property's Housekeepers: the people the plan may give tasks to. */
-async function housekeepersOf(tenantId: string, propertyId: string): Promise<string[]> {
-  return (await listTenantUsers(pool(), tenantId)).filter((u) => !u.pendingInvitation && u.propertyRoles.some((r) => r.propertyId === propertyId && r.role === "housekeeper")).map((u) => u.id);
-}
+const housekeepersOf = async (tenantId: string, propertyId: string) => (await housekeepersAt(tenantId, propertyId)).map((h) => h.id);
 
 export async function generateAction(propertyId: string): Promise<FormState> {
   return formAction(async () => {
@@ -60,11 +60,15 @@ export async function publishAction(propertyId: string): Promise<FormState> {
   });
 }
 
-export async function moveTaskAction(propertyId: string, taskId: string, assigneeId: string | null, confirm: boolean): Promise<FormState & { started?: boolean }> {
+/** Move a room's tasks (the room of the task given) to a housekeeper of the task's own property. */
+export async function moveTaskAction(taskId: string, assigneeId: string | null, confirm: boolean): Promise<FormState & { started?: boolean }> {
   let started = false;
   const state = await formAction(async () => {
+    const { tenant: t } = await requirePrincipal();
+    const propertyId = await propertyOfTask(pool(), t.schemaName, String(taskId));
+    if (!propertyId) throw new Error("Task not found");
     const { tenant, schema, viewer } = await supervisor(propertyId);
-    if (assigneeId && !(await housekeepersOf(tenant.id, String(propertyId))).includes(String(assigneeId))) throw new Error("Not a Housekeeper of this property");
+    if (assigneeId && !(await housekeepersOf(tenant.id, propertyId)).includes(String(assigneeId))) throw new Error("Not a Housekeeper of this property");
     try {
       await moveHousekeepingTask(pool(), schema, String(taskId), assigneeId ? String(assigneeId) : null, viewer, { confirm: confirm === true });
     } catch (err) {
@@ -116,6 +120,25 @@ export async function roomTypeAction(propertyId: string, roomTypeId: string, inp
   return formAction(async () => {
     const { schema, viewer } = await supervisor(propertyId);
     await setRoomTypeHousekeeping(pool(), schema, String(roomTypeId), input, viewer);
+    revalidatePath(PATH);
+    return { ok: true, message: "Saved." };
+  });
+}
+
+/** Sections (Reviere) are kept by the Housekeeping Supervisor too (matrix "Generate, assign, publish Housekeeping Tasks; Sections"). */
+export async function createSectionAction(propertyId: string, name: string): Promise<FormState> {
+  return formAction(async () => {
+    const { schema } = await supervisor(propertyId);
+    await createSection(pool(), schema, { propertyId: String(propertyId), name: String(name ?? "") });
+    revalidatePath(PATH);
+    return { ok: true, message: "Section added." };
+  });
+}
+
+export async function roomSectionAction(propertyId: string, roomId: string, sectionId: string | null): Promise<FormState> {
+  return formAction(async () => {
+    const { schema } = await supervisor(propertyId);
+    await updateRoom(pool(), schema, String(propertyId), String(roomId), { sectionId: sectionId ? String(sectionId) : null });
     revalidatePath(PATH);
     return { ok: true, message: "Saved." };
   });

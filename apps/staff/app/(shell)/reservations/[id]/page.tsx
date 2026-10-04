@@ -8,6 +8,7 @@ import { paymentProps, reservationView } from "@/lib/reservation-view";
 import { requirePrincipal } from "@/lib/authorize";
 import { fill } from "@/i18n/messages";
 import { CheckInButton } from "../check-in-button";
+import { WaitingButton } from "../waiting-button";
 import { FixedCharges } from "./fixed-charges";
 import { CardHoldsPanel, PaymentsPanel } from "./payments-panel";
 import { CheckOutPanel, InvoicesPanel } from "./invoices-panel";
@@ -84,6 +85,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         {r.status === "confirmed" && rights.checkIn && r.arrival <= today && today < r.departure ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <CheckInButton reservationId={r.id} needsRoom={!r.assignments.some((a) => a.from <= today && a.to > today)} m={m} />
+            <WaitingButton reservationId={r.id} waiting={r.waitingForRoomSince !== null} m={m} />
             <span className="text-xs text-ink-60">{m["res.checkInHelp"]}</span>
           </div>
         ) : null}

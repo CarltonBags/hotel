@@ -16,7 +16,12 @@ export const DEFAULT_MINUTES: Record<TaskKind, number> = { departure: 30, stayov
 
 export interface StayOnDay {
   reservationId: string;
+  /** Tonight's room; for a stay that leaves today, the room slept in last night. */
   roomId: string | null;
+  /** The room of last night when the stay moved rooms from tonight on: it needs cleaning. */
+  vacatedRoomId?: string | null;
+  /** The guest is here and waits for the room (Arrived, Waiting for Room). */
+  waiting?: boolean;
   roomTypeId: string;
   /** checked_out: only stays that left on this day (an early departure included). */
   status: "confirmed" | "checked_in" | "checked_out";
@@ -30,6 +35,9 @@ export interface TaskRules {
   linenEvery: number | null;
 }
 
+/** A Stayover clean every this many nights (null: on request only). */
+const STAYOVER_EVERY: Record<StayoverRhythm, number | null> = { daily: 1, every_2: 2, every_3: 3, on_request: null };
+
 const nightIndex = (arrival: string, day: string) => Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${arrival}T00:00:00Z`)) / 86_400_000);
 
 /**
@@ -38,18 +46,24 @@ const nightIndex = (arrival: string, day: string) => Math.round((Date.parse(`${d
  * a guest staying on by the rhythm, a Linen change by its rhythm. Rules per
  * room type override the property's.
  */
-export function tasksForDay(day: string, stays: StayOnDay[], rules: (roomTypeId: string) => TaskRules): { reservationId: string; roomId: string; kind: TaskKind }[] {
-  const out: { reservationId: string; roomId: string; kind: TaskKind }[] = [];
+export function tasksForDay(day: string, stays: StayOnDay[], rules: (roomTypeId: string) => TaskRules): { reservationId: string; roomId: string; kind: TaskKind; priority: boolean }[] {
+  const out: { reservationId: string; roomId: string; kind: TaskKind; priority: boolean }[] = [];
+  const add = (s: StayOnDay, roomId: string, kind: TaskKind, priority = false) => out.push({ reservationId: s.reservationId, roomId, kind, priority });
   for (const s of stays) {
     if (!s.roomId) continue;
-    if ((s.departure === day && s.status === "checked_in") || s.status === "checked_out") out.push({ reservationId: s.reservationId, roomId: s.roomId, kind: "departure" });
-    else if (s.arrival === day && s.status === "confirmed") out.push({ reservationId: s.reservationId, roomId: s.roomId, kind: "arrival" });
+    if ((s.departure === day && s.status === "checked_in") || s.status === "checked_out") add(s, s.roomId, "departure");
+    else if (s.arrival <= day && s.status === "confirmed") add(s, s.roomId, "arrival", s.waiting === true);
     else if (s.status === "checked_in" && s.arrival < day && day < s.departure) {
+      // moved rooms from tonight: the room left is cleaned like a departure, tonight's is not a stayover
+      if (s.vacatedRoomId && s.vacatedRoomId !== s.roomId) {
+        add(s, s.vacatedRoomId, "departure");
+        continue;
+      }
       const n = nightIndex(s.arrival, day);
       const r = rules(s.roomTypeId);
-      const every = r.stayover === "daily" ? 1 : r.stayover === "every_2" ? 2 : r.stayover === "every_3" ? 3 : null;
-      if (every !== null && n % every === 0) out.push({ reservationId: s.reservationId, roomId: s.roomId, kind: "stayover" });
-      if (r.linenEvery !== null && n % r.linenEvery === 0) out.push({ reservationId: s.reservationId, roomId: s.roomId, kind: "linen" });
+      const every = STAYOVER_EVERY[r.stayover];
+      if (every !== null && n % every === 0) add(s, s.roomId, "stayover");
+      if (r.linenEvery !== null && n % r.linenEvery === 0) add(s, s.roomId, "linen");
     }
   }
   return out;
@@ -80,8 +94,20 @@ export function proposeDistribution(tasks: PlanTask[], housekeepers: string[]): 
   const result = new Map<string, string>();
   if (!housekeepers.length) return result;
   const load = new Map(housekeepers.map((h) => [h, 0]));
-  for (const t of tasks) if (t.assigneeId && load.has(t.assigneeId)) load.set(t.assigneeId, load.get(t.assigneeId)! + t.minutes);
-  const open = tasks.filter((t) => !t.assigneeId);
+  for (const t of tasks) if (t.assigneeId !== null && load.has(t.assigneeId)) load.set(t.assigneeId, load.get(t.assigneeId)! + t.minutes);
+  // a task of someone who is not among the housekeepers counts as unassigned
+  const known = (t: PlanTask) => t.assigneeId !== null && load.has(t.assigneeId);
+  // a room already given to someone keeps its other tasks with them
+  const roomOwner = new Map(tasks.filter(known).map((t) => [t.roomId, t.assigneeId!]));
+  const open: PlanTask[] = [];
+  for (const t of tasks) {
+    if (known(t)) continue;
+    const owner = roomOwner.get(t.roomId);
+    if (owner) {
+      result.set(t.id, owner);
+      load.set(owner, load.get(owner)! + t.minutes);
+    } else open.push(t);
+  }
   const rooms = new Map<string, PlanTask[]>();
   for (const t of open) rooms.set(t.roomId, [...(rooms.get(t.roomId) ?? []), t]);
   const sections = new Map<string, PlanTask[][]>();
@@ -90,7 +116,7 @@ export function proposeDistribution(tasks: PlanTask[], housekeepers: string[]): 
     sections.set(key, [...(sections.get(key) ?? []), roomTasks]);
   }
   const minutesOf = (ts: PlanTask[]) => ts.reduce((s, t) => s + t.minutes, 0);
-  const total = open.reduce((s, t) => s + t.minutes, 0) + [...load.values()].reduce((s, m) => s + m, 0);
+  const total = [...load.values()].reduce((s, m) => s + m, 0) + open.reduce((s, t) => s + t.minutes, 0);
   const fair = total / housekeepers.length;
   const lightest = () => [...load].sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))[0]![0];
   const give = (h: string, ts: PlanTask[]) => {

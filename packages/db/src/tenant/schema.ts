@@ -92,7 +92,7 @@ export const roomTypes = pgTable(
   },
   (t) => [
     check("room_types_hk_stayover_rhythm_check", sql`${t.hkStayoverRhythm} in ('daily', 'every_2', 'every_3', 'on_request')`),
-    check("room_types_hk_linen_every_check", sql`${t.hkLinenEvery} > 0`),
+    check("room_types_hk_linen_every_check", sql`${t.hkLinenEvery} >= 0`),
     unique("room_types_property_id_code_key").on(t.propertyId, t.code),
     check("room_types_max_occupancy_check", sql`${t.maxOccupancy} >= 1`),
     check("room_types_max_adults_check", sql`${t.maxAdults} >= 1`),
@@ -620,6 +620,7 @@ export const reservations = pgTable(
     checkedOutBy: text("checked_out_by"),
     cityTaxPassOn: text("city_tax_pass_on"),
     lateArrival: boolean("late_arrival").notNull().default(false),
+    waitingForRoomSince: timestamp("waiting_for_room_since", { withTimezone: true }),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -1218,8 +1219,10 @@ export const housekeepingTasks = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     doneAt: timestamp("done_at", { withTimezone: true }),
     doneBy: text("done_by"),
+    priority: boolean("priority").notNull().default(false),
   },
   (t) => [
+    index("housekeeping_tasks_reservation_idx").on(t.reservationId),
     unique("housekeeping_tasks_key").on(t.roomId, t.businessDate, t.kind),
     check("housekeeping_tasks_kind_check", sql`${t.kind} in ('departure', 'stayover', 'arrival', 'linen', 'clean')`),
     index("housekeeping_tasks_assignee_idx").on(t.propertyId, t.businessDate, t.assigneeId),

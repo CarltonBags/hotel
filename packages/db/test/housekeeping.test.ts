@@ -28,6 +28,7 @@ import {
   publishHousekeeping,
   setHousekeepingRules,
   setRoomTypeHousekeeping,
+  setWaitingForRoom,
   workHousekeepingTask,
 } from "../src/tenant/housekeeping";
 import { resetTestDatabase, testPool } from "./helpers";
@@ -160,6 +161,15 @@ describe("housekeeping tasks", () => {
     const staying = (await board()).tasks.find((t) => t.roomNumber === "102" && t.kind === "stayover")!;
     const res = (await pool.query(`select reservation_id from ${s()}.housekeeping_tasks where id = $1`, [staying.id])).rows[0].reservation_id;
     await checkOut(pool, s(), res, fd, { override: true });
-    expect((await tasks()).filter((t) => t.startsWith("102"))).toEqual(["102:departure"]);
+    // the plan is published and the tasks were Anna's: they are called off visibly, not dropped
+    const of102 = (await board()).tasks.filter((t) => t.roomNumber === "102").map((t) => `${t.kind}:${t.status}:${t.changed}`).sort();
+    expect(of102).toEqual(["departure:open:true", "linen:skipped:true", "stayover:skipped:true"]);
+  });
+
+  it("a guest waiting for the room makes its preparation a priority", async () => {
+    const arriving = (await pool.query(`select reservation_id from ${s()}.housekeeping_tasks where kind = 'arrival' and business_date = $1`, [day(3)])).rows[0].reservation_id;
+    await setWaitingForRoom(pool, s(), arriving, true, asSup);
+    const first = (await board()).tasks[0]!;
+    expect(first).toMatchObject({ kind: "arrival", priority: true, changed: true });
   });
 });

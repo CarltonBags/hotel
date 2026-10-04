@@ -258,6 +258,8 @@ async function changeIn(tx: PoolClient, id: string, userId: string, patch: Reser
     });
     // a checked-in stay's Charges follow its nights; giving up nights waits for confirmation (rolls the change back until then)
     await syncStayCharges(tx, res.id, userId, Boolean(options.confirmShortening));
+    // a stay shortened to today or moved to another room changes the day's housekeeping
+    await syncHousekeepingTasks(tx, res.property_id, userId);
     return { overbooked: change.overbooked };
   }
 }
@@ -300,6 +302,7 @@ export async function restoreAssignments(pool: Pool, schema: string, id: string,
     if (clean.length && (!contiguous || clean.at(-1)!.to !== res.departure)) throw new Error("Those room assignments do not fit the stay");
     await writeSegments(tx, res, clean);
     await logChange(tx, res.id, userId, "assign_room", { rooms: current }, { rooms: clean, undo: true });
+    await syncHousekeepingTasks(tx, res.property_id, userId);
   });
 }
 
@@ -353,7 +356,6 @@ async function cancelIn(tx: PoolClient, r: ResRow, userId: string, now: Date): P
   const segs = await segments(tx, r.id);
   await tx.query("delete from room_assignments where reservation_id = $1", [r.id]);
   await logChange(tx, r.id, userId, "cancel", { status: r.status, rooms: segs }, { status: "cancelled", fee: fee.amount, deadline: fee.deadline });
-  await syncHousekeepingTasks(tx, r.property_id, userId);
   return fee.amount;
 }
 
@@ -361,7 +363,9 @@ async function cancelIn(tx: PoolClient, r: ResRow, userId: string, now: Date): P
 export async function cancelReservation(pool: Pool, schema: string, id: string, userId: string, options: { now?: Date } = {}): Promise<{ fee: number }> {
   return withTenant(pool, schema, async (tx) => {
     const r = await loadForChange(tx, id);
-    return { fee: await cancelIn(tx, r, userId, options.now ?? new Date()) };
+    const fee = await cancelIn(tx, r, userId, options.now ?? new Date());
+    await syncHousekeepingTasks(tx, r.property_id, userId);
+    return { fee };
   });
 }
 
@@ -377,6 +381,8 @@ export async function cancelBooking(pool: Pool, schema: string, bookingId: strin
     if (!ids.rowCount) throw new Error("Nothing to cancel in this booking");
     let fee = 0;
     for (const row of ids.rows) fee += await cancelIn(tx, await loadForChange(tx, row.id), userId, options.now ?? new Date());
+    // once for the whole booking
+    await syncHousekeepingTasks(tx, booking.rows[0].property_id, userId);
     return { cancelled: ids.rowCount ?? 0, fee: roundMoney(fee) };
   });
 }

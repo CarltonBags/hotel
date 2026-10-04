@@ -1,7 +1,8 @@
-import { housekeepingBoard, listRoomTypes, listTenantUsers } from "@hoteloftware/db";
+import { housekeepingBoard, listRooms, listSections, listTenantUsers } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
+import { housekeepersAt } from "@/lib/housekeepers";
 import { HousekeepingBoardView } from "./board";
 
 /** The Housekeeping Supervisor's board of the Business Date (ticket 34). */
@@ -18,12 +19,15 @@ export default async function HousekeepingPage() {
     );
   }
   const { tenant, actor, session } = await requireAllowed("assign_housekeeping", property.id);
-  const users = await listTenantUsers(pool(), tenant.id);
-  const housekeepers = users.filter((u) => !u.pendingInvitation && u.propertyRoles.some((r) => r.propertyId === property.id && r.role === "housekeeper")).map((u) => ({ id: u.id, name: u.name }));
-  const [board, types] = await Promise.all([
+  const housekeepers = await housekeepersAt(tenant.id, property.id);
+  const [board, users, sections, rooms] = await Promise.all([
     housekeepingBoard(pool(), tenant.schemaName, property.id, housekeepers.map((h) => h.id), { userId: session.user.id, actor }),
-    listRoomTypes(pool(), tenant.schemaName, property.id),
+    listTenantUsers(pool(), tenant.id),
+    listSections(pool(), tenant.schemaName, property.id),
+    listRooms(pool(), tenant.schemaName, property.id),
   ]);
+  // tasks of someone no longer a Housekeeper here still show, in their own column
+  const others = [...new Set(board.tasks.map((t) => t.assigneeId).filter((id): id is string => !!id && !housekeepers.some((h) => h.id === id)))].map((id) => ({ id, name: users.find((u) => u.id === id)?.name ?? id }));
   return (
     <div className="mx-auto grid max-w-7xl gap-4 p-6">
       <div>
@@ -36,8 +40,10 @@ export default async function HousekeepingPage() {
         propertyId={property.id}
         board={board}
         housekeepers={housekeepers}
-        roomTypes={types.map((t) => ({ id: t.id, code: t.code, name: t.name }))}
+        others={others}
         rules={board.rules}
+        sections={sections.map((x) => ({ id: x.id, name: x.name }))}
+        rooms={rooms.map((r) => ({ id: r.id, number: r.number, sectionId: r.sectionId }))}
         m={m}
       />
     </div>

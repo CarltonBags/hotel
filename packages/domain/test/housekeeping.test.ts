@@ -18,6 +18,12 @@ describe("housekeeping tasks", () => {
     ];
     const rules = (t: string): TaskRules => (t === "SUI" ? { stayover: "every_2", linenEvery: null } : t === "APT" ? { stayover: "on_request", linenEvery: null } : daily);
     expect(tasksForDay("2026-10-04", stays, rules).map((t) => `${t.roomId}:${t.kind}`)).toEqual(["101:departure", "102:arrival", "103:stayover", "103:linen", "201:stayover"]);
+    // a waiting guest's arrival comes first; a move from tonight cleans the room left
+    const more: StayOnDay[] = [
+      { reservationId: "wait", roomId: "104", roomTypeId: "DBL", status: "confirmed", arrival: "2026-10-04", departure: "2026-10-05", waiting: true },
+      { reservationId: "moved", roomId: "105", vacatedRoomId: "106", roomTypeId: "DBL", status: "checked_in", arrival: "2026-10-02", departure: "2026-10-06" },
+    ];
+    expect(tasksForDay("2026-10-04", more, rules).map((t) => `${t.roomId}:${t.kind}:${t.priority}`)).toEqual(["104:arrival:true", "106:departure:false"]);
   });
 
   it("minutes per person sum against the shift", () => {
@@ -47,5 +53,9 @@ describe("housekeeping tasks", () => {
     expect(p.get("c")).toBe(p.get("d"));
     expect(p.get("d")).toBe(p.get("e"));
     expect(p.get("a")).not.toBe(p.get("c"));
+    // a room partly given keeps its open tasks with the same housekeeper; a stranger's task counts as open
+    const q = proposeDistribution([{ ...t("x", "301", "3rd", 20), assigneeId: "bea" }, t("y", "301", "3rd", 15), { ...t("z", "302", "3rd", 20), assigneeId: "gone" }], ["anna", "bea"]);
+    expect(q.get("y")).toBe("bea");
+    expect(q.get("z")).toBe("anna");
   });
 });

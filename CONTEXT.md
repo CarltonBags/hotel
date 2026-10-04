@@ -342,7 +342,7 @@ A room block that flags a defect but keeps the room sellable.
 _Avoid_: OOS, limited, soft block
 
 **Housekeeping Task**:
-A unit of cleaning work for one room on one day, of a type (departure, stayover, arrival preparation, linen change) with a time value.
+A unit of cleaning work for one room on one day, of a type (departure, stayover, arrival preparation, linen change, or an extra clean asked for by hand or after a failed inspection) with a time value.
 _Avoid_: Job, cleaning, assignment
 
 **Housekeeping Note**:

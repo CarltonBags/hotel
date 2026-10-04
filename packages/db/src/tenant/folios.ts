@@ -378,7 +378,7 @@ export async function checkIn(pool: Pool, schema: string, id: string, userId: st
     // every night of the stay is posted, so every night is recorded (a late check-in included)
     await recordCityTaxNights(tx, res.id, res.property_id, res.arrival, cityTax);
     // a Late Arrival who came is no longer flagged
-    await tx.query("update reservations set status = 'checked_in', checked_in_at = now(), checked_in_by = $2, late_arrival = false where id = $1", [res.id, userId]);
+    await tx.query("update reservations set status = 'checked_in', checked_in_at = now(), checked_in_by = $2, late_arrival = false, waiting_for_room_since = null where id = $1", [res.id, userId]);
     // the arrival preparation not done yet is no longer needed
     await syncHousekeepingTasks(tx, res.property_id, userId);
     await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'check_in', $3, $4)", [
@@ -404,6 +404,9 @@ export async function cancelCheckIn(pool: Pool, schema: string, id: string, user
     for (const c of rows) await voidIn(tx, c.id, AUTO_VOID_REASON.check_in_cancelled, userId, "check_in_cancelled");
     await dropCityTaxNights(tx, res.id);
     await fixCityTaxPassOn(tx, res.id, false);
+    // arriving again: the room's arrival preparation is back on the plan
+    await tx.query("update reservations set status = 'confirmed' where id = $1", [res.id]);
+    await syncHousekeepingTasks(tx, res.property_id, userId);
     await tx.query("update reservations set status = 'confirmed', checked_in_at = null, checked_in_by = null where id = $1", [res.id]);
     await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'cancel_check_in', $3, $4)", [
       res.id,

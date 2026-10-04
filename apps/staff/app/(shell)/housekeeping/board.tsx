@@ -5,62 +5,109 @@ import { STAYOVER_RHYTHMS, type StayoverRhythm, type TaskKind } from "@hoteloftw
 import type { BoardTask, HousekeepingBoard } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 import { useFormAction } from "../reservations/use-form-action";
-import { failInspectionAction, generateAction, inspectAction, moveTaskAction, proposeAction, publishAction, roomTypeAction, rulesAction } from "./actions";
+import {
+  createSectionAction,
+  failInspectionAction,
+  generateAction,
+  inspectAction,
+  moveTaskAction,
+  proposeAction,
+  publishAction,
+  roomSectionAction,
+  roomTypeAction,
+  rulesAction,
+} from "./actions";
 
 const button = "h-9 rounded-full border border-ink-10 bg-surface px-4 text-sm hover:bg-ink-5 disabled:opacity-40";
 const input = "h-8 rounded-lg border border-ink-10 bg-surface px-2 text-sm";
 const KIND_TONE: Record<TaskKind, string> = { departure: "bg-danger/15", stayover: "bg-accent/15", arrival: "bg-success/15", linen: "bg-warning/15", clean: "bg-ink-10" };
+const EDITABLE: TaskKind[] = ["departure", "stayover", "arrival", "linen", "clean"];
 
-/** Columns per housekeeper plus Unassigned; rooms as chips dragged between them; minutes against the shift; inspection; rules. */
+/** A room's tasks of the day: one chip, moved as a whole. */
+interface RoomChip {
+  roomId: string;
+  roomNumber: string;
+  section: string | null;
+  assigneeId: string | null;
+  tasks: BoardTask[];
+}
+
+/** Columns per housekeeper plus Unassigned; rooms as chips dragged between them; minutes against the shift; inspection; rules; Sections. */
 export function HousekeepingBoardView({
   propertyId,
   board,
   housekeepers,
-  roomTypes,
+  others,
   rules,
+  sections,
+  rooms,
   m,
 }: {
   propertyId: string;
   board: HousekeepingBoard;
   housekeepers: { id: string; name: string }[];
-  roomTypes: { id: string; code: string; name: string }[];
+  /** Assignees of today's tasks who are no longer Housekeepers here. */
+  others: { id: string; name: string }[];
   rules: { stayover: StayoverRhythm; linenEvery: number | null; shiftMinutes: number };
+  sections: { id: string; name: string }[];
+  rooms: { id: string; number: string; sectionId: string | null }[];
   m: Messages;
 }) {
   const { pending, run, note } = useFormAction(m);
-  const [dragging, setDragging] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<RoomChip | null>(null);
   const [failing, setFailing] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+  const [section, setSection] = useState("");
   const [form, setForm] = useState({ stayover: rules.stayover, linenEvery: rules.linenEvery === null ? "" : String(rules.linenEvery), shiftMinutes: String(rules.shiftMinutes) });
-  const columns = [{ id: "", name: m["hk.unassigned"] }, ...housekeepers];
-  const minutes = (id: string) => board.workload.find((w) => w.assigneeId === id)?.minutes ?? 0;
-  const move = (taskId: string, to: string) =>
+  const columns = [{ id: "", name: m["hk.unassigned"] }, ...housekeepers, ...others];
+  const minutes = (id: string) => board.workload.find((w) => w.assigneeId === id)?.minutes ?? board.tasks.filter((t) => t.assigneeId === id && t.status !== "skipped").reduce((s, t) => s + t.minutes, 0);
+  const chips: RoomChip[] = [];
+  for (const t of board.tasks) {
+    const c = chips.find((x) => x.roomId === t.roomId);
+    if (c) c.tasks.push(t);
+    else chips.push({ roomId: t.roomId, roomNumber: t.roomNumber, section: t.section, assigneeId: t.assigneeId, tasks: [t] });
+  }
+  const move = (chip: RoomChip, to: string) =>
     run(async () => {
-      const r = await moveTaskAction(propertyId, taskId, to || null, false);
-      if (r.started && window.confirm(m["hk.startedConfirm"])) return moveTaskAction(propertyId, taskId, to || null, true);
+      const r = await moveTaskAction(chip.tasks[0]!.id, to || null, false);
+      if (r.started && window.confirm(m["hk.startedConfirm"])) return moveTaskAction(chip.tasks[0]!.id, to || null, true);
       return r;
     });
-  const chip = (t: BoardTask) => (
-    <li
-      key={t.id}
-      data-task={`${t.roomNumber}:${t.kind}`}
-      draggable
-      onDragStart={() => setDragging(t.id)}
-      onDragEnd={() => setDragging(null)}
-      className={`grid cursor-grab gap-0.5 rounded-xl px-3 py-2 text-xs ${KIND_TONE[t.kind]} ${t.status === "done" ? "opacity-60" : ""}`}
-    >
-      <span className="flex items-center gap-2">
-        <strong className="text-base">{t.roomNumber}</strong>
-        <span>{m[`hk.kind.${t.kind}`]}</span>
-        <span className="ml-auto tabular-nums">{fill(m["hk.min"], { n: String(t.minutes) })}</span>
-      </span>
-      <span className="text-ink-60">
-        {[t.section, t.guestSurname, m[`hk.status.${t.status}`]].filter(Boolean).join(" · ")}
-        {t.changed ? <strong className="ml-1 text-warning">{m["hk.changed"]}</strong> : null}
-      </span>
-      {t.note ? <span className="text-danger">{t.note}</span> : null}
-    </li>
-  );
+  const chipView = (c: RoomChip) => {
+    const live = c.tasks.filter((t) => t.status !== "skipped");
+    const priority = c.tasks.some((t) => t.priority);
+    return (
+      <li
+        key={c.roomId}
+        data-room-chip={c.roomNumber}
+        draggable
+        onDragStart={() => setDragging(c)}
+        onDragEnd={() => setDragging(null)}
+        className={`grid cursor-grab gap-1 rounded-xl bg-surface px-3 py-2 text-xs ${priority ? "ring-2 ring-danger" : ""}`}
+      >
+        <span className="flex items-center gap-2">
+          <strong className="text-base">{c.roomNumber}</strong>
+          <span className="text-ink-60">{c.section ?? ""}</span>
+          <span className="ml-auto tabular-nums">{fill(m["hk.min"], { n: String(live.reduce((s, t) => s + t.minutes, 0)) })}</span>
+        </span>
+        <span className="flex flex-wrap gap-1">
+          {c.tasks.map((t) => (
+            <span key={t.id} data-task={`${t.roomNumber}:${t.kind}`} className={`rounded-full px-2 ${KIND_TONE[t.kind]} ${t.status === "done" || t.status === "skipped" ? "line-through opacity-60" : ""}`}>
+              {m[`hk.kind.${t.kind}`]} · {m[`hk.status.${t.status}`]}
+              {t.changed ? <strong className="ml-1 text-warning">{m["hk.changed"]}</strong> : null}
+            </span>
+          ))}
+        </span>
+        {c.tasks.find((t) => t.guestSurname) ? <span className="text-ink-60">{c.tasks.find((t) => t.guestSurname)!.guestSurname}</span> : null}
+        {priority ? <span className="font-medium text-danger">{m["hk.waiting"]}</span> : null}
+        {c.tasks.filter((t) => t.note).map((t) => (
+          <span key={t.id} className="text-danger">
+            {t.note}
+          </span>
+        ))}
+      </li>
+    );
+  };
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -88,7 +135,7 @@ export function HousekeepingBoardView({
               data-column={c.id || "unassigned"}
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => {
-                if (dragging) move(dragging, c.id);
+                if (dragging && (dragging.assigneeId ?? "") !== c.id) move(dragging, c.id);
                 setDragging(null);
               }}
               className={`grid content-start gap-2 rounded-2xl bg-surface-2 p-3 ${dragging ? "ring-1 ring-accent/40" : ""}`}
@@ -106,7 +153,7 @@ export function HousekeepingBoardView({
                   <span className="text-xs text-ink-60">{fill(m["hk.min"], { n: String(used) })}</span>
                 )}
               </header>
-              <ul className="grid gap-1.5">{board.tasks.filter((t) => (t.assigneeId ?? "") === c.id).map(chip)}</ul>
+              <ul className="grid gap-1.5">{chips.filter((x) => (x.assigneeId ?? "") === c.id).map(chipView)}</ul>
             </section>
           );
         })}
@@ -121,12 +168,19 @@ export function HousekeepingBoardView({
           {board.toInspect.map((r) => (
             <li key={r.roomId} data-inspect={r.roomNumber} className="flex flex-wrap items-center gap-2 rounded-xl bg-surface px-3 py-2">
               <strong>{r.roomNumber}</strong>
-              <span className="text-ink-60">{housekeepers.find((h) => h.id === r.assigneeId)?.name ?? ""}</span>
+              <span className="text-ink-60">{columns.find((h) => h.id === r.assigneeId)?.name ?? ""}</span>
               <span className="flex-1" />
               <button type="button" disabled={pending} onClick={() => run(() => inspectAction(r.roomId))} className={button}>
                 {m["hk.inspected"]}
               </button>
-              <button type="button" onClick={() => (setFailing(failing === r.roomId ? null : r.roomId), setReason(""))} className={button}>
+              <button
+                type="button"
+                onClick={() => {
+                  setFailing(failing === r.roomId ? null : r.roomId);
+                  setReason("");
+                }}
+                className={button}
+              >
                 {m["hk.fail"]}
               </button>
               {failing === r.roomId ? (
@@ -183,9 +237,44 @@ export function HousekeepingBoardView({
           </button>
         </form>
         <h3 className="mt-4 text-ink-80">{m["hk.typeMinutes"]}</h3>
+        <p className="text-xs text-ink-60">{m["hk.typeHelp"]}</p>
         <ul className="mt-1 grid gap-2">
-          {roomTypes.map((t) => (
+          {board.roomTypes.map((t) => (
             <RoomTypeRow key={t.id} propertyId={propertyId} type={t} pending={pending} run={run} m={m} />
+          ))}
+        </ul>
+      </details>
+
+      <details className="rounded-2xl bg-surface-2 p-4 text-sm">
+        <summary className="cursor-pointer font-medium">{m["hk.sections"]}</summary>
+        <form
+          className="mt-3 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            run(
+              () => createSectionAction(propertyId, section),
+              () => setSection(""),
+            );
+          }}
+        >
+          <input value={section} onChange={(e) => setSection(e.target.value)} placeholder={m["hk.sectionName"]} required maxLength={60} className={input} />
+          <button type="submit" disabled={pending || !section.trim()} className={button}>
+            {m["hk.addSection"]}
+          </button>
+        </form>
+        <ul className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-2">
+          {rooms.map((r) => (
+            <li key={r.id} className="flex items-center gap-2">
+              <strong className="w-12">{r.number}</strong>
+              <select value={r.sectionId ?? ""} disabled={pending} onChange={(e) => run(() => roomSectionAction(propertyId, r.id, e.target.value || null))} aria-label={`${r.number} ${m["hk.sections"]}`} className={input}>
+                <option value="">–</option>
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </li>
           ))}
         </ul>
       </details>
@@ -201,14 +290,14 @@ function RoomTypeRow({
   m,
 }: {
   propertyId: string;
-  type: { id: string; code: string; name: string };
+  type: HousekeepingBoard["roomTypes"][number];
   pending: boolean;
   run: ReturnType<typeof useFormAction>["run"];
   m: Messages;
 }) {
-  const kinds: TaskKind[] = ["departure", "stayover", "arrival", "linen"];
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [stayover, setStayover] = useState<string>("");
+  const [values, setValues] = useState<Record<string, string>>(Object.fromEntries(Object.entries(type.minutes).map(([k, v]) => [k, String(v)])));
+  const [stayover, setStayover] = useState<string>(type.stayover ?? "");
+  const [linen, setLinen] = useState<string>(type.linenEvery === null ? "" : String(type.linenEvery));
   return (
     <li className="flex flex-wrap items-end gap-2">
       <strong className="w-24">{type.code}</strong>
@@ -220,7 +309,11 @@ function RoomTypeRow({
           </option>
         ))}
       </select>
-      {kinds.map((k) => (
+      <label className="grid gap-0.5 text-xs text-ink-60">
+        {m["hk.kind.linen"]}
+        <input value={linen} onChange={(e) => setLinen(e.target.value)} inputMode="numeric" placeholder={m["hk.propertyRhythm"]} className={`${input} w-24`} />
+      </label>
+      {EDITABLE.map((k) => (
         <label key={k} className="grid gap-0.5 text-xs text-ink-60">
           {m[`hk.kind.${k}`]}
           <input value={values[k] ?? ""} onChange={(e) => setValues({ ...values, [k]: e.target.value })} inputMode="numeric" placeholder="min" className={`${input} w-16`} />
@@ -233,7 +326,7 @@ function RoomTypeRow({
           run(() =>
             roomTypeAction(propertyId, type.id, {
               stayover: (stayover || null) as StayoverRhythm | null,
-              linenEvery: null,
+              linenEvery: linen === "" ? null : Number(linen),
               minutes: Object.fromEntries(Object.entries(values).filter(([, v]) => v).map(([k, v]) => [k, Number(v)])),
             }),
           )
