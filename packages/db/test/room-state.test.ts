@@ -20,6 +20,7 @@ import { checkOut } from "../src/tenant/invoices";
 import { loadCalendar } from "../src/tenant/calendar";
 import { closeNightAudit } from "../src/tenant/night-audit";
 import { assignHousekeeping, createRoomBlock, endRoomBlock, listRoomStates, setCleanliness } from "../src/tenant/room-state";
+import { publishHousekeeping } from "../src/tenant/housekeeping";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -125,6 +126,9 @@ describe("room state", () => {
   it("a Housekeeper sees and sets only own rooms, and never Inspected", async () => {
     await assignHousekeeping(pool, s(), room("103").id, hk, asPm);
     await assignHousekeeping(pool, s(), room("104").id, hk, asPm);
+    // nothing to see before the plan is published
+    expect((await listRoomStates(pool, s(), berlin, asHk)).rooms).toEqual([]);
+    await publishHousekeeping(pool, s(), berlin, asPm);
     const seen = await listRoomStates(pool, s(), berlin, asHk);
     expect(seen.rooms.map((r) => r.number)).toEqual(["103", "104"]);
     await setCleanliness(pool, s(), room("103").id, "dirty", asHk);

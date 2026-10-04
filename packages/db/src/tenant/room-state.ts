@@ -61,10 +61,14 @@ async function businessDateOf(tx: PoolClient, propertyId: string): Promise<{ bus
   return { businessDate: p.business_date, inspectionRequired: p.inspection_required };
 }
 
-/** Rooms with a Housekeeping Task of the user on the property's Business Date. */
+/** Rooms with a Housekeeping Task of the user on the property's Business Date, once the day's plan is published (ticket 34). */
 async function ownRooms(tx: PoolClient, propertyId: string, businessDate: string, userId: string): Promise<Set<string>> {
   return new Set(
-    (await tx.query<{ room_id: string }>("select room_id from housekeeping_tasks where property_id = $1 and business_date = $2 and assignee_id = $3", [propertyId, businessDate, userId])).rows.map((r) => r.room_id),
+    (await tx.query<{ room_id: string }>(
+      `select t.room_id from housekeeping_tasks t join housekeeping_plans p on p.property_id = t.property_id and p.business_date = t.business_date and p.published_at is not null
+       where t.property_id = $1 and t.business_date = $2 and t.assignee_id = $3`,
+      [propertyId, businessDate, userId],
+    )).rows.map((r) => r.room_id),
   );
 }
 

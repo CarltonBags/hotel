@@ -21,6 +21,7 @@ import { rateOn } from "./tax-rate";
 import { cityTaxOfStay, dropCityTaxNights, fixCityTaxPassOn, recordCityTaxNights, type StayCityTax } from "./city-tax";
 import { paymentsOf, type Payment } from "./payments";
 import { withTenant } from "./with-tenant";
+import { syncHousekeepingTasks } from "./housekeeping";
 import { assertNotOutOfOrder, roomReadiness } from "./room-state";
 
 /**
@@ -378,6 +379,8 @@ export async function checkIn(pool: Pool, schema: string, id: string, userId: st
     await recordCityTaxNights(tx, res.id, res.property_id, res.arrival, cityTax);
     // a Late Arrival who came is no longer flagged
     await tx.query("update reservations set status = 'checked_in', checked_in_at = now(), checked_in_by = $2, late_arrival = false where id = $1", [res.id, userId]);
+    // the arrival preparation not done yet is no longer needed
+    await syncHousekeepingTasks(tx, res.property_id, userId);
     await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'check_in', $3, $4)", [
       res.id,
       userId,

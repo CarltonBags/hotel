@@ -55,11 +55,17 @@ export const properties = pgTable(
     nightAuditDeadline: time("night_audit_deadline").notNull().default("06:00"),
     nightAuditAlertedFor: date("night_audit_alerted_for"),
     inspectionRequired: boolean("inspection_required").notNull().default(true),
+    hkStayoverRhythm: text("hk_stayover_rhythm").notNull().default("daily"),
+    hkLinenEvery: integer("hk_linen_every").default(3),
+    hkShiftMinutes: integer("hk_shift_minutes").notNull().default(480),
   },
   (t) => [
     index("properties_legal_entity_idx").on(t.legalEntityId),
     check("properties_refund_limit_check", sql`${t.refundLimit} >= 0`),
     check("properties_city_tax_pass_on_check", sql`${t.cityTaxPassOn} in ('on_top', 'absorbed')`),
+    check("properties_hk_stayover_rhythm_check", sql`${t.hkStayoverRhythm} in ('daily', 'every_2', 'every_3', 'on_request')`),
+    check("properties_hk_linen_every_check", sql`${t.hkLinenEvery} > 0`),
+    check("properties_hk_shift_minutes_check", sql`${t.hkShiftMinutes} > 0`),
   ],
 );
 
@@ -81,8 +87,12 @@ export const roomTypes = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     priceFloor: numeric("price_floor", { precision: 12, scale: 2 }),
+    hkStayoverRhythm: text("hk_stayover_rhythm"),
+    hkLinenEvery: integer("hk_linen_every"),
   },
   (t) => [
+    check("room_types_hk_stayover_rhythm_check", sql`${t.hkStayoverRhythm} in ('daily', 'every_2', 'every_3', 'on_request')`),
+    check("room_types_hk_linen_every_check", sql`${t.hkLinenEvery} > 0`),
     unique("room_types_property_id_code_key").on(t.propertyId, t.code),
     check("room_types_max_occupancy_check", sql`${t.maxOccupancy} >= 1`),
     check("room_types_max_adults_check", sql`${t.maxAdults} >= 1`),
@@ -1157,10 +1167,11 @@ export const roomCleanlinessChanges = pgTable(
     userId: text("user_id").notNull(),
     at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     businessDate: date("business_date").notNull(),
+    reason: text("reason").notNull().default(""),
   },
   (t) => [
     index("room_cleanliness_changes_room_idx").on(t.roomId, t.at.desc()),
-    check("room_cleanliness_changes_source_check", sql`${t.source} in ('manual', 'check_out', 'room_move', 'block_end', 'night_audit')`),
+    check("room_cleanliness_changes_source_check", sql`${t.source} in ('manual', 'check_out', 'room_move', 'block_end', 'night_audit', 'inspection')`),
   ],
 );
 
@@ -1200,12 +1211,45 @@ export const housekeepingTasks = pgTable(
     status: text("status").notNull().default("open"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     createdBy: text("created_by").notNull(),
+    minutes: integer("minutes").notNull().default(20),
+    reservationId: uuid("reservation_id").references(() => reservations.id),
+    changed: boolean("changed").notNull().default(false),
+    note: text("note").notNull().default(""),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    doneBy: text("done_by"),
   },
   (t) => [
     unique("housekeeping_tasks_key").on(t.roomId, t.businessDate, t.kind),
+    check("housekeeping_tasks_kind_check", sql`${t.kind} in ('departure', 'stayover', 'arrival', 'linen', 'clean')`),
     index("housekeeping_tasks_assignee_idx").on(t.propertyId, t.businessDate, t.assigneeId),
     check("housekeeping_tasks_status_check", sql`${t.status} in ('open', 'in_progress', 'done', 'skipped')`),
   ],
+);
+
+export const housekeepingMinutes = pgTable(
+  "housekeeping_minutes",
+  {
+    roomTypeId: uuid("room_type_id").notNull().references(() => roomTypes.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    minutes: integer("minutes").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.roomTypeId, t.kind] }),
+    check("housekeeping_minutes_kind_check", sql`${t.kind} in ('departure', 'stayover', 'arrival', 'linen', 'clean')`),
+    check("housekeeping_minutes_minutes_check", sql`${t.minutes} > 0 and ${t.minutes} <= 600`),
+  ],
+);
+
+export const housekeepingPlans = pgTable(
+  "housekeeping_plans",
+  {
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    businessDate: date("business_date").notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    publishedBy: text("published_by"),
+  },
+  (t) => [primaryKey({ columns: [t.propertyId, t.businessDate] })],
 );
 
 export const tenantSchema = {
@@ -1266,4 +1310,6 @@ export const tenantSchema = {
   roomCleanlinessChanges,
   roomBlocks,
   housekeepingTasks,
+  housekeepingMinutes,
+  housekeepingPlans,
 };

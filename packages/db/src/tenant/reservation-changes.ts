@@ -24,6 +24,7 @@ import { followStay, syncStayCharges } from "./folios";
 import { REASON_TEXT, loadQuoteData, quoteFor, writeNights } from "./reservations";
 import { withTenant } from "./with-tenant";
 import { assertNotOutOfOrder, markDirty, outOfOrderOn, roomOfNight } from "./room-state";
+import { syncHousekeepingTasks } from "./housekeeping";
 
 /**
  * Changes to a Reservation after booking ("Reservation and inventory domain
@@ -352,6 +353,7 @@ async function cancelIn(tx: PoolClient, r: ResRow, userId: string, now: Date): P
   const segs = await segments(tx, r.id);
   await tx.query("delete from room_assignments where reservation_id = $1", [r.id]);
   await logChange(tx, r.id, userId, "cancel", { status: r.status, rooms: segs }, { status: "cancelled", fee: fee.amount, deadline: fee.deadline });
+  await syncHousekeepingTasks(tx, r.property_id, userId);
   return fee.amount;
 }
 
@@ -427,6 +429,7 @@ export async function assignRoom(pool: Pool, schema: string, id: string, userId:
     const after = [{ roomId, from: r.arrival, to: r.departure }];
     await writeSegments(tx, r, after);
     await logChange(tx, r.id, userId, "assign_room", { rooms: before }, { rooms: after });
+    await syncHousekeepingTasks(tx, r.property_id, userId);
   });
 }
 
@@ -441,6 +444,7 @@ export async function moveRoom(pool: Pool, schema: string, id: string, userId: s
     const after = splitAssignment(before, roomId, fromNight);
     await writeSegments(tx, r, after);
     await logChange(tx, r.id, userId, "move_room", { rooms: before }, { rooms: after });
+    await syncHousekeepingTasks(tx, r.property_id, userId);
   });
 }
 
@@ -453,6 +457,7 @@ export async function unassignRooms(pool: Pool, schema: string, id: string, user
     if (before.length === 0) return;
     await tx.query("delete from room_assignments where reservation_id = $1", [r.id]);
     await logChange(tx, r.id, userId, "unassign_room", { rooms: before }, { rooms: [] });
+    await syncHousekeepingTasks(tx, r.property_id, userId);
   });
 }
 
@@ -484,6 +489,7 @@ export async function moveRoomInHouse(pool: Pool, schema: string, id: string, us
     await logChange(tx, res.id, userId, "move_room", { rooms: before }, { rooms: after });
     // the room the guest leaves needs cleaning (a move from tonight: the guest slept there)
     if (vacated && vacated !== roomId && fromNight === today) await markDirty(tx, [vacated], "room_move", userId);
+    await syncHousekeepingTasks(tx, res.property_id, userId);
   });
 }
 

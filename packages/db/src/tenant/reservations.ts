@@ -19,6 +19,7 @@ import { checkDate, isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
 import { loadPlanIndex, toRestriction, type RestrictionRow } from "./rates";
 import { withTenant } from "./with-tenant";
+import { syncHousekeepingTasks } from "./housekeeping";
 import { outOfOrderByNight } from "./room-state";
 import { openFolios } from "./folios";
 
@@ -303,6 +304,8 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
       await openFolios(tx, id, userId);
       created.push({ id });
     }
+    // a walk-in for tonight may need its room prepared
+    await syncHousekeepingTasks(tx, propertyId, userId);
     return { id: bookingId, confirmationNumber: booking.rows[0]!.confirmation_number, reservations: created };
   });
 }

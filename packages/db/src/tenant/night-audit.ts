@@ -15,6 +15,7 @@ import { postNoShowFee } from "./folios";
 import { loadGuest } from "./guests";
 import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
+import { syncHousekeepingTasks } from "./housekeeping";
 import { markDirty, outOfOrderOn } from "./room-state";
 
 /**
@@ -319,7 +320,9 @@ export async function closeNightAudit(
 
     step("advance");
     await tx.query("update properties set business_date = business_date + 1, night_audit_alerted_for = null where id = $1", [propertyId]);
-    // TODO(ticket 34): the new day's Housekeeping Tasks; TODO(ticket 37): availability changes queued for the channel manager
+    // the new day's Housekeeping Tasks, as a draft for the supervisor
+    await syncHousekeepingTasks(tx, propertyId, userId);
+    // TODO(ticket 37): availability changes queued for the channel manager
     return { auditId: rows[0]!.id, businessDate: p.business_date };
   });
 }
