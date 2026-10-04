@@ -105,6 +105,8 @@ export interface TenantUser {
   tenantRole: TenantRole | undefined;
   propertyRoles: PropertyRoleAssignment[];
   pendingInvitation: boolean;
+  /** Has no email or password of their own: signs in by PIN on an enrolled Device only (ticket 14). */
+  pinOnly: boolean;
   createdAt: Date;
 }
 
@@ -117,8 +119,9 @@ export async function listTenantUsers(db: Queryable, tenantId: string): Promise<
     created_at: Date;
     tenant_role: TenantRole | null;
     pending: boolean;
+    pin_only: boolean;
   }>(
-    `select u.id, u.email, u.username, u.name, u.created_at, tr.role as tenant_role, (i.user_id is not null) as pending
+    `select u.id, u.email, u.username, u.name, u.created_at, u.pin_only, tr.role as tenant_role, (i.user_id is not null) as pending
        from control."user" u
        left join control.tenant_roles tr on tr.user_id = u.id and tr.tenant_id = u.tenant_id
        left join control.invitations i on i.user_id = u.id and i.expires_at > now()
@@ -144,6 +147,7 @@ export async function listTenantUsers(db: Queryable, tenantId: string): Promise<
     tenantRole: u.tenant_role ?? undefined,
     propertyRoles: byUser.get(u.id) ?? [],
     pendingInvitation: u.pending,
+    pinOnly: u.pin_only,
     createdAt: u.created_at,
   }));
 }

@@ -58,6 +58,7 @@ export const properties = pgTable(
     hkStayoverRhythm: text("hk_stayover_rhythm").notNull().default("daily"),
     hkLinenEvery: integer("hk_linen_every").default(3),
     hkShiftMinutes: integer("hk_shift_minutes").notNull().default(480),
+    deviceIdleMinutes: integer("device_idle_minutes").notNull().default(2),
   },
   (t) => [
     index("properties_legal_entity_idx").on(t.legalEntityId),

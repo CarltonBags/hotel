@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { can, canAtAnyProperty, canViewAnyProperty, isFrontOfficeOnly, isTenantAction, type Action, type Actor, type PropertyAction } from "@hoteloftware/domain";
 import { listProperties, loadActor, type Property, type Tenant } from "@hoteloftware/db";
-import type { TenantSession } from "@hoteloftware/auth";
+import { DEVICE_COOKIE, type TenantSession } from "@hoteloftware/auth";
 import { pool } from "./db";
 import { currentSession } from "./tenant";
 
@@ -23,7 +23,8 @@ export interface Principal {
 /** The signed-in user with their roles, or a redirect to the sign-in page. */
 export const requirePrincipal = cache(async (): Promise<Principal> => {
   const current = await currentSession();
-  if (!current) redirect("/sign-in");
+  // an enrolled Device goes to its lock screen (which also shows a revoked Device's wipe notice)
+  if (!current) redirect((await cookies()).has(DEVICE_COOKIE) ? "/device" : "/sign-in");
   const actor = await loadActor(pool(), current.tenant.id, current.session.user.id);
   return { ...current, actor };
 });
