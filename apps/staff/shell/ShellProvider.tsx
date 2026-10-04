@@ -25,6 +25,8 @@ export interface ShellProps {
   canManageTenant: boolean;
   /** Property-level actions the user holds at at least one property. */
   propertyActions: string[];
+  /** The platform's support staff see the support console (ticket 93). */
+  supportStaff?: boolean;
 }
 
 type Action =

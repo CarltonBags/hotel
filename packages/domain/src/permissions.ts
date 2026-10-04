@@ -56,6 +56,8 @@ export const TENANT_ACTIONS = {
   manage_tenant_roles: ["owner", "tenant_admin"],
   manage_tenant_settings: ["owner", "tenant_admin"],
   manage_subscription: ["owner"],
+  /** The tenant's support access list: who of the platform's support opened the tenant, when and why (ticket 93). */
+  view_support_accesses: ["owner", "tenant_admin"],
   delete_tenant: ["owner"],
 } as const satisfies Record<string, readonly TenantRole[]>;
 export type TenantAction = keyof typeof TENANT_ACTIONS;

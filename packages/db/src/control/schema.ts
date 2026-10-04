@@ -263,7 +263,79 @@ export const deviceChangeKeys = control.table(
   (t) => [index("device_change_keys_device_idx").on(t.deviceId)],
 );
 
+export const supportStaff = control.table("support_staff", {
+  userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+  addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+  addedBy: text("added_by"),
+});
+
+export const supportAccesses = control.table(
+  "support_accesses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffUserId: text("staff_user_id").notNull().references(() => user.id),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+  },
+  (t) => [index("support_accesses_tenant_idx").on(t.tenantId, t.startedAt.desc()), check("support_accesses_reason_check", sql`length(trim(${t.reason})) >= 10`)],
+);
+
+export const statusIncidents = control.table(
+  "status_incidents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: text("title").notNull(),
+    impact: text("impact").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("status_incidents_title_check", sql`length(trim(${t.title})) > 0`),
+    check("status_incidents_impact_check", sql`${t.impact} in ('minor', 'major')`),
+    check("status_incidents_resolved_check", sql`${t.resolvedAt} is null or ${t.resolvedAt} >= ${t.startedAt}`),
+  ],
+);
+
+export const statusIncidentUpdates = control.table(
+  "status_incident_updates",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    incidentId: uuid("incident_id").notNull().references(() => statusIncidents.id, { onDelete: "cascade" }),
+    state: text("state").notNull(),
+    message: text("message").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    byUser: text("by_user").notNull(),
+  },
+  (t) => [index("status_incident_updates_incident_idx").on(t.incidentId, t.at), check("status_incident_updates_state_check", sql`${t.state} in ('investigating', 'identified', 'monitoring', 'resolved')`)],
+);
+
+export const maintenanceWindows = control.table(
+  "maintenance_windows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    announcedAt: timestamp("announced_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  },
+  (t) => [check("maintenance_windows_dates_check", sql`${t.endsAt} > ${t.startsAt}`)],
+);
+
 export const controlSchema = {
+  supportStaff,
+  supportAccesses,
+  statusIncidents,
+  statusIncidentUpdates,
+  maintenanceWindows,
   deviceChangeKeys,
   devices,
   deviceUsers,

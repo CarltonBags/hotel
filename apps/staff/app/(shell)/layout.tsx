@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { dueTourismReports, findProperty } from "@hoteloftware/db";
+import { dueTourismReports, findProperty, isSupportStaff } from "@hoteloftware/db";
+import { endSupportAccessAction } from "./support/actions";
 import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, type PropertyAction } from "@hoteloftware/domain";
 import { IdleLock } from "@/app/device/idle-lock";
 import { pool } from "@/lib/db";
@@ -53,8 +54,20 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       </Link>
     </div>
   ) : null;
-  const banners = banner || statsBanner ? (
+  // a support access shows itself for as long as it lasts (ticket 93)
+  const supportBanner = session.support ? (
+    <div role="status" data-support-banner className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl bg-accent/15 px-4 py-2 text-sm print:hidden">
+      <span>{fill(m["support.banner"], { name: session.user.name, reason: session.support.reason })}</span>
+      <form action={endSupportAccessAction}>
+        <button type="submit" className="font-medium underline">
+          {m["support.end"]}
+        </button>
+      </form>
+    </div>
+  ) : null;
+  const banners = banner || statsBanner || supportBanner ? (
     <>
+      {supportBanner}
       {banner}
       {statsBanner}
     </>
@@ -74,6 +87,7 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       accent={shell.accent}
       canManageTenant={can(actor, "manage_tenant_settings")}
       propertyActions={propertyActions}
+      supportStaff={!session.support && (await isSupportStaff(pool(), session.user.id))}
     >
       {idleMinutes ? <IdleLock minutes={idleMinutes} /> : null}
       {/* a front-office user with several properties picks the one they work in first */}

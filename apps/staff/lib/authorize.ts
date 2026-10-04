@@ -27,7 +27,8 @@ export const requirePrincipal = cache(async (): Promise<Principal> => {
   if (!current) redirect((await cookies()).has(DEVICE_COOKIE) ? "/device" : "/sign-in");
   // a first or reset PIN is changed before anything else
   if (current.session.device?.mustChange) redirect("/device/pin");
-  const actor = await loadActor(pool(), current.tenant.id, current.session.user.id);
+  // support staff act with Tenant Admin rights for the access they opened (logged, visible to the Owner)
+  const actor = current.session.support ? { tenantRole: "tenant_admin" as const, propertyRoles: [] } : await loadActor(pool(), current.tenant.id, current.session.user.id);
   return { ...current, actor };
 });
 
