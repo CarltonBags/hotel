@@ -38,6 +38,7 @@ export const properties = pgTable(
   "properties",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    downtimeOptions: jsonb("downtime_options").notNull().default(sql`'{}'`),
     legalEntityId: uuid("legal_entity_id")
       .notNull()
       .references(() => legalEntities.id),
@@ -689,6 +690,7 @@ export const reservationChanges = pgTable(
   "reservation_changes",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    realAt: timestamp("real_at", { withTimezone: true }),
     reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
     at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
@@ -860,6 +862,7 @@ export const payments = pgTable(
   "payments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    realAt: timestamp("real_at", { withTimezone: true }),
     folioId: uuid("folio_id").notNull().references(() => folios.id),
     reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
@@ -1553,6 +1556,25 @@ export const mailOutbox = pgTable(
   (t) => [check("mail_outbox_attachment_check", sql`(${t.attachment} is null) = (${t.attachmentName} is null)`), index("mail_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
 );
 
+export const propertyOutages = pgTable(
+  "property_outages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    cause: text("cause").notNull().default("unknown"),
+    note: text("note").notNull().default(""),
+    loggedBy: text("logged_by").notNull(),
+    loggedAt: timestamp("logged_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("property_outages_order_check", sql`${t.endedAt} is null or ${t.endedAt} > ${t.startedAt}`),
+    check("property_outages_cause_check", sql`${t.cause} in ('hotel', 'ours', 'unknown')`),
+    index("property_outages_property_idx").on(t.propertyId, t.startedAt),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1628,4 +1650,5 @@ export const tenantSchema = {
   reportSchedules,
   reportExports,
   mailOutbox,
+  propertyOutages,
 };

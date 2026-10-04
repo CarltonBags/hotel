@@ -53,8 +53,10 @@ export async function endAccessByOwnerAction(_prev: FormState, formData: FormDat
 export async function reportIncidentAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const userId = await supportStaffId();
-    await reportIncident(pool(), { title: field(formData, "title"), impact: field(formData, "impact") === "major" ? "major" : "minor", message: field(formData, "message") }, userId);
-    return { ok: true, message: "Incident published on the status page." };
+    const impact = field(formData, "impact") === "major" ? "major" : "minor";
+    await reportIncident(pool(), { title: field(formData, "title"), impact, message: field(formData, "message") }, userId);
+    // a major one reaches every customer's Property Managers too: the worker alerts them within a minute (ticket 86)
+    return { ok: true, message: impact === "major" ? "Incident published on the status page; Property Managers are being alerted." : "Incident published on the status page." };
   });
 }
 

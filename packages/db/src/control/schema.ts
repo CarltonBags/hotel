@@ -302,6 +302,7 @@ export const statusIncidents = control.table(
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    alertedAt: timestamp("alerted_at", { withTimezone: true }),
   },
   (t) => [
     check("status_incidents_title_check", sql`length(trim(${t.title})) > 0`),

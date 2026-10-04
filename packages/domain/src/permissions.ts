@@ -172,6 +172,10 @@ export const PROPERTY_ACTIONS = {
   view_housekeeping_reports: ["property_manager", "housekeeping_supervisor"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */
   manage_payment_settings: ["property_manager"],
+  /** Downtime Reports, the offline lists and Catch-up Entry after an outage (ticket 86). */
+  use_downtime: ["property_manager", "front_desk"],
+  /** What the Downtime Reports show, their order and the shift reminder. */
+  manage_downtime: ["property_manager"],
 } as const satisfies Record<string, readonly PropertyRole[]>;
 export type PropertyAction = keyof typeof PROPERTY_ACTIONS;
 

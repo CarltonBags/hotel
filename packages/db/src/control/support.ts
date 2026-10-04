@@ -216,3 +216,13 @@ export async function scheduleMaintenance(pool: Pool, input: { title: string; de
   ]);
   return rows[0]!.id;
 }
+
+/** Major incidents not yet alerted to customers, claimed for alerting (marked first: each is alerted at most once). */
+export async function claimIncidentsToAlert(pool: Pool): Promise<{ id: string; title: string; message: string }[]> {
+  const { rows } = await pool.query<{ id: string; title: string; message: string | null }>(
+    `update control.status_incidents i set alerted_at = now()
+     where i.impact = 'major' and i.alerted_at is null and i.resolved_at is null and i.created_at > now() - interval '1 day'
+     returning i.id, i.title, (select u.message from control.status_incident_updates u where u.incident_id = i.id order by u.at limit 1) as message`,
+  );
+  return rows.map((r) => ({ id: r.id, title: r.title, message: r.message ?? "" }));
+}
