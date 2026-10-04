@@ -7,6 +7,11 @@ export default function NoTenantPage() {
           Open the address of your hotel company to sign in, for example <span className="font-mono">yourcompany.</span>
           followed by the app domain.
         </p>
+        <p className="mt-4">
+          <a href="/signup" className="font-medium text-accent underline">
+            Start a 30-day trial
+          </a>
+        </p>
       </div>
     </main>
   );

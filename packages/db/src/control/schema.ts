@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigserial, boolean, check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigserial, boolean, check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 /** Control schema (ADR 0006). Mirrors migrations/control/*.sql; the SQL is the source of truth. */
 export const control = pgSchema("control");
@@ -11,6 +11,11 @@ export const tenants = control.table("tenants", {
   schemaName: text("schema_name").notNull().unique(),
   accent: text("accent").notNull().default("ocean"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  trialKind: text("trial_kind"),
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+  goLiveCheckedBy: text("go_live_checked_by").references((): AnyPgColumn => user.id, { onDelete: "set null" }),
+  goLiveCheckedAt: timestamp("go_live_checked_at", { withTimezone: true }),
+  liveAt: timestamp("live_at", { withTimezone: true }),
 });
 
 export const tenantMigrations = control.table(

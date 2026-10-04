@@ -56,6 +56,8 @@ export const TENANT_ACTIONS = {
   manage_tenant_roles: ["owner", "tenant_admin"],
   manage_tenant_settings: ["owner", "tenant_admin"],
   manage_subscription: ["owner"],
+  // takes the tenant out of Test Mode for good (ticket 87)
+  go_live: ["owner"],
   /** The tenant's support access list: who of the platform's support opened the tenant, when and why (ticket 93). */
   view_support_accesses: ["owner"],
   delete_tenant: ["owner"],

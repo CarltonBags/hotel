@@ -15,6 +15,7 @@ import { LABELS } from "@hoteloftware/invoices/labels";
 import { isUuid } from "./catalogue-common";
 import { lockProperty } from "./property-lock";
 import { withTenant } from "./with-tenant";
+import { inTestMode } from "./go-live";
 import { syncHousekeepingTasks } from "./housekeeping";
 import { markDirty } from "./room-state";
 
@@ -79,6 +80,12 @@ export async function setInvoiceNumberRange(pool: Pool, schema: string, legalEnt
  * format the counter restarts each year.
  */
 async function nextNumber(tx: PoolClient, legalEntityId: string, kind: RangeKind, issueDate: string): Promise<string> {
+  // in Test Mode the real range is untouched: go-live starts it where it was set up
+  if (await inTestMode(tx)) {
+    await tx.query("select pg_advisory_xact_lock(hashtext('test-invoice:' || $1))", [legalEntityId]);
+    const n = (await tx.query<{ n: number }>("select count(*)::int + 1 as n from invoices where legal_entity_id = $1 and test", [legalEntityId])).rows[0]!.n;
+    return `TEST-${String(n).padStart(5, "0")}`;
+  }
   const pick = async (k: RangeKind) =>
     (await tx.query<{ kind: RangeKind; format: string; next_value: number; counter_year: number | null }>(
       "select kind, format, next_value, counter_year from invoice_number_ranges where legal_entity_id = $1 and kind = $2 for update",
@@ -224,7 +231,8 @@ export interface IssuedInvoice {
 
 type Stored = Pick<Context, "legalEntityId" | "propertyId" | "reservationId" | "currency">;
 
-async function storeInvoice(tx: PoolClient, ctx: Stored, folioId: string, doc: InvoiceDocument, extra: { receivable: boolean; paymentId: string | null; cancels?: string }, userId: string): Promise<IssuedInvoice> {
+async function storeInvoice(tx: PoolClient, ctx: Stored, folioId: string, issuedDoc: InvoiceDocument, extra: { receivable: boolean; paymentId: string | null; cancels?: string }, userId: string): Promise<IssuedInvoice> {
+  const doc: InvoiceDocument = (await inTestMode(tx)) ? { ...issuedDoc, test: true, notes: [LABELS[issuedDoc.language].testMark, ...issuedDoc.notes] } : issuedDoc;
   // the document shows a Cancellation Invoice's totals as on the original; the books count them negative
   const sign = doc.kind === "cancellation" ? -1 : 1;
   const gross = sign * doc.totals.gross;

@@ -1,11 +1,16 @@
 import type { Pool } from "pg";
 import { assertContiguous, type Migration } from "../migrations/versions";
 import { runAndRecord } from "./migrate-tenants";
-import { assertTenantSlug, isAccentId, tenantSchemaFromSlug, type AccentId } from "@hoteloftware/domain";
+import { assertTenantSchemaName } from "./with-tenant";
+import { TRIAL_DAYS, assertTenantSlug, demoDeletionDue, isAccentId, tenantSchemaFromSlug, type AccentId, type TrialKind } from "@hoteloftware/domain";
 
 export interface NewTenant {
   slug: string;
   name: string;
+  /** A self-service trial (ticket 87): 30 days in Test Mode, on demo data or the customer's own. */
+  trial?: TrialKind;
+  /** Start in Test Mode without a trial (a customer set up by us); a trial always does. */
+  testMode?: boolean;
 }
 
 export interface Tenant {
@@ -32,15 +37,18 @@ export async function provisionTenant(pool: Pool, input: NewTenant, migrations: 
       schemaName,
     ]);
     if (existing.rowCount) throw new Error(`Tenant "${input.slug}" already exists`);
+    const testMode = input.trial !== undefined || input.testMode === true;
     const { rows } = await client.query<{ id: string }>(
-      "insert into control.tenants (slug, name, schema_name) values ($1, $2, $3) returning id",
-      [input.slug, input.name, schemaName],
+      `insert into control.tenants (slug, name, schema_name, trial_kind, trial_ends_at, live_at)
+       values ($1, $2, $3, $4, case when $4::text is null then null else now() + make_interval(days => $5) end, case when $6 then null else now() end) returning id`,
+      [input.slug, input.name, schemaName, input.trial ?? null, TRIAL_DAYS, testMode],
     );
     const id = rows[0]!.id;
     await client.query(`create schema "${schemaName}"`);
     await client.query("select set_config('search_path', $1, true)", [schemaName]);
     await client.query("select set_config('lock_timeout', '5s', true)");
     for (const m of migrations) await runAndRecord(client, id, m);
+    if (testMode) await client.query("insert into tenant_settings (key, value) values ('test_mode', 'on')");
     await client.query("commit");
     return { id, slug: input.slug, name: input.name, schemaName, accent: "ocean" };
   } catch (err) {
@@ -76,4 +84,31 @@ export async function findTenantById(pool: Pool, id: string): Promise<Tenant | n
 export async function setTenantAccent(pool: Pool, tenantId: string, accent: string): Promise<void> {
   if (!isAccentId(accent)) throw new Error(`Unknown accent: ${accent}`);
   await pool.query("update control.tenants set accent = $2 where id = $1", [tenantId, accent]);
+}
+
+/** Delete a tenant with all its data: schema, users, sessions, roles (control rows cascade). */
+export async function deleteTenant(pool: Pool, tenantId: string): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const t = (await client.query<{ schema_name: string }>("select schema_name from control.tenants where id = $1 for update", [tenantId])).rows[0];
+    if (!t) throw new Error("Tenant not found");
+    assertTenantSchemaName(t.schema_name);
+    await client.query(`drop schema "${t.schema_name}" cascade`);
+    await client.query("delete from control.tenants where id = $1", [tenantId]);
+    await client.query("commit");
+  } catch (err) {
+    await client.query("rollback").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Delete the demo tenants whose trial ended 30 days ago (a daily worker job); returns their slugs. */
+export async function deleteExpiredDemoTenants(pool: Pool, now = new Date()): Promise<string[]> {
+  const { rows } = await pool.query<{ id: string; slug: string; trial_ends_at: Date }>("select id, slug, trial_ends_at from control.tenants where trial_kind = 'demo' and live_at is null");
+  const due = rows.filter((r) => demoDeletionDue(r.trial_ends_at, now));
+  for (const t of due) await deleteTenant(pool, t.id);
+  return due.map((t) => t.slug);
 }

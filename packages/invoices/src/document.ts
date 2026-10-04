@@ -41,6 +41,8 @@ export interface InvoiceDocument {
   /** A Cancellation Invoice: the invoice it cancels (its totals are mirrored, shown negative). */
   cancels?: { number: string; issueDate: string } | null;
   notes: string[];
+  /** Issued in Test Mode: a test number, not an invoice (ticket 87). */
+  test?: boolean;
 }
 
 /** A reminder letter about overdue invoices of one Bill-to, frozen when issued. */

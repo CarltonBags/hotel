@@ -11,8 +11,8 @@ import { resolveTenantSlugFromHeaders } from "@hoteloftware/domain";
  */
 export function proxy(request: NextRequest) {
   const slug = resolveTenantSlugFromHeaders(request.headers, process.env.APP_DOMAIN ?? "");
-  // the public status page (ticket 93) answers on any host, the bare domain included
-  if (slug || request.nextUrl.pathname === "/no-tenant" || request.nextUrl.pathname === "/status") return NextResponse.next();
+  // the public status page (ticket 93) answers on any host, the bare domain included; a trial starts on the bare domain (ticket 87)
+  if (slug || ["/no-tenant", "/status", "/signup"].includes(request.nextUrl.pathname)) return NextResponse.next();
   return NextResponse.rewrite(new URL("/no-tenant", request.url));
 }
 

@@ -1,3 +1,6 @@
+import { resolve } from "node:path";
+
+
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is not set`);
@@ -26,6 +29,14 @@ export const env = {
   /** The platform's own tenant: its users listed as support staff may open customers' tenants (ticket 93). */
   get platformSlug() {
     return process.env.PLATFORM_TENANT_SLUG ?? "platform";
+  },
+  /** Where the database migrations lie: a new trial tenant gets its schema from them (ticket 87). */
+  get migrationsDir() {
+    return process.env.MIGRATIONS_DIR ?? resolve(process.cwd(), "../../packages/db/migrations");
+  },
+  /** Self-service trial signup on the bare domain; "off" closes it. */
+  get trialSignup() {
+    return process.env.TRIAL_SIGNUP !== "off";
   },
   /** Support contacts shown in the help centre (ticket 93); set them for production. */
   get supportEmail() {

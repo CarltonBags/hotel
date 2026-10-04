@@ -560,8 +560,16 @@ One upload of records from a previous system, checked in a dry run first and und
 _Avoid_: Migration, data load, upload
 
 **Go-live**:
-The moment a property leaves test mode: test records are cleared, invoice numbering starts, and the first business date is set.
+The moment a tenant leaves Test Mode: test records are cleared, invoice numbering starts, and each property's first Business Date is set.
 _Avoid_: Launch, activation, cut-over
+
+**Trial**:
+Thirty days of free use without payment details, either on demo data that is deleted afterwards or on the customer's own data in Test Mode.
+_Avoid_: Free plan, evaluation, pilot
+
+**Go-live Checklist**:
+The setup items a tenant must complete, and the platform's Support Staff confirm, before Go-live.
+_Avoid_: Onboarding list, launch checklist
 
 **Support Staff**:
 People of the software provider who may open a customer's tenant through a Support Access.

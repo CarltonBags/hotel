@@ -18,6 +18,7 @@ import {
   type GridRow,
   type GridState,
   type ToolPlan,
+  PRICE_HORIZON_DAYS,
   type Derivation,
   type Restriction,
   type RestrictionInheritance,
@@ -302,8 +303,7 @@ async function loadGridState(tx: PoolClient, propertyId: string, from: string, t
   };
 }
 
-/** Prices are kept this many days ahead of the Business Date ("Rates and restrictions model"). */
-export const PRICE_HORIZON_DAYS = 500;
+export { PRICE_HORIZON_DAYS };
 
 export type RatesTool =
   | { kind: "paste"; block: (number | null)[][]; rows: { ratePlanId: string; roomTypeId: string }[]; anchorDate: string }
