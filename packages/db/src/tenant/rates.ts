@@ -5,11 +5,18 @@ import {
   RESTRICTION_FIELDS,
   derivedPrice,
   effectiveRestriction,
+  addDays,
   planBulkEdit,
+  planCopyPeriod,
+  planFill,
+  planPaste,
   roundMoney,
   type BulkEdit,
   type BulkPreview,
+  type FillMode,
   type GridRow,
+  type GridState,
+  type ToolPlan,
   type Derivation,
   type Restriction,
   type RestrictionInheritance,
@@ -253,28 +260,8 @@ export async function applyBulkEdit(
     await lockProperty(tx, propertyId);
     const from = checkDate(edit.from <= edit.to ? edit.from : edit.to);
     const to = checkDate(edit.from <= edit.to ? edit.to : edit.from);
-    const index = await loadPlanIndex(tx, propertyId);
-    const floors = await tx.query<{ id: string; price_floor: string | null }>("select id, price_floor from room_types where property_id = $1", [propertyId]);
-    const floor = new Map(floors.rows.map((r) => [r.id, r.price_floor === null ? null : Number(r.price_floor)]));
-    const rows: GridRow[] = [...index.values()].flatMap((p) =>
-      [...p.roomTypeIds].map((rt) => ({ ratePlanId: p.id, roomTypeId: rt, basePlanId: p.basePlanId, derivation: p.derivation, inherits: p.kind === "derived" ? p.inherits : null, priceFloor: floor.get(rt) ?? null })),
-    );
-    const prices = await tx.query<{ rate_plan_id: string; room_type_id: string; date: string; price: string }>(
-      `select r.rate_plan_id, r.room_type_id, to_char(r.date, 'YYYY-MM-DD') as date, r.price from rates r join rate_plans p on p.id = r.rate_plan_id
-       where p.property_id = $1 and r.date between $2 and $3`,
-      [propertyId, from, to],
-    );
-    const stored = await tx.query<RestrictionRow>(
-      `select r.rate_plan_id, r.room_type_id, to_char(r.date, 'YYYY-MM-DD') as date, r.stop_sell, r.closed_to_arrival, r.closed_to_departure, r.min_stay_arrival, r.min_stay_through, r.max_stay
-       from restrictions r join rate_plans p on p.id = r.rate_plan_id where p.property_id = $1 and r.date between $2 and $3`,
-      [propertyId, from, to],
-    );
-    const priceMap = new Map(prices.rows.map((r) => [`${r.rate_plan_id}|${r.room_type_id}|${r.date}`, Number(r.price)]));
-    const restrMap = new Map(stored.rows.map((r) => [`${r.rate_plan_id}|${r.room_type_id}|${r.date}`, toRestriction(r)]));
-    const plan = planBulkEdit(edit, rows, {
-      price: (p, r, d) => priceMap.get(`${p}|${r}|${d}`) ?? null,
-      restriction: (p, r, d) => restrMap.get(`${p}|${r}|${d}`) ?? OPEN_RESTRICTION,
-    });
+    const { rows, state } = await loadGridState(tx, propertyId, from, to);
+    const plan = planBulkEdit(edit, rows, state);
     if (plan.preview.negative > 0) throw new Error(`${plan.preview.negative} prices would fall below zero`);
     if (plan.preview.cells === 0) throw new Error("Nothing would change");
     if (plan.preview.cells !== expectedCells) return { changeId: null, preview: plan.preview, stale: true };
@@ -282,6 +269,150 @@ export async function applyBulkEdit(
     await setRatesIn(tx, propertyId, userId, changeId, plan.prices);
     await setRestrictionsIn(tx, propertyId, userId, plan.restrictions, changeId);
     return { changeId, preview: plan.preview, stale: false };
+  });
+}
+
+/** The grid's rows and its stored prices and restrictions over a range, read inside the caller's (locked) transaction. */
+async function loadGridState(tx: PoolClient, propertyId: string, from: string, to: string): Promise<{ rows: GridRow[]; state: GridState }> {
+  const index = await loadPlanIndex(tx, propertyId);
+  const floors = await tx.query<{ id: string; price_floor: string | null }>("select id, price_floor from room_types where property_id = $1", [propertyId]);
+  const floor = new Map(floors.rows.map((r) => [r.id, r.price_floor === null ? null : Number(r.price_floor)]));
+  const rows: GridRow[] = [...index.values()].flatMap((p) =>
+    [...p.roomTypeIds].map((rt) => ({ ratePlanId: p.id, roomTypeId: rt, basePlanId: p.basePlanId, derivation: p.derivation, inherits: p.kind === "derived" ? p.inherits : null, priceFloor: floor.get(rt) ?? null })),
+  );
+  const prices = await tx.query<{ rate_plan_id: string; room_type_id: string; date: string; price: string }>(
+    `select r.rate_plan_id, r.room_type_id, to_char(r.date, 'YYYY-MM-DD') as date, r.price from rates r join rate_plans p on p.id = r.rate_plan_id
+     where p.property_id = $1 and r.date between $2 and $3`,
+    [propertyId, from, to],
+  );
+  const stored = await tx.query<RestrictionRow>(
+    `select r.rate_plan_id, r.room_type_id, to_char(r.date, 'YYYY-MM-DD') as date, r.stop_sell, r.closed_to_arrival, r.closed_to_departure, r.min_stay_arrival, r.min_stay_through, r.max_stay
+     from restrictions r join rate_plans p on p.id = r.rate_plan_id where p.property_id = $1 and r.date between $2 and $3`,
+    [propertyId, from, to],
+  );
+  const priceMap = new Map(prices.rows.map((r) => [`${r.rate_plan_id}|${r.room_type_id}|${r.date}`, Number(r.price)]));
+  const restrMap = new Map(stored.rows.map((r) => [`${r.rate_plan_id}|${r.room_type_id}|${r.date}`, toRestriction(r)]));
+  return {
+    rows,
+    state: {
+      price: (p, r, d) => priceMap.get(`${p}|${r}|${d}`) ?? null,
+      restriction: (p, r, d) => restrMap.get(`${p}|${r}|${d}`) ?? OPEN_RESTRICTION,
+    },
+  };
+}
+
+/** Prices are kept this many days ahead of the Business Date ("Rates and restrictions model"). */
+export const PRICE_HORIZON_DAYS = 500;
+
+export type RatesTool =
+  | { kind: "paste"; block: (number | null)[][]; rows: { ratePlanId: string; roomTypeId: string }[]; anchorDate: string }
+  | { kind: "copy"; rows: { ratePlanId: string; roomTypeId: string }[]; source: { from: string; to: string }; targetFrom: string }
+  | { kind: "fill"; rows: { ratePlanId: string; roomTypeId: string }[]; mode: FillMode };
+
+/**
+ * A grid tool (paste, copy period, fill to the horizon), planned inside the
+ * locked transaction from the stored state with the planner the browser's
+ * preview used, and written as one change so Undo reverts it whole.
+ * Without expected cells it only previews; with them it is refused when the
+ * change no longer matches what the user previewed.
+ */
+export async function applyRatesTool(
+  pool: Pool,
+  schema: string,
+  propertyId: string,
+  userId: string,
+  tool: RatesTool,
+  expectedCells: number | null,
+): Promise<{ changeId: string | null; preview: ToolPlan["preview"]; stale: boolean; skipped: number }> {
+  return withTenant(pool, schema, async (tx) => {
+    await lockProperty(tx, propertyId);
+    const bd = (await tx.query<{ d: string }>("select to_char(business_date, 'YYYY-MM-DD') as d from properties where id = $1", [propertyId])).rows[0]?.d;
+    if (!bd) throw new Error("Property not found");
+    const horizon = addDays(bd, PRICE_HORIZON_DAYS);
+    let plan: ToolPlan;
+    let skipped = 0;
+    if (tool.kind === "paste") {
+      const width = Math.max(0, ...tool.block.map((r) => r.length));
+      const anchor = checkDate(tool.anchorDate);
+      const { rows, state } = await loadGridState(tx, propertyId, anchor, addDays(anchor, Math.max(0, width - 1)));
+      const pick = tool.rows.map((k) => rows.find((r) => r.ratePlanId === k.ratePlanId && r.roomTypeId === k.roomTypeId));
+      if (pick.some((r) => !r)) throw new Error("A row of the paste is not at this property");
+      const pasted = planPaste(tool.block, pick as GridRow[], 0, anchor, state);
+      plan = pasted;
+      skipped = pasted.preview.skippedDerived + pasted.preview.outside;
+    } else if (tool.kind === "copy") {
+      const source = { from: checkDate(tool.source.from), to: checkDate(tool.source.to) };
+      const target = checkDate(tool.targetFrom);
+      const span = Math.round((Date.parse(source.to) - Date.parse(source.from)) / 86_400_000);
+      const lo = source.from < target ? source.from : target;
+      const hi = addDays(target, span) > source.to ? addDays(target, span) : source.to;
+      const { rows, state } = await loadGridState(tx, propertyId, lo, hi);
+      const pick = tool.rows.map((k) => rows.find((r) => r.ratePlanId === k.ratePlanId && r.roomTypeId === k.roomTypeId));
+      if (pick.some((r) => !r)) throw new Error("A row to copy is not at this property");
+      plan = planCopyPeriod({ rows: pick as GridRow[], source, targetFrom: target }, state);
+    } else {
+      const ends = await tx.query<{ rate_plan_id: string; room_type_id: string; last_date: string | null }>(
+        `select rt.rate_plan_id, rt.room_type_id, (select to_char(max(r.date), 'YYYY-MM-DD') from rates r where r.rate_plan_id = rt.rate_plan_id and r.room_type_id = rt.room_type_id) as last_date
+         from rate_plan_room_types rt join rate_plans p on p.id = rt.rate_plan_id where p.property_id = $1 and p.kind = 'base'`,
+        [propertyId],
+      );
+      const wanted = tool.rows.map((k) => ends.rows.find((e) => e.rate_plan_id === k.ratePlanId && e.room_type_id === k.roomTypeId));
+      if (wanted.some((r) => !r)) throw new Error("Only base rows of this property are filled");
+      const earliest = wanted.map((w) => w!.last_date).filter((d): d is string => d !== null).sort()[0] ?? bd;
+      const { rows, state } = await loadGridState(tx, propertyId, addDays(earliest < bd ? earliest : bd, -6), horizon);
+      const filled = planFill(
+        { rows: wanted.map((w) => ({ ratePlanId: w!.rate_plan_id, roomTypeId: w!.room_type_id, lastDate: w!.last_date, priceFloor: rows.find((r) => r.ratePlanId === w!.rate_plan_id && r.roomTypeId === w!.room_type_id)?.priceFloor ?? null })), from: bd, horizon, mode: tool.mode },
+        state,
+      );
+      plan = filled;
+      skipped = filled.skipped.length;
+    }
+    if (expectedCells === null) return { changeId: null, preview: plan.preview, stale: false, skipped };
+    if (plan.preview.cells === 0) throw new Error("Nothing would change");
+    if (plan.preview.cells !== expectedCells) return { changeId: null, preview: plan.preview, stale: true, skipped };
+    const changeId = randomUUID();
+    await setRatesIn(tx, propertyId, userId, changeId, plan.prices);
+    await setRestrictionsIn(tx, propertyId, userId, plan.restrictions, changeId);
+    return { changeId, preview: plan.preview, stale: false, skipped };
+  });
+}
+
+export interface EventMarker {
+  id: string;
+  name: string;
+  from: string;
+  to: string;
+}
+
+/** Event Markers of the property overlapping a range. */
+export async function listEventMarkers(pool: Pool, schema: string, propertyId: string, range: DateRange): Promise<EventMarker[]> {
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<{ id: string; name: string; from_date: string; to_date: string }>(
+      "select id, name, to_char(from_date, 'YYYY-MM-DD') as from_date, to_char(to_date, 'YYYY-MM-DD') as to_date from event_markers where property_id = $1 and from_date <= $3 and to_date >= $2 order by from_date, name",
+      [propertyId, checkDate(range.from), checkDate(range.to)],
+    );
+    return rows.map((r) => ({ id: r.id, name: r.name, from: r.from_date, to: r.to_date }));
+  });
+}
+
+/** Name a date or date range (both days included). */
+export async function createEventMarker(pool: Pool, schema: string, propertyId: string, userId: string, input: { name: string; from: string; to: string }): Promise<EventMarker> {
+  const name = input.name.trim();
+  if (!name || name.length > 60) throw new Error("Name the event (up to 60 characters)");
+  const from = checkDate(input.from);
+  const to = checkDate(input.to || input.from);
+  if (to < from) throw new Error("The end date is before the start date");
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<{ id: string }>("insert into event_markers (property_id, name, from_date, to_date, created_by) values ($1, $2, $3, $4, $5) returning id", [propertyId, name, from, to, userId]);
+    return { id: rows[0]!.id, name, from, to };
+  });
+}
+
+export async function deleteEventMarker(pool: Pool, schema: string, propertyId: string, id: string): Promise<void> {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("Event Marker not found");
+  await withTenant(pool, schema, async (tx) => {
+    const done = await tx.query("delete from event_markers where id = $1 and property_id = $2", [id, propertyId]);
+    if (!done.rowCount) throw new Error("Event Marker not found");
   });
 }
 

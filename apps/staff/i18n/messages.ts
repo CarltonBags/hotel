@@ -1188,6 +1188,33 @@ const catalog = {
 
   "services.minibar": { en: "Minibar item (counted on the room sheet)", de: "Minibar-Artikel (im Zimmerblatt gezählt)" },
 
+  // rates grid tools (ticket 19)
+  "tools.title": { en: "Tools", de: "Werkzeuge" },
+  "tools.paste": { en: "Paste from a spreadsheet", de: "Aus Tabelle einfügen" },
+  "tools.pasteHelp": { en: "Paste a block from a spreadsheet with Cmd/Ctrl+V: it starts at the focused cell.", de: "Einen Block aus einer Tabelle mit Cmd/Strg+V einfügen: er beginnt in der markierten Zelle." },
+  "tools.skipped": { en: "{n} values left out (derived rows follow their base, or below the last row)", de: "{n} Werte ausgelassen (abgeleitete Zeilen folgen ihrer Basis, oder unter der letzten Zeile)" },
+  "tools.cancel": { en: "Cancel", de: "Abbrechen" },
+  "tools.preview": { en: "Preview", de: "Vorschau" },
+  "tools.copy": { en: "Copy period", de: "Zeitraum kopieren" },
+  "tools.copyHelp": { en: "Prices and restrictions of {n} rows, aligned by weekday.", de: "Preise und Restriktionen von {n} Zeilen, nach Wochentag ausgerichtet." },
+  "tools.sourceFrom": { en: "Copy from", de: "Kopieren von" },
+  "tools.sourceTo": { en: "Copy until", de: "Kopieren bis" },
+  "tools.target": { en: "To, starting on", de: "Nach, ab" },
+  "tools.fill": { en: "Fill to the horizon", de: "Bis zum Horizont füllen" },
+  "tools.fillHelp": { en: "Prices up to {date} for {n} rows that end earlier.", de: "Preise bis {date} für {n} Zeilen, die früher enden." },
+  "tools.mode.repeat_week": { en: "Repeat last full week", de: "Letzte volle Woche wiederholen" },
+  "tools.mode.base": { en: "Base price + weekend", de: "Grundpreis + Wochenende" },
+  "tools.basePrice": { en: "Base price", de: "Grundpreis" },
+  "tools.weekendFactor": { en: "Weekend factor (Fri, Sat)", de: "Wochenendfaktor (Fr, Sa)" },
+  "tools.markers": { en: "Event Markers", de: "Ereignismarken" },
+  "tools.noMarkers": { en: "No Event Markers yet.", de: "Noch keine Ereignismarken." },
+  "tools.markerName": { en: "Name, e.g. trade fair", de: "Name, z. B. Messe" },
+  "tools.markerFrom": { en: "First day", de: "Erster Tag" },
+  "tools.markerTo": { en: "Last day", de: "Letzter Tag" },
+  "tools.addMarker": { en: "Add Event Marker", de: "Ereignismarke hinzufügen" },
+  "tools.remove": { en: "Remove", de: "Entfernen" },
+  "bulk.marker": { en: "Select an Event Marker's dates", de: "Daten einer Ereignismarke wählen" },
+
   // phone view, Housekeeping Notes, Lost and Found (ticket 35)
   "hknotes.title": { en: "Housekeeping Notes", de: "Hinweise für die Zimmerreinigung" },
   "hknotes.help": { en: "Shown on the housekeeper's phone in their language; free text as written.", de: "Erscheinen auf dem Telefon der Zimmerreinigung in deren Sprache; freier Text wie geschrieben." },

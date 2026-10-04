@@ -9,9 +9,7 @@ export { assertContiguous, type Migration } from "./migrations/versions";
 export { findSchemaQualifiedNames, type Finding } from "./tenant/check-tenant-sql";
 export { migrateTenants, type MigrateResult } from "./tenant/migrate-tenants";
 export { findTenantById, findTenantBySlug, provisionTenant, setTenantAccent, type NewTenant, type Tenant } from "./tenant/provision";
-export {
-  getFloorLanguage,
-  setFloorLanguage, getPreferences, getWorkspace, setPinnedTabs, setPreferences, type PinnedTab, type Preferences, type Workspace } from "./control/preferences";
+export { getFloorLanguage, getPreferences, getWorkspace, setFloorLanguage, setPinnedTabs, setPreferences, type PinnedTab, type Preferences, type Workspace } from "./control/preferences";
 export { assertTenantSlug, isTenantSlug, resolveTenantSlug, tenantSchemaFromSlug } from "@hoteloftware/domain";
 export { assertTenantSchemaName, inTenantTransaction, isTenantSchemaName, withTenant } from "./tenant/with-tenant";
 export { controlSchema } from "./control/schema";
@@ -99,6 +97,13 @@ export {
 export { createRatePlan, findRatePlan, listRatePlans, updateRatePlan, type IncludedService, type RatePlan, type RatePlanInput, type RatePlanPatch } from "./tenant/rate-plans";
 export {
   applyBulkEdit,
+  applyRatesTool,
+  createEventMarker,
+  deleteEventMarker,
+  listEventMarkers,
+  PRICE_HORIZON_DAYS,
+  type EventMarker,
+  type RatesTool,
   applyGridEdit,
   listBelowFloor,
   listPriceEnds,

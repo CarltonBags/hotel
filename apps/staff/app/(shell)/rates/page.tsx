@@ -1,5 +1,5 @@
-import { addDays, can, todayIn } from "@hoteloftware/domain";
-import { listBelowFloor, listPriceEnds, listRateChanges, listTenantUsers } from "@hoteloftware/db";
+import { addDays, can } from "@hoteloftware/domain";
+import { PRICE_HORIZON_DAYS, listBelowFloor, listEventMarkers, listPriceEnds, listRateChanges, listTenantUsers } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
@@ -12,8 +12,6 @@ function isCalendarDate(s: string): boolean {
   return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
 }
 
-/** Prices are kept at least this many days ahead ("Rates and restrictions model"). */
-const HORIZON_DAYS = 500;
 const VISIBLE_DAYS = 28;
 
 /** The Rates grid of the property selected in the navbar. */
@@ -33,16 +31,17 @@ export default async function RatesPage({ searchParams }: { searchParams: Promis
   }
   const { tenant } = await requireAllowed("manage_rates", property.id);
   const schema = tenant.schemaName;
-  // The open Business Date arrives with Night Audit; until then the property's own today stands in.
-  const today = todayIn(property.timeZone);
+  // the open Business Date (Night Audit) is the grid's "today"
+  const today = property.businessDate;
   const requested = (await searchParams).from;
   const from = requested && isCalendarDate(requested) ? requested : addDays(today, -3);
-  const [grid, below, ends, changes, users] = await Promise.all([
+  const [grid, below, ends, changes, users, markers] = await Promise.all([
     loadGrid(schema, property, from, VISIBLE_DAYS),
     listBelowFloor(pool(), schema, property.id, today),
-    listPriceEnds(pool(), schema, property.id, addDays(today, HORIZON_DAYS)),
+    listPriceEnds(pool(), schema, property.id, addDays(today, PRICE_HORIZON_DAYS)),
     listRateChanges(pool(), schema, property.id, { limit: 300 }),
     listTenantUsers(pool(), tenant.id),
+    listEventMarkers(pool(), schema, property.id, { from: from < today ? from : today, to: addDays(today, PRICE_HORIZON_DAYS) }),
   ]);
   const names = new Map(users.map((u) => [u.id, u.name]));
   return (
@@ -57,6 +56,8 @@ export default async function RatesPage({ searchParams }: { searchParams: Promis
       belowFloor={below}
       priceEnds={ends}
       changes={changes.map((c) => ({ ...c, at: c.at.toISOString(), userName: names.get(c.userId) ?? c.userId }))}
+      markers={markers}
+      horizon={addDays(today, PRICE_HORIZON_DAYS)}
       language={shell.language}
       m={m}
     />
