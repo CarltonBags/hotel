@@ -1606,6 +1606,7 @@ export const registrationPersons = pgTable(
     city: text("city").notNull().default(""),
     country: text("country").notNull().default(""),
     documentNumber: text("document_number").notNull().default(""),
+    gender: text("gender").notNull().default(""),
     language: text("language").notNull().default("de"),
     step: text("step").notNull().default("waiting"),
     guestDoneAt: timestamp("guest_done_at", { withTimezone: true }),
@@ -1621,6 +1622,7 @@ export const registrationPersons = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    check("registration_persons_gender_check", sql`${t.gender} in ('', 'f', 'm', 'x')`),
     check("registration_persons_role_check", sql`${t.role} in ('primary', 'spouse', 'partner', 'child', 'other')`),
     check("registration_persons_step_check", sql`${t.step} in ('waiting', 'welcome', 'details', 'companions', 'review', 'done')`),
     check("registration_persons_confirmation_check", sql`${t.confirmation} in ('tablet_signature', 'paper')`),

@@ -54,11 +54,20 @@ export async function RegistrationPanel({ reservationId, propertyId, propertyCou
                   : m[`reg.need.${p.need}`]}
               </span>
             </div>
+            {p.need === "own_form" && (p.step !== "waiting" || p.guestDone) && !p.completed ? (
+              <p className="text-xs text-ink-60" data-live>
+                {p.guestDone ? m["reg.entered"] : m["reg.live"]}: {p.firstName} {p.lastName}, {p.dateOfBirth ?? "–"}, {p.addressLine1}, {p.postalCode} {p.city}, {p.country} · {p.documentNumber || "–"}
+              </p>
+            ) : null}
+            {p.need === "own_form" && !p.guestDone && !reg.deviceId && canRegister && tablets.length ? (
+              <ActionForm action={sendToTabletAction} submitLabel={m["reg.sendOne"]} className="flex flex-wrap items-center gap-2">
+                {hidden}
+                <input type="hidden" name="personId" value={p.id} />
+                <input type="hidden" name="deviceId" value={tablets[0]!.id} />
+              </ActionForm>
+            ) : null}
             {p.need === "own_form" && p.guestDone && !p.completed && canRegister ? (
               <div className="grid gap-2">
-                <p className="text-xs text-ink-60">
-                  {m["reg.entered"]}: {p.firstName} {p.lastName}, {p.dateOfBirth}, {p.addressLine1}, {p.postalCode} {p.city}, {p.country} · {p.documentNumber}
-                </p>
                 {!p.idChecked ? (
                   <ActionForm action={idCheckAction} submitLabel={m["reg.recordIdCheck"]} className="flex flex-wrap items-center gap-2">
                     {hidden}

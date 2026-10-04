@@ -108,10 +108,10 @@ describe("Meldeschein registration", () => {
     await expect(tabletStep(pool, s(), tablet, other.persons[0]!.id, { step: "welcome", language: "en" })).rejects.toThrow(/Not on this tablet/);
     const me = state.person.id;
     await tabletStep(pool, s(), tablet, me, { step: "welcome", language: "en" });
-    await tabletStep(pool, s(), tablet, me, { step: "details", details: { firstName: "Aiko", lastName: "Brandt", dateOfBirth: "1988-04-12", nationality: "de", addressLine1: "Ringstraße 5", postalCode: "1010", city: "Wien", country: "AT", documentNumber: "C01X00T47" } });
+    await tabletStep(pool, s(), tablet, me, { step: "details", details: { firstName: "Aiko", lastName: "Brandt", dateOfBirth: "1988-04-12", nationality: "de", addressLine1: "Ringstraße 5", postalCode: "1010", city: "Wien", country: "AT", documentNumber: "C01X00T47", gender: "f" } });
     await tabletStep(pool, s(), tablet, me, { step: "companions", add: [] });
     await expect(tabletStep(pool, s(), tablet, me, { step: "review", signaturePng: null })).rejects.toThrow(/signature/);
-    await tabletStep(pool, s(), tablet, me, { step: "review", signaturePng: new Uint8Array([137, 80, 78, 71]) });
+    await tabletStep(pool, s(), tablet, me, { step: "review", signaturePng: Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64")) });
     const changes = (await pool.query(`select field, user_id from ${s()}.guest_changes c join ${s()}.reservations r on r.primary_guest_id = c.guest_id where r.id = $1 and c.user_id like 'tablet:%'`, [res])).rows;
     expect(changes.map((c) => c.field)).toEqual(expect.arrayContaining(["dateOfBirth", "addressLine1", "documentNumber"]));
     expect(changes[0]!.user_id).toBe("tablet:Lobby iPad");
@@ -122,9 +122,12 @@ describe("Meldeschein registration", () => {
     await takeBackFromTablet(pool, s(), reg.id);
     expect(await tabletState(pool, s(), tablet.id)).toBeNull();
     // complete Aiko: signed on the tablet, ID Check recorded
-    await expect(completeRegistrationPerson(pool, s(), me, new Uint8Array([1]))).rejects.toThrow(/ID Check/);
+    await expect(completeRegistrationPerson(pool, s(), me)).rejects.toThrow(/ID Check/);
     await recordIdCheck(pool, s(), me, "", fd);
-    await completeRegistrationPerson(pool, s(), me, new Uint8Array([37, 80, 68, 70]));
+    await completeRegistrationPerson(pool, s(), me);
+    // the stored form carries the signature image
+    expect((await pool.query(`select position('/Subtype /Image'::bytea in pdf) > 0 as img from ${s()}.registration_persons where id = $1`, [me])).rows[0].img).toBe(true);
+    await expect(recordIdCheck(pool, s(), me, "later", fd)).rejects.toThrow(/completed already/);
     const view = (await findRegistration(pool, s(), res))!;
     expect(view.persons.map((p) => [p.firstName, p.need, p.confirmation, p.completed])).toEqual([
       ["Aiko", "own_form", "tablet_signature", true],

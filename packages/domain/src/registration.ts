@@ -32,28 +32,34 @@ function minorAt(dateOfBirth: string | null, on: string): boolean {
   return on < adult;
 }
 
+/** The form a counted person is listed on: the family's head (see registrationNeeds). */
+export function familyHead(country: RegistrationCountry, persons: RegistrationPerson[]): RegistrationPerson | null {
+  const parents = persons.filter((p) => p.role === "primary" || p.role === "spouse" || p.role === "partner");
+  if (country === "AT") return parents.find((p) => p.role === "primary") ?? parents[0] ?? null;
+  const foreign = (p: RegistrationPerson) => p.nationality.toUpperCase() !== "DE";
+  // the primary guest if foreign, else a foreign spouse or partner
+  return parents.find((p) => p.role === "primary" && foreign(p)) ?? parents.find((p) => p.role !== "primary" && foreign(p)) ?? null;
+}
+
 /**
- * Who needs what. Germany: foreign nationals only; a spouse, partner or minor
- * child travelling with someone who has a form is counted on it. Austria:
- * every guest; minors are listed on a parent's form.
+ * Who needs what. Germany: foreign nationals only; the spouse, partner and
+ * minor children of the family's head are counted on the head's form, by
+ * number and nationality, whatever their own nationality. Austria: every
+ * guest; minors are listed on a parent's form.
  */
 export function registrationNeeds(country: RegistrationCountry, persons: RegistrationPerson[], arrival: string): Record<string, RegistrationNeed> {
   const out: Record<string, RegistrationNeed> = {};
-  const family = (p: RegistrationPerson) => p.role === "spouse" || p.role === "partner" || (p.role === "child" && minorAt(p.dateOfBirth, arrival));
-  const parents = persons.filter((p) => p.role === "primary" || p.role === "spouse" || p.role === "partner");
+  const head = familyHead(country, persons);
+  const minor = (p: RegistrationPerson) => p.role === "child" && minorAt(p.dateOfBirth, arrival);
   if (country === "AT") {
-    const parentForm = parents.length > 0;
-    for (const p of persons) out[p.id] = p.role === "child" && minorAt(p.dateOfBirth, arrival) && parentForm ? "counted" : "own_form";
+    for (const p of persons) out[p.id] = minor(p) && head ? "counted" : "own_form";
     return out;
   }
-  const foreign = (p: RegistrationPerson) => p.nationality.toUpperCase() !== "DE";
-  // the head of the family form: the primary guest if foreign, else a foreign spouse or partner
-  const head = parents.find((p) => p.role === "primary" && foreign(p)) ?? parents.find((p) => p.role !== "primary" && foreign(p)) ?? null;
+  const family = (p: RegistrationPerson) => p.role === "spouse" || p.role === "partner" || minor(p);
   for (const p of persons) {
-    if (!foreign(p)) out[p.id] = "none";
-    else if (p === head) out[p.id] = "own_form";
+    if (p === head) out[p.id] = "own_form";
     else if (head && family(p)) out[p.id] = "counted";
-    else out[p.id] = "own_form";
+    else out[p.id] = p.nationality.toUpperCase() === "DE" ? "none" : "own_form";
   }
   return out;
 }

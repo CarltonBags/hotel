@@ -440,6 +440,9 @@ export {
   recordIdCheck,
   registrationDocument,
   registrationPdf,
+  registrationPersonProperty,
+  renderRegistration,
+  TabletProblem,
   sendToTablet,
   tabletState,
   tabletStep,
@@ -450,5 +453,6 @@ export {
   type RegistrationPersonView,
   type RegistrationView,
   type TabletInput,
+  type TabletPerson,
   type TabletState,
 } from "./tenant/registration";

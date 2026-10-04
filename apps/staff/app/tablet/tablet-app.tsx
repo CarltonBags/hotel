@@ -19,6 +19,15 @@ const T = {
   city: { de: "Ort", en: "City" },
   country: { de: "Land (z. B. AT)", en: "Country (e.g. AT)" },
   document: { de: "Reisedokument-Nummer", en: "Travel document number" },
+  gender: { de: "Geschlecht (wie im Reisedokument)", en: "Gender (as in the travel document)" },
+  genderF: { de: "weiblich", en: "female" },
+  genderM: { de: "männlich", en: "male" },
+  genderX: { de: "divers", en: "diverse" },
+  back: { de: "Zurück", en: "Back" },
+  signLine: { de: "Mit meiner Unterschrift bestätige ich, dass die Angaben richtig sind.", en: "With my signature I confirm the details are correct." },
+  moved: { de: "Die Rezeption hat die Anmeldung zurückgeholt.", en: "Reception has taken the registration back." },
+  error: { de: "Das hat nicht geklappt. Bitte noch einmal.", en: "That did not work. Please try again." },
+  relationCount: { de: "Ehepartner, Lebenspartner und Kinder werden mit Anzahl und Staatsangehörigkeit erfasst.", en: "Spouse, partner and children are recorded by number and nationality." },
   next: { de: "Weiter", en: "Next" },
   companions: { de: "Mitreisende", en: "Travelling with you" },
   companionsHelp: { de: "Ehepartner, Lebenspartner und minderjährige Kinder, die mit Ihnen reisen.", en: "Spouse, partner and children under 18 travelling with you." },
@@ -31,11 +40,14 @@ const T = {
   sign: { de: "Bitte hier unterschreiben", en: "Please sign here" },
   clear: { de: "Löschen", en: "Clear" },
   confirm: { de: "Bestätigen", en: "Confirm" },
-  paper: { de: "Sie unterschreiben das ausgedruckte Formular an der Rezeption.", en: "You will sign the printed form at reception." },
+  paper: { de: "Ihr Meldeschein wird an der Rezeption gedruckt; Sie unterschreiben ihn dort.", en: "Your form is being printed at reception; you sign it there." },
   done: { de: "Vielen Dank! Bitte geben Sie das Tablet zurück.", en: "Thank you! Please hand the tablet back." },
   pass: { de: "Danke! Bitte reichen Sie das Tablet an die nächste Person weiter.", en: "Thank you! Please pass the tablet to the next guest." },
   problem: { de: "Bitte prüfen Sie: {f}", en: "Please check: {f}" },
 } as const;
+
+/** The fields the server may name as a problem, and their labels. */
+const FIELD_TEXT = { firstName: "firstName", lastName: "lastName", dateOfBirth: "dob", nationality: "nationality", gender: "gender", signature: "sign", companions: "companions" } as const;
 
 /**
  * The guest's steps on the tablet (ticket 45): welcome with language, details
@@ -63,13 +75,21 @@ export function TabletApp({ deviceName }: { deviceName: string }) {
     return () => clearInterval(i);
   }, [load]);
 
-  const send = async (input: Record<string, unknown>) => {
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const send = async (input: Record<string, unknown>, quiet = false) => {
     if (!state) return;
+    if (quiet) {
+      await fetch("/api/tablet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ personId: state.person.id, input }) }).catch(() => undefined);
+      return;
+    }
     setError("");
     const r = await fetch("/api/tablet", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ personId: state.person.id, input }) });
     if (!r.ok) {
       const e = ((await r.json().catch(() => ({}))) as { error?: string }).error ?? "";
-      setError(t("problem", { f: e }));
+      // a field to check, named in the guest's language; anything else in plain words
+      const field = (FIELD_TEXT as Record<string, keyof typeof T>)[e];
+      setError(r.status === 422 && field ? t("problem", { f: t(field) }) : r.status === 409 ? t("moved") : t("error"));
+      await load();
       return;
     }
     if (input.step === "review") {
@@ -115,11 +135,18 @@ export function TabletApp({ deviceName }: { deviceName: string }) {
     return shell(
       <form
         data-step="details"
+        onInput={(e) => {
+          // the desk sees what is typed, live: saved a moment after the guest stops typing
+          const f = new FormData(e.currentTarget);
+          if (draftTimer.current) clearTimeout(draftTimer.current);
+          draftTimer.current = setTimeout(() => void send({ step: "draft", details: Object.fromEntries([...f.entries()].map(([k, v]) => [k, String(v)])) }, true), 700);
+        }}
         onSubmit={(e) => {
           e.preventDefault();
           const f = new FormData(e.currentTarget);
           const v = (k: string) => String(f.get(k) ?? "");
-          void send({ step: "details", details: { firstName: v("firstName"), lastName: v("lastName"), dateOfBirth: v("dateOfBirth"), nationality: v("nationality"), addressLine1: v("addressLine1"), postalCode: v("postalCode"), city: v("city"), country: v("country"), documentNumber: v("documentNumber") } });
+          if (draftTimer.current) clearTimeout(draftTimer.current);
+          void send({ step: "details", details: { firstName: v("firstName"), lastName: v("lastName"), dateOfBirth: v("dateOfBirth"), nationality: v("nationality"), addressLine1: v("addressLine1"), postalCode: v("postalCode"), city: v("city"), country: v("country"), documentNumber: v("documentNumber"), gender: v("gender") } });
         }}
       >
         <h1 className="text-3xl">{t("details")}</h1>
@@ -143,6 +170,15 @@ export function TabletApp({ deviceName }: { deviceName: string }) {
               <input name={name} defaultValue={value} type={name === "dateOfBirth" ? "date" : "text"} required={name !== "documentNumber"} className={field} />
             </label>
           ))}
+          <label className="grid gap-1">
+            <span className="opacity-80">{t("gender")}</span>
+            <select name="gender" defaultValue={p.gender} className={field}>
+              <option value="" />
+              <option value="f">{t("genderF")}</option>
+              <option value="m">{t("genderM")}</option>
+              <option value="x">{t("genderX")}</option>
+            </select>
+          </label>
         </div>
         {err}
         <button type="submit" className={button}>
@@ -151,7 +187,7 @@ export function TabletApp({ deviceName }: { deviceName: string }) {
       </form>,
     );
   }
-  if (p.step === "companions") return shell(<Companions t={t} field={field} button={button} existing={state.companions.map((c) => `${c.firstName} ${c.lastName}`)} onDone={(add) => void send({ step: "companions", add })} err={err} />);
+  if (p.step === "companions") return shell(<Companions t={t} field={field} button={button} countOnly={state.country === "DE"} existing={state.companions.map((c) => (state.country === "DE" ? `${c.role} · ${c.nationality}` : `${c.firstName} ${c.lastName}`))} onDone={(add) => void send({ step: "companions", add })} err={err} />);
   if (p.step === "review") {
     return shell(
       <div data-step="review">
@@ -170,6 +206,9 @@ export function TabletApp({ deviceName }: { deviceName: string }) {
             {p.addressLine1}, {p.postalCode} {p.city}, {p.country}
           </dd>
         </dl>
+        <button type="button" className="mt-6 h-12 rounded-full border border-white/40 px-6" onClick={() => void send({ step: "back" })}>
+          {t("back")}
+        </button>
         {state.country === "AT" ? <Signature t={t} button={button} onSign={(png) => void send({ step: "review", signature: png })} /> : (
           <>
             <p className="mt-6 opacity-80">{t("paper")}</p>
@@ -185,15 +224,16 @@ export function TabletApp({ deviceName }: { deviceName: string }) {
   return shell(<h1 className="mt-24 text-center text-3xl">{t("idle")}</h1>);
 }
 
-function Companions({ t, field, button, existing, onDone, err }: { t: (k: keyof typeof T) => string; field: string; button: string; existing: string[]; onDone: (add: unknown[]) => void; err: React.ReactNode }) {
+function Companions({ t, field, button, existing, onDone, err, countOnly }: { t: (k: keyof typeof T) => string; field: string; button: string; existing: string[]; onDone: (add: unknown[]) => void; err: React.ReactNode; countOnly: boolean }) {
   const [added, setAdded] = useState<{ role: string; firstName: string; lastName: string; dateOfBirth: string; nationality: string }[]>([]);
   return (
     <div data-step="companions">
       <h1 className="text-3xl">{t("companions")}</h1>
       <p className="mt-1 opacity-80">{t("companionsHelp")}</p>
+      {countOnly ? <p className="text-sm opacity-70">{t("relationCount")}</p> : null}
       <ul className="mt-4 text-lg">
-        {[...existing, ...added.map((a) => `${a.firstName} ${a.lastName}`)].map((n) => (
-          <li key={n}>· {n}</li>
+        {[...existing, ...added.map((a) => (countOnly ? `${t(a.role as keyof typeof T)} · ${a.nationality}` : `${a.firstName} ${a.lastName}`))].map((n, i) => (
+          <li key={`${n}-${i}`}>· {n}</li>
         ))}
       </ul>
       <form
@@ -201,7 +241,7 @@ function Companions({ t, field, button, existing, onDone, err }: { t: (k: keyof 
         onSubmit={(e) => {
           e.preventDefault();
           const f = new FormData(e.currentTarget);
-          setAdded((a) => [...a, { role: String(f.get("role")), firstName: String(f.get("firstName")), lastName: String(f.get("lastName")), dateOfBirth: String(f.get("dateOfBirth") || ""), nationality: String(f.get("nationality")) }]);
+          setAdded((a) => [...a, { role: String(f.get("role")), firstName: String(f.get("firstName") ?? ""), lastName: String(f.get("lastName") ?? ""), dateOfBirth: String(f.get("dateOfBirth") || ""), nationality: String(f.get("nationality")).toUpperCase() }]);
           e.currentTarget.reset();
         }}
       >
@@ -210,8 +250,13 @@ function Companions({ t, field, button, existing, onDone, err }: { t: (k: keyof 
           <option value="partner">{t("partner")}</option>
           <option value="child">{t("child")}</option>
         </select>
-        <input name="firstName" required placeholder={t("firstName")} className={field} />
-        <input name="lastName" required placeholder={t("lastName")} className={field} />
+        {/* Germany counts them by number and nationality: no names asked */}
+        {countOnly ? null : (
+          <>
+            <input name="firstName" required placeholder={t("firstName")} className={field} />
+            <input name="lastName" required placeholder={t("lastName")} className={field} />
+          </>
+        )}
         <input name="dateOfBirth" type="date" className={field} aria-label={t("dob")} />
         <input name="nationality" required placeholder="DE" className={field} aria-label={t("nationality")} />
         <button type="submit" className="h-12 rounded-full border border-white/40 px-6 sm:col-span-5 sm:justify-self-start">
@@ -237,6 +282,7 @@ function Signature({ t, button, onSign }: { t: (k: keyof typeof T) => string; bu
   return (
     <div className="mt-6">
       <p className="opacity-80">{t("sign")}</p>
+      <p className="text-sm opacity-70">{t("signLine")}</p>
       <canvas
         ref={ref}
         width={900}

@@ -29,6 +29,8 @@ create table registration_persons (
   city text not null default '',
   country text not null default '',
   document_number text not null default '',
+  -- as in the travel document
+  gender text not null default '' constraint registration_persons_gender_check check (gender in ('', 'f', 'm', 'x')),
   language text not null default 'de',
   step text not null default 'waiting' constraint registration_persons_step_check check (step in ('waiting', 'welcome', 'details', 'companions', 'review', 'done')),
   guest_done_at timestamptz,

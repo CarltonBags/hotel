@@ -13,6 +13,10 @@ describe("who registers how", () => {
     expect(registrationNeeds("DE", family, "2026-10-05")).toEqual({ a: "own_form", b: "counted", c: "counted", d: "own_form", e: "own_form" });
   });
 
+  it("Germany: the German spouse of a foreign head is counted on the form", () => {
+    expect(registrationNeeds("DE", [p("a", "primary", "JP"), p("b", "spouse", "DE")], "2026-10-05")).toEqual({ a: "own_form", b: "counted" });
+  });
+
   it("Germany: with a German primary guest, a foreign spouse heads the form", () => {
     expect(registrationNeeds("DE", [p("a", "primary", "DE"), p("b", "spouse", "US"), p("c", "child", "US", "2018-01-01")], "2026-10-05")).toEqual({ a: "none", b: "own_form", c: "counted" });
   });
