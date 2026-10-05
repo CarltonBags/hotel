@@ -1,6 +1,22 @@
 import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { OTP_ATTEMPTS, OTP_MINUTES, extrasOpen, isArrivalTime, isRegistrationCountry, portalLanguage, portalLinkOpen, registrationRetentionUntil, sameLastName, todayIn, type PortalLanguage } from "@hoteloftware/domain";
+import {
+  OTP_ATTEMPTS,
+  OTP_MINUTES,
+  documentCopyAllowed,
+  extrasOpen,
+  isArrivalTime,
+  isCantonProfile,
+  isRegistrationCountry,
+  portalLanguage,
+  portalLinkOpen,
+  registrationAtReception,
+  registrationRetentionUntil,
+  sameLastName,
+  todayIn,
+  type CantonProfile,
+  type PortalLanguage,
+} from "@hoteloftware/domain";
 import { postServiceChargeIn } from "./folios";
 import { loadGuest, updateGuestIn, type Guest } from "./guests";
 import { fileIn, setFileRetention } from "./files";
@@ -39,6 +55,8 @@ export interface PortalProperty {
   info: Partial<Record<PortalLanguage, string>>;
   /** Guests may upload a document picture: the property allows it and keeps registration records (DE, AT). */
   documentImages: boolean;
+  /** The registration is signed by hand at reception (Germany; Switzerland where the canton asks it): Pre-check-in hands over to the desk. */
+  registrationAtReception: boolean;
   /** The property's own landscape, if it set one. */
   photoFileId: string | null;
   /** The property is on WhatsApp (ticket 44): guests may opt in. */
@@ -89,8 +107,9 @@ export type PortalView =
 const KEY = /^[0-9a-f]{64}$/;
 
 async function propertyOf(tx: PoolClient, propertyId: string): Promise<PortalProperty> {
-  const { rows } = await tx.query("select id, name, country, time_zone, currency, portal_info, portal_document_images, portal_photo_file_id from properties where id = $1", [propertyId]);
+  const { rows } = await tx.query("select id, name, country, time_zone, currency, portal_info, portal_document_images, portal_photo_file_id, canton_profile from properties where id = $1", [propertyId]);
   const p = rows[0]!;
+  const profile: CantonProfile | null = isCantonProfile(p.canton_profile) ? p.canton_profile : null;
   return {
     id: p.id,
     name: p.name,
@@ -98,7 +117,9 @@ async function propertyOf(tx: PoolClient, propertyId: string): Promise<PortalPro
     timeZone: p.time_zone,
     currency: p.currency.trim(),
     info: p.portal_info ?? {},
-    documentImages: p.portal_document_images && isRegistrationCountry(p.country),
+    // a copy of the identity document only where the law allows it (Tessin forbids it)
+    documentImages: p.portal_document_images && documentCopyAllowed(p.country, profile),
+    registrationAtReception: registrationAtReception(p.country, profile),
     photoFileId: p.portal_photo_file_id,
     whatsapp: !!(await whatsAppConnectionIn(tx, propertyId)),
   };
@@ -434,12 +455,13 @@ export async function addPortalDocument(pool: Pool, schema: string, key: string,
     const r = await reservationByKey(tx, key, { lock: true });
     const p = await propertyOf(tx, r.property_id);
     if (!p.documentImages || !isRegistrationCountry(r.country)) throw new Error("This hotel takes documents at reception");
+    const profile = r.country === "CH" ? ((await tx.query<{ canton_profile: unknown }>("select canton_profile from properties where id = $1", [r.property_id])).rows[0]?.canton_profile as CantonProfile | null) : null;
     const n = (await tx.query<{ n: number }>("select count(*)::int as n from reservation_documents where reservation_id = $1", [r.id])).rows[0]!.n;
     if (n >= DOCUMENTS_PER_STAY) throw new Error("Enough pictures for this stay");
     const f = await fileIn(tx, fileId);
     if (!f || f.kind !== "id_document" || f.createdBy !== `${PORTAL_USER}:${r.id}`) throw new Error("Picture not found");
     await tx.query("insert into reservation_documents (reservation_id, guest_id, file_id) values ($1, $2, $3)", [r.id, r.primary_guest_id, f.id]);
-    await setFileRetention(tx, [f.id], registrationRetentionUntil(r.country as "DE" | "AT", r.departure));
+    await setFileRetention(tx, [f.id], registrationRetentionUntil(r.country, r.departure, profile));
   });
 }
 

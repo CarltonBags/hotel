@@ -34,7 +34,7 @@ export async function addPersonAction(_prev: FormState, formData: FormData): Pro
   return formAction(async () => {
     const c = await scope(formData);
     if (!c.reg) throw new Error("Open the registration first");
-    const p: PersonInput = { role: field(formData, "role") as PersonInput["role"], firstName: field(formData, "firstName"), lastName: field(formData, "lastName"), dateOfBirth: field(formData, "dateOfBirth") || null, nationality: field(formData, "nationality") };
+    const p: PersonInput = { role: field(formData, "role") as PersonInput["role"], firstName: field(formData, "firstName"), lastName: field(formData, "lastName"), dateOfBirth: field(formData, "dateOfBirth") || null, nationality: field(formData, "nationality"), countryOfResidence: field(formData, "countryOfResidence") || null };
     await addRegistrationPerson(pool(), c.schema, c.reg.id, p);
     refresh(c.reservationId);
   });

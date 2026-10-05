@@ -562,3 +562,4 @@ export { linkUnassignedWhatsApp, receiveWhatsApp, receiveWhatsAppEcho } from "./
 export { deleteOldUnassignedWhatsApp } from "./tenant/whatsapp";
 export { sendWhatsAppTemplate } from "./tenant/messages";
 export { claimProviderAccount } from "./control/external-ids";
+export { cantonProfileOf, setCantonProfile, tessinExport } from "./tenant/registration";

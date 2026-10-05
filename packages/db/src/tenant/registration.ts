@@ -1,11 +1,17 @@
 import type { Pool, PoolClient } from "pg";
 import {
+  CANTON_PRESETS,
   PERSON_ROLES,
   familyHead,
+  isCantonProfile,
   isRegistrationCountry,
   registrationComplete,
   registrationDeletionDue,
   registrationNeeds,
+  registrationSignature,
+  type CantonProfile,
+  type CantonSignature,
+  type TessinRecord,
   type PersonRole,
   type RegistrationCountry,
   type RegistrationNeed,
@@ -38,6 +44,9 @@ export interface RegistrationPersonView {
   country: string;
   documentNumber: string;
   gender: string;
+  placeOfBirth: string;
+  documentType: "" | "passport" | "id_card" | "other";
+  carNumber: string;
   language: string;
   step: TabletStep | "waiting";
   need: RegistrationNeed;
@@ -55,6 +64,10 @@ export interface RegistrationView {
   reservationId: string;
   propertyId: string;
   country: RegistrationCountry;
+  /** Switzerland: the Canton Profile as it was when the registration opened. */
+  profile: CantonProfile | null;
+  /** How it is confirmed: on paper, on the tablet, or (where the canton allows) by the ID Check alone. */
+  signature: CantonSignature;
   deviceId: string | null;
   queue: string[];
   arrival: string;
@@ -76,6 +89,9 @@ type PersonRow = {
   country: string;
   document_number: string;
   gender: string;
+  place_of_birth: string;
+  document_type: RegistrationPersonView["documentType"];
+  car_number: string;
   language: string;
   step: TabletStep | "waiting";
   guest_done_at: Date | null;
@@ -85,24 +101,26 @@ type PersonRow = {
   completed_at: Date | null;
 };
 const PERSON_COLUMNS = `id, guest_id, role, first_name, last_name, to_char(date_of_birth, 'YYYY-MM-DD') as date_of_birth, nationality, address_line1, postal_code, city, country, document_number,
-  gender, language, step, guest_done_at, confirmation, id_checked_at, id_check_note, completed_at`;
+  gender, place_of_birth, document_type, car_number, language, step, guest_done_at, confirmation, id_checked_at, id_check_note, completed_at`;
 
 async function viewIn(tx: PoolClient, where: string, arg: string): Promise<RegistrationView | null> {
-  const r = (await tx.query<{ id: string; reservation_id: string; property_id: string; country: RegistrationCountry; device_id: string | null; queue: string[]; arrival: string; departure: string }>(
-    `select g.id, g.reservation_id, g.property_id, g.country, g.device_id, g.queue, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure
+  const r = (await tx.query<{ id: string; reservation_id: string; property_id: string; country: RegistrationCountry; profile: CantonProfile | null; device_id: string | null; queue: string[]; arrival: string; departure: string }>(
+    `select g.id, g.reservation_id, g.property_id, g.country, g.profile, g.device_id, g.queue, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure
      from registrations g join reservations r on r.id = g.reservation_id where ${where}`,
     [arg],
   )).rows[0];
   if (!r) return null;
   const rows = (await tx.query<PersonRow>(`select ${PERSON_COLUMNS} from registration_persons where registration_id = $1 order by created_at, id`, [r.id])).rows;
   const people = rows.map((p) => ({ id: p.id, role: p.role, nationality: p.nationality, dateOfBirth: p.date_of_birth }));
-  const needs = registrationNeeds(r.country, people, r.arrival);
-  const head = familyHead(r.country, people);
+  const needs = registrationNeeds(r.country, people, r.arrival, r.profile);
+  const head = familyHead(r.country, people, r.profile);
   return {
     id: r.id,
     reservationId: r.reservation_id,
     propertyId: r.property_id,
     country: r.country,
+    profile: r.profile,
+    signature: registrationSignature(r.country, r.profile),
     deviceId: r.device_id,
     queue: r.queue,
     arrival: r.arrival,
@@ -121,6 +139,9 @@ async function viewIn(tx: PoolClient, where: string, arg: string): Promise<Regis
       country: p.country,
       documentNumber: p.document_number,
       gender: p.gender,
+      placeOfBirth: p.place_of_birth,
+      documentType: p.document_type,
+      carNumber: p.car_number,
       language: p.language,
       step: p.step,
       need: needs[p.id]!,
@@ -140,14 +161,22 @@ export async function openRegistration(pool: Pool, schema: string, reservationId
   return withTenant(pool, schema, async (tx) => {
     const found = await viewIn(tx, "g.reservation_id = $1", reservationId);
     if (found) return found;
-    const r = (await tx.query<{ property_id: string; country: string; guest_id: string; status: string }>(
-      "select r.property_id, p.country, r.primary_guest_id as guest_id, r.status from reservations r join properties p on p.id = r.property_id where r.id = $1",
+    const r = (await tx.query<{ property_id: string; country: string; guest_id: string; status: string; canton_profile: unknown }>(
+      "select r.property_id, p.country, r.primary_guest_id as guest_id, r.status, p.canton_profile from reservations r join properties p on p.id = r.property_id where r.id = $1",
       [reservationId],
     )).rows[0];
     if (!r) throw new Error("Reservation not found");
-    if (!isRegistrationCountry(r.country)) throw new Error(`Registration for ${r.country} comes with its Canton Profile`);
+    if (!isRegistrationCountry(r.country)) throw new Error(`No guest registration for properties in ${r.country}`);
+    // Switzerland: the canton's rules, as the property set them
+    if (r.country === "CH" && !isCantonProfile(r.canton_profile)) throw new Error("Choose the property's Canton Profile first (Settings → Canton Profile)");
     if (r.status === "cancelled" || r.status === "no_show") throw new Error("This stay is not arriving");
-    const { rows } = await tx.query<{ id: string }>("insert into registrations (reservation_id, property_id, country, created_by) values ($1, $2, $3, $4) returning id", [reservationId, r.property_id, r.country, userId]);
+    const { rows } = await tx.query<{ id: string }>("insert into registrations (reservation_id, property_id, country, profile, created_by) values ($1, $2, $3, $4, $5) returning id", [
+      reservationId,
+      r.property_id,
+      r.country,
+      r.country === "CH" ? JSON.stringify(r.canton_profile) : null,
+      userId,
+    ]);
     await tx.query(
       `insert into registration_persons (registration_id, guest_id, role, first_name, last_name, date_of_birth, nationality, address_line1, postal_code, city, country, document_number, language)
        select $1, g.id, 'primary', g.first_name, g.last_name, g.date_of_birth, coalesce(g.nationality, ''), coalesce(g.address_line1, ''), coalesce(g.postal_code, ''), coalesce(g.city, ''),
@@ -170,15 +199,22 @@ export interface PersonInput {
   lastName: string;
   dateOfBirth: string | null;
   nationality: string;
+  /** Switzerland asks it of every guest (tourist taxes and guest cards depend on it). */
+  countryOfResidence?: string | null;
 }
 
-/** Germany counts spouse, partner and children by number and nationality: their names are not asked. */
+/**
+ * Germany counts spouse, partner and children by number and nationality:
+ * their names are not asked. Switzerland needs date of birth and Country of
+ * Residence of every guest.
+ */
 function checkPerson(p: PersonInput, country: RegistrationCountry): void {
   if (!PERSON_ROLES.includes(p.role) || p.role === "primary") throw new Error("Spouse, partner, child or other guest");
   const countedOnly = country === "DE" && p.role !== "other";
   if (!countedOnly && (!p.firstName.trim() || !p.lastName.trim())) throw new Error("Give the person's name");
   if (!/^[A-Z]{2}$/.test(p.nationality.toUpperCase())) throw new Error("Give the nationality");
   if (p.dateOfBirth && !/^\d{4}-\d{2}-\d{2}$/.test(p.dateOfBirth)) throw new Error("Date of birth as a date");
+  if (country === "CH" && (!p.dateOfBirth || !/^[A-Z]{2}$/.test((p.countryOfResidence ?? "").toUpperCase()))) throw new Error("In Switzerland every guest needs a date of birth and a Country of Residence");
 }
 
 async function insertPerson(tx: PoolClient, registrationId: string, p: PersonInput): Promise<void> {
@@ -186,8 +222,8 @@ async function insertPerson(tx: PoolClient, registrationId: string, p: PersonInp
   if (!country) throw new Error("Registration not found");
   checkPerson(p, country);
   await tx.query(
-    "insert into registration_persons (registration_id, role, first_name, last_name, date_of_birth, nationality) values ($1, $2, $3, $4, $5, $6)",
-    [registrationId, p.role, p.firstName.trim().slice(0, 120), p.lastName.trim().slice(0, 120), p.dateOfBirth, p.nationality.toUpperCase()],
+    "insert into registration_persons (registration_id, role, first_name, last_name, date_of_birth, nationality, country) values ($1, $2, $3, $4, $5, $6, $7)",
+    [registrationId, p.role, p.firstName.trim().slice(0, 120), p.lastName.trim().slice(0, 120), p.dateOfBirth, p.nationality.toUpperCase(), (p.countryOfResidence ?? "").toUpperCase().slice(0, 2)],
   );
 }
 
@@ -248,6 +284,9 @@ export interface TabletPerson {
   country: string;
   documentNumber: string;
   gender: string;
+  placeOfBirth: string;
+  documentType: RegistrationPersonView["documentType"];
+  carNumber: string;
   language: string;
   step: TabletStep | "waiting";
 }
@@ -255,6 +294,10 @@ export interface TabletPerson {
 export interface TabletState {
   registrationId: string;
   country: RegistrationCountry;
+  /** How the guest confirms: signing on the tablet, at reception on paper, or not (ID Check). */
+  signature: CantonSignature;
+  /** Switzerland: the fields the canton asks beyond the federal minimum. */
+  extraFields: string[];
   propertyName: string;
   arrival: string;
   departure: string;
@@ -278,6 +321,9 @@ const tabletPerson = (p: RegistrationPersonView): TabletPerson => ({
   country: p.country,
   documentNumber: p.documentNumber,
   gender: p.gender,
+  placeOfBirth: p.placeOfBirth,
+  documentType: p.documentType,
+  carNumber: p.carNumber,
   language: p.language,
   step: p.step,
 });
@@ -294,6 +340,8 @@ export async function tabletState(pool: Pool, schema: string, deviceId: string):
     return {
       registrationId: reg.id,
       country: reg.country,
+      signature: reg.signature,
+      extraFields: reg.profile?.extraFields ?? [],
       propertyName: name,
       arrival: reg.arrival,
       departure: reg.departure,
@@ -316,6 +364,10 @@ export interface GuestDetails {
   country: string;
   documentNumber: string;
   gender: string;
+  /** Switzerland: place of birth, document type; Tessin the car's number. */
+  placeOfBirth?: string;
+  documentType?: string;
+  carNumber?: string;
 }
 
 export type TabletInput =
@@ -332,7 +384,22 @@ export type TabletInput =
 export class TabletProblem extends Error {}
 
 const NEXT: Record<"welcome" | "details" | "companions" | "review", TabletStep> = { welcome: "details", details: "companions", companions: "review", review: "done" };
-const DRAFT_COLUMNS: Record<keyof GuestDetails, string> = { firstName: "first_name", lastName: "last_name", dateOfBirth: "date_of_birth", nationality: "nationality", addressLine1: "address_line1", postalCode: "postal_code", city: "city", country: "country", documentNumber: "document_number", gender: "gender" };
+const DRAFT_COLUMNS: Record<keyof GuestDetails, string> = {
+  firstName: "first_name",
+  lastName: "last_name",
+  dateOfBirth: "date_of_birth",
+  nationality: "nationality",
+  addressLine1: "address_line1",
+  postalCode: "postal_code",
+  city: "city",
+  country: "country",
+  documentNumber: "document_number",
+  gender: "gender",
+  placeOfBirth: "place_of_birth",
+  documentType: "document_type",
+  carNumber: "car_number",
+};
+const DOCUMENT_TYPES = ["", "passport", "id_card", "other"];
 const GENDERS = ["", "f", "m", "x"];
 /** At most this many persons on one registration (a family, a small group). */
 const MAX_PERSONS = 12;
@@ -345,13 +412,21 @@ function realDate(s: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s && s > "1900-01-01";
 }
 
-function checkDetails(d: GuestDetails): void {
-  for (const k of Object.keys(DRAFT_COLUMNS) as (keyof GuestDetails)[]) if (typeof d[k] !== "string" || d[k].length > 120) throw new TabletProblem(k);
+function checkDetails(d: GuestDetails, country: RegistrationCountry): void {
+  for (const k of Object.keys(DRAFT_COLUMNS) as (keyof GuestDetails)[]) if (d[k] !== undefined && (typeof d[k] !== "string" || d[k]!.length > 120)) throw new TabletProblem(k);
   if (!d.firstName.trim()) throw new TabletProblem("firstName");
   if (!d.lastName.trim()) throw new TabletProblem("lastName");
   if (!realDate(d.dateOfBirth)) throw new TabletProblem("dateOfBirth");
   if (!/^[A-Z]{2}$/.test(d.nationality.toUpperCase())) throw new TabletProblem("nationality");
   if (!GENDERS.includes(d.gender)) throw new TabletProblem("gender");
+  if (!DOCUMENT_TYPES.includes(d.documentType ?? "")) throw new TabletProblem("documentType");
+  // the Swiss federal minimum: place of birth, document type and number, and the Country of Residence of every guest
+  if (country === "CH") {
+    if (!d.placeOfBirth?.trim()) throw new TabletProblem("placeOfBirth");
+    if (!d.documentType) throw new TabletProblem("documentType");
+    if (!d.documentNumber.trim()) throw new TabletProblem("documentNumber");
+    if (!/^[A-Z]{2}$/.test(d.country.toUpperCase())) throw new TabletProblem("country");
+  }
 }
 
 /**
@@ -370,7 +445,7 @@ export async function tabletStep(pool: Pool, schema: string, device: { id: strin
     const person = reg.persons.find((p) => p.id === personId)!;
     if (input.step === "draft") {
       if (person.step !== "details") return;
-      const entries = Object.entries(input.details ?? {}).filter(([k, v]) => k in DRAFT_COLUMNS && typeof v === "string" && v.length <= 120 && (k !== "dateOfBirth" || realDate(v)) && (k !== "gender" || GENDERS.includes(v)));
+      const entries = Object.entries(input.details ?? {}).filter(([k, v]) => k in DRAFT_COLUMNS && typeof v === "string" && v.length <= 120 && (k !== "dateOfBirth" || realDate(v)) && (k !== "gender" || GENDERS.includes(v)) && (k !== "documentType" || DOCUMENT_TYPES.includes(v)));
       if (!entries.length) return;
       await tx.query(`update registration_persons set ${entries.map(([k], i) => `${DRAFT_COLUMNS[k as keyof GuestDetails]} = $${i + 2}`).join(", ")} where id = $1`, [personId, ...entries.map(([, v]) => (v as string).trim())]);
       return;
@@ -385,11 +460,13 @@ export async function tabletStep(pool: Pool, schema: string, device: { id: strin
       await tx.query("update registration_persons set language = $2 where id = $1", [personId, input.language === "en" ? "en" : "de"]);
     } else if (input.step === "details") {
       const d = input.details;
-      checkDetails(d);
+      checkDetails(d, reg.country);
       const v = { firstName: d.firstName.trim(), lastName: d.lastName.trim(), dateOfBirth: d.dateOfBirth, nationality: d.nationality.toUpperCase(), addressLine1: d.addressLine1.trim(), postalCode: d.postalCode.trim(), city: d.city.trim(), country: d.country.trim().toUpperCase().slice(0, 2), documentNumber: d.documentNumber.trim(), gender: d.gender };
+      const ch = { placeOfBirth: (d.placeOfBirth ?? "").trim(), documentType: d.documentType ?? "", carNumber: (d.carNumber ?? "").trim() };
       await tx.query(
-        `update registration_persons set first_name = $2, last_name = $3, date_of_birth = $4, nationality = $5, address_line1 = $6, postal_code = $7, city = $8, country = $9, document_number = $10, gender = $11 where id = $1`,
-        [personId, v.firstName, v.lastName, v.dateOfBirth, v.nationality, v.addressLine1, v.postalCode, v.city, v.country, v.documentNumber, v.gender],
+        `update registration_persons set first_name = $2, last_name = $3, date_of_birth = $4, nationality = $5, address_line1 = $6, postal_code = $7, city = $8, country = $9, document_number = $10, gender = $11,
+           place_of_birth = $12, document_type = $13, car_number = $14 where id = $1`,
+        [personId, v.firstName, v.lastName, v.dateOfBirth, v.nationality, v.addressLine1, v.postalCode, v.city, v.country, v.documentNumber, v.gender, ch.placeOfBirth, ch.documentType, ch.carNumber],
       );
       // back to the guest profile, logged as changed on the tablet, with the step or not at all
       if (person.guestId) {
@@ -400,10 +477,19 @@ export async function tabletStep(pool: Pool, schema: string, device: { id: strin
       if (reg.persons.length + add.length > MAX_PERSONS) throw new TabletProblem("companions");
       for (const p of add) {
         if (!p || typeof p !== "object" || typeof p.nationality !== "string") throw new TabletProblem("companions");
-        await insertPerson(tx, reg.id, { role: p.role, firstName: String(p.firstName ?? ""), lastName: String(p.lastName ?? ""), dateOfBirth: p.dateOfBirth && realDate(String(p.dateOfBirth)) ? String(p.dateOfBirth) : null, nationality: p.nationality });
+        await insertPerson(tx, reg.id, {
+          role: p.role,
+          firstName: String(p.firstName ?? ""),
+          lastName: String(p.lastName ?? ""),
+          dateOfBirth: p.dateOfBirth && realDate(String(p.dateOfBirth)) ? String(p.dateOfBirth) : null,
+          nationality: p.nationality,
+          countryOfResidence: typeof p.countryOfResidence === "string" ? p.countryOfResidence : null,
+        }).catch((err: unknown) => {
+          throw err instanceof Error && err.message.startsWith("In Switzerland") ? new TabletProblem("companions") : err;
+        });
       }
     } else if (input.step === "review") {
-      if (reg.country === "AT") {
+      if (reg.signature === "tablet") {
         const png = input.signaturePng;
         if (!png?.length || png.length > MAX_SIGNATURE_BYTES || !PNG.every((b, i) => png[i] === b)) throw new TabletProblem("signature");
         await tx.query("update registration_persons set confirmation = 'tablet_signature', signature = $2 where id = $1", [personId, Buffer.from(png)]);
@@ -426,16 +512,16 @@ export async function recordIdCheck(pool: Pool, schema: string, personId: string
   if (!n) throw new Error("This registration is completed already");
 }
 
-/** Germany: the guest signed the printed form at the desk; the paper stays with the hotel. */
+/** The guest signed the printed form at the desk (Germany; Switzerland where the canton asks it); the paper stays with the hotel. */
 export async function confirmSignedOnPaper(pool: Pool, schema: string, personId: string, userId: string): Promise<void> {
   if (!isUuid(personId)) throw new Error("Person not found");
   await withTenant(pool, schema, async (tx) => {
-    const p = (await tx.query<{ country: string; done: boolean }>(
-      "select g.country, p.guest_done_at is not null as done from registration_persons p join registrations g on g.id = p.registration_id where p.id = $1",
+    const p = (await tx.query<{ country: RegistrationCountry; profile: CantonProfile | null; done: boolean }>(
+      "select g.country, g.profile, p.guest_done_at is not null as done from registration_persons p join registrations g on g.id = p.registration_id where p.id = $1",
       [personId],
     )).rows[0];
     if (!p) throw new Error("Person not found");
-    if (p.country !== "DE") throw new Error("In Austria the guest signs on the tablet");
+    if (registrationSignature(p.country, p.profile) !== "handwritten") throw new Error("Here the guest signs on the tablet, or the ID Check confirms");
     if ((await tx.query("select 1 from registration_persons where id = $1 and completed_at is not null", [personId])).rowCount) throw new Error("This registration is completed already");
     if (!p.done) throw new Error("The guest's part on the tablet comes first");
     await tx.query("update registration_persons set confirmation = 'paper', paper_signed_by = $2, paper_signed_at = now() where id = $1", [personId, userId]);
@@ -445,6 +531,7 @@ export async function confirmSignedOnPaper(pool: Pool, schema: string, personId:
 /** What the rendered form shows of one person. */
 export interface RegistrationDocument {
   country: RegistrationCountry;
+  profile: CantonProfile | null;
   property: { name: string; address: string };
   arrival: string;
   departure: string;
@@ -475,6 +562,7 @@ async function documentIn(tx: PoolClient, personId: string): Promise<Registratio
   return {
     reservationId: reg.reservationId,
     country: reg.country,
+    profile: reg.profile,
     property: prop,
     arrival: reg.arrival,
     departure: reg.departure,
@@ -488,7 +576,11 @@ async function documentIn(tx: PoolClient, personId: string): Promise<Registratio
 
 /** The form as it stands, rendered (for printing before signing on paper). */
 export async function renderRegistration(doc: RegistrationDocument): Promise<Uint8Array> {
-  return renderMeldescheinPdf({ ...doc, signature: doc.signature ? new Uint8Array(doc.signature) : null });
+  return renderMeldescheinPdf({
+    ...doc,
+    signature: doc.signature ? new Uint8Array(doc.signature) : null,
+    ...(doc.profile ? { canton: doc.profile.canton === "other" ? "" : doc.profile.canton, signatureMode: doc.profile.signature } : {}),
+  });
 }
 
 /** The property a registration person belongs to (to authorise before anything of theirs is read). */
@@ -501,13 +593,16 @@ export async function registrationPersonProperty(pool: Pool, schema: string, per
 export async function completeRegistrationPerson(pool: Pool, schema: string, personId: string): Promise<void> {
   if (!isUuid(personId)) throw new Error("Person not found");
   await withTenant(pool, schema, async (tx) => {
-    const p = (await tx.query<{ guest_done_at: Date | null; confirmation: "tablet_signature" | "paper" | null; id_checked_at: Date | null; completed_at: Date | null }>(
-      "select guest_done_at, confirmation, id_checked_at, completed_at from registration_persons where id = $1 for update",
+    const p = (await tx.query<{ guest_done_at: Date | null; confirmation: "tablet_signature" | "paper" | null; id_checked_at: Date | null; completed_at: Date | null; country: RegistrationCountry; profile: CantonProfile | null }>(
+      "select p.guest_done_at, p.confirmation, p.id_checked_at, p.completed_at, g.country, g.profile from registration_persons p join registrations g on g.id = p.registration_id where p.id = $1 for update of p",
       [personId],
     )).rows[0];
     if (!p) throw new Error("Person not found");
     if (p.completed_at) return;
-    if (!registrationComplete({ guestDone: p.guest_done_at !== null, confirmation: p.confirmation, idChecked: p.id_checked_at !== null })) throw new Error("Complete needs the guest's part, the signature and the ID Check");
+    const signature = registrationSignature(p.country, p.profile);
+    if (!registrationComplete({ guestDone: p.guest_done_at !== null, confirmation: p.confirmation, idChecked: p.id_checked_at !== null, signature })) {
+      throw new Error(signature === "id_check" ? "Complete needs the guest's part and the ID Check" : "Complete needs the guest's part, the signature and the ID Check");
+    }
     const pdf = await renderRegistration(await documentIn(tx, personId));
     await tx.query("update registration_persons set completed_at = now(), pdf = $2 where id = $1", [personId, Buffer.from(pdf)]);
   });
@@ -524,13 +619,90 @@ export async function registrationPdf(pool: Pool, schema: string, personId: stri
   });
 }
 
-/** The daily deletion: Germany from day 365 after departure, Austria after 7 years. Returns how many registrations went. */
+/** The daily deletion: Germany from day 365 after departure, Austria after 7 years, Switzerland as the canton's retention. Returns how many registrations went. */
 export async function deleteExpiredRegistrations(pool: Pool, schema: string, today: string): Promise<number> {
   return withTenant(pool, schema, async (tx) => {
-    const rows = (await tx.query<{ id: string; country: RegistrationCountry; departure: string }>(
-      "select g.id, g.country, to_char(r.departure, 'YYYY-MM-DD') as departure from registrations g join reservations r on r.id = g.reservation_id",
-    )).rows.filter((r) => registrationDeletionDue(r.country, r.departure, today));
+    const rows = (await tx.query<{ id: string; country: RegistrationCountry; profile: CantonProfile | null; departure: string }>(
+      "select g.id, g.country, g.profile, to_char(r.departure, 'YYYY-MM-DD') as departure from registrations g join reservations r on r.id = g.reservation_id",
+    )).rows.filter((r) => registrationDeletionDue(r.country, r.departure, today, r.profile));
     if (rows.length) await tx.query("delete from registrations where id = any($1::uuid[])", [rows.map((r) => r.id)]);
     return rows.length;
   });
+}
+
+/** The property's Canton Profile (Switzerland); null until chosen. */
+export async function cantonProfileOf(pool: Pool, schema: string, propertyId: string): Promise<CantonProfile | null> {
+  if (!isUuid(propertyId)) return null;
+  return withTenant(pool, schema, async (tx) => {
+    const v = (await tx.query<{ canton_profile: unknown }>("select canton_profile from properties where id = $1", [propertyId])).rows[0]?.canton_profile;
+    return isCantonProfile(v) ? v : null;
+  });
+}
+
+/** A Swiss property chooses or adjusts its Canton Profile; open registrations keep the one they started with. */
+export async function setCantonProfile(pool: Pool, schema: string, propertyId: string, profile: CantonProfile): Promise<void> {
+  if (!isCantonProfile(profile)) throw new Error("The Canton Profile is incomplete");
+  if (profile.transmission === "ti_export" && profile.tiUserId !== undefined && profile.tiUserId.length > 40) throw new Error("The Tessin user id is too long");
+  await withTenant(pool, schema, async (tx) => {
+    const p = (await tx.query<{ country: string }>("select country from properties where id = $1", [propertyId])).rows[0];
+    if (!p) throw new Error("Property not found");
+    if (p.country !== "CH") throw new Error("Canton Profiles are for properties in Switzerland");
+    await tx.query("update properties set canton_profile = $2 where id = $1", [propertyId, JSON.stringify(profile)]);
+  });
+}
+
+export { CANTON_PRESETS };
+
+/**
+ * Tessin's export (ticket 47): the forms of registrations completed at the
+ * property, by arrival day, as the police portal imports them: one XML per
+ * form (the published schema takes one registration a file) and one CSV for
+ * all. Persons over and under 14 count the head and those on their form.
+ */
+export async function tessinExport(pool: Pool, schema: string, propertyId: string, from: string, to: string): Promise<{ records: (TessinRecord & { personId: string; name: string })[] }> {
+  if (!isUuid(propertyId) || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error("Choose the days");
+  return withTenant(pool, schema, async (tx) => {
+    const profile = (await tx.query<{ canton_profile: unknown }>("select canton_profile from properties where id = $1", [propertyId])).rows[0]?.canton_profile;
+    if (!isCantonProfile(profile) || profile.transmission !== "ti_export") throw new Error("The export is for properties with the Tessin profile");
+    if (!profile.tiUserId?.trim()) throw new Error("Give the establishment's user id or LEAR number in the Canton Profile first");
+    const regs = (await tx.query<{ id: string }>(
+      "select g.id from registrations g join reservations r on r.id = g.reservation_id where g.property_id = $1 and g.country = 'CH' and r.arrival between $2 and $3 order by r.arrival",
+      [propertyId, from, to],
+    )).rows;
+    const records: (TessinRecord & { personId: string; name: string })[] = [];
+    for (const { id } of regs) {
+      const reg = (await viewIn(tx, "g.id = $1", id))!;
+      const ages = (p: RegistrationPersonView) => (p.dateOfBirth && p.dateOfBirth > shiftYears(reg.arrival, -14) ? "under" : "over");
+      for (const p of reg.persons.filter((x) => x.need === "own_form" && x.completed)) {
+        const group = [p, ...reg.persons.filter((x) => x.countedOn === p.id)];
+        records.push({
+          personId: p.id,
+          name: `${p.firstName} ${p.lastName}`,
+          userId: profile.tiUserId.trim(),
+          firstName: p.firstName,
+          lastName: p.lastName,
+          dateOfBirth: p.dateOfBirth ?? "",
+          nationality: p.nationality,
+          arrival: reg.arrival,
+          departure: reg.departure,
+          placeOfBirth: p.placeOfBirth,
+          street: p.addressLine1,
+          postalCode: p.postalCode,
+          city: p.city,
+          country: p.country,
+          over14: group.filter((x) => ages(x) === "over").length,
+          under14: group.filter((x) => ages(x) === "under").length,
+          documentType: p.documentType || "other",
+          documentNumber: p.documentNumber,
+          carNumber: p.carNumber,
+          reference: p.id.slice(0, 8),
+        });
+      }
+    }
+    return { records };
+  });
+}
+
+function shiftYears(day: string, years: number): string {
+  return `${Number(day.slice(0, 4)) + years}${day.slice(4)}`;
 }
