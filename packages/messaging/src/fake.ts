@@ -1,0 +1,40 @@
+import { randomUUID } from "node:crypto";
+import type { DomainStatus, MailEvent, MailMessage, MailProvider, SmsProvider } from "./provider";
+
+/** In-memory mail for tests and development without provider keys: keeps what was sent; events signed with a fixed header. */
+export class FakeMailProvider implements MailProvider {
+  readonly name = "fake-mail";
+  readonly sent: (MailMessage & { providerId: string })[] = [];
+
+  async send(message: MailMessage): Promise<{ providerId: string }> {
+    const providerId = `<fake-${randomUUID()}@mail.test>`;
+    this.sent.push({ ...message, providerId });
+    return { providerId };
+  }
+
+  verifyWebhook(headers: Record<string, string>): boolean {
+    return headers["x-fake-signature"] === "fake-signature";
+  }
+
+  parseEvent(raw: unknown): MailEvent | null {
+    const e = raw as Partial<MailEvent> | null;
+    if (!e?.id || !e.type) return null;
+    return { id: e.id, type: e.type, severity: e.severity ?? null, tenantId: e.tenantId ?? null, messageId: e.messageId ?? null, recipient: e.recipient ?? "", detail: e.detail ?? "" };
+  }
+
+  async domainStatus(domain: string): Promise<DomainStatus> {
+    // a domain under .invalid never verifies; any other does
+    const verified = !domain.endsWith(".invalid");
+    return { verified, records: [{ type: "TXT", name: `mx._domainkey.${domain}`, value: "k=rsa; p=FAKE", valid: verified }, { type: "TXT", name: domain, value: "v=spf1 include:mailgun.org ~all", valid: verified }] };
+  }
+}
+
+export class FakeSmsProvider implements SmsProvider {
+  readonly name = "fake-sms";
+  readonly sent: { to: string; text: string; sender: string; providerId: string }[] = [];
+  async send(input: { to: string; text: string; sender: string }): Promise<{ providerId: string }> {
+    const providerId = `sms-${randomUUID()}`;
+    this.sent.push({ ...input, providerId });
+    return { providerId };
+  }
+}

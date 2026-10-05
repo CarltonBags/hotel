@@ -16,6 +16,7 @@
     "@hoteloftware/domain": "workspace:*",
     "@hoteloftware/events": "workspace:*",
     "@hoteloftware/invoices": "workspace:*",
+    "@hoteloftware/messaging": "workspace:*",
     "@hoteloftware/payments": "workspace:*",
     "@hoteloftware/ui": "workspace:*",
     "better-auth": "^1.7.6",

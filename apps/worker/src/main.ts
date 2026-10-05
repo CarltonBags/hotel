@@ -2,6 +2,8 @@ import { config } from "dotenv";
 import { resolve } from "node:path";
 import { createPool } from "@hoteloftware/db";
 import { paymentProvider } from "@hoteloftware/payments";
+import { mailProvider, smsProvider } from "@hoteloftware/messaging";
+import { mailProcessor, mailWebhookSource, MAIL_SOURCE } from "./messaging";
 import { paymentProcessor, paymentWebhookSource } from "./payments";
 import { queueHealthy, startQueue } from "./queue";
 import { startWorkerServer } from "./server";
@@ -26,10 +28,15 @@ const port = Number(process.env.WORKER_PORT ?? 8080);
 
 // Stripe with STRIPE_SECRET_KEY, else the in-memory fake (development only)
 const provider = paymentProvider();
+// Mailgun EU with MAILGUN_API_KEY and seven.io with SEVEN_API_KEY, else in-memory fakes (development only)
+const mail = mailProvider();
+const sms = smsProvider();
+const platformDomain = process.env.MAIL_FROM_DOMAIN ?? process.env.MAILGUN_DOMAIN ?? "mail.hoteloftware.test";
 const boss = await startQueue(pool, directUrl, {
   tenantCheckCron: process.env.TENANT_CHECK_CRON ?? null,
-  providerProcessors: { [provider.name]: paymentProcessor(provider) },
+  providerProcessors: { [provider.name]: paymentProcessor(provider), [MAIL_SOURCE]: mailProcessor(mail) },
   paymentProvider: provider,
+  messaging: { mail, sms, platformDomain },
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });
 const allowOrigin = process.env.WORKER_ALLOW_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "*");
@@ -42,7 +49,7 @@ const server = await startWorkerServer({
   queue,
   allowOrigin,
   testWebhookSecret: process.env.WEBHOOK_TEST_SECRET,
-  sources: [paymentWebhookSource(provider)],
+  sources: [paymentWebhookSource(provider), mailWebhookSource(mail)],
 });
 console.log(`worker up on :${server.port} (health /health, events /events, webhooks /webhooks/<source>)`);
 

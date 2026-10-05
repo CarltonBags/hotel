@@ -1,12 +1,12 @@
 import type { Pool } from "pg";
-import { claimIncidentsToAlert, listTenantUsers, queueMail } from "@hoteloftware/db";
+import { claimIncidentsToAlert, listTenantUsers } from "@hoteloftware/db";
 import { canAtAnyProperty } from "@hoteloftware/domain";
-import { publishNotification } from "@hoteloftware/events";
+import { alertStaff } from "./alerts";
 
 /**
  * An outage on our side (ticket 86): a major incident reported on the status
- * page reaches every customer's Property Managers in the app and by email
- * (queued; SMS comes with the messaging provider). Each incident is claimed
+ * page reaches every customer's Property Managers in the app, by email and
+ * by SMS per their alert settings. Each incident is claimed
  * before alerting, so a retry never alerts twice; one tenant failing does
  * not keep the others from hearing.
  */
@@ -19,11 +19,14 @@ export async function alertMajorIncidents(pool: Pool, options: { platformSlug: s
     for (const t of tenants) {
       try {
         const managers = (await listTenantUsers(pool, t.id)).filter((u) => !u.pendingInvitation && canAtAnyProperty({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "manage_downtime"));
-        for (const u of managers) {
-          await publishNotification(pool, { tenantId: t.id, userId: u.id, kind: "service.outage", title: `Service outage: ${incident.title}`, body: incident.message, href: "/catch-up" });
-          await queueMail(pool, t.schema_name, { tenantId: t.id, toUserId: u.id, subject: `Hoteloftware outage: ${incident.title}`, body: `${incident.message}\n\nStatus: ${options.statusUrl}\nAfterwards, enter what happened on paper under "Catch-up after outage".` });
-          n++;
-        }
+        await alertStaff(pool, { id: t.id, schemaName: t.schema_name }, managers, {
+          kind: "service.outage",
+          title: `Hoteloftware outage: ${incident.title}`,
+          body: `${incident.message}\n\nStatus: ${options.statusUrl}\nAfterwards, enter what happened on paper under "Catch-up after outage".`,
+          href: "/catch-up",
+          propertyId: null,
+        });
+        n += managers.length;
       } catch (err) {
         console.error(`[outage] alerting ${t.slug} failed`, err);
       }

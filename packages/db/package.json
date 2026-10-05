@@ -20,6 +20,7 @@
   "dependencies": {
     "@hoteloftware/domain": "workspace:*",
     "@hoteloftware/invoices": "workspace:*",
+    "@hoteloftware/messaging": "workspace:*",
     "@hoteloftware/payments": "workspace:*",
     "drizzle-orm": "^0.45.3",
     "fflate": "^0.8.3",

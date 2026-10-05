@@ -10,6 +10,8 @@ import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
 import { alertMajorIncidents } from "./outage-alert";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
+import { runMessaging } from "./messaging";
+import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
 
 export const QUEUES = {
   webhook: WEBHOOK_QUEUE,
@@ -32,6 +34,9 @@ export const QUEUES = {
   subscriptionBilling: "subscription.billing",
   /** Every minute: a major incident on our side alerts the customers' Property Managers (ticket 86). */
   outageAlerts: "status.outage_alerts",
+  /** Every minute: guest messages derived and sent, staff mail and SMS sent, one job per tenant (ticket 39). */
+  messagingAll: "messaging.all",
+  messaging: "messaging",
 } as const;
 
 /**
@@ -46,6 +51,8 @@ export interface QueueOptions {
   providerProcessors?: Record<string, ProviderProcessor>;
   /** The payment provider, for the Card Hold check. */
   paymentProvider?: PaymentProvider;
+  /** Mail and SMS providers, and the platform's sending domain, for messages and alerts. */
+  messaging?: { mail: MailProvider; sms: SmsProvider; platformDomain: string };
 }
 
 export async function startQueue(pool: Pool, connectionString: string, options: QueueOptions = {}): Promise<PgBoss> {
@@ -182,6 +189,23 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     if (n) console.log(`[outage] ${n} Property Manager(s) alerted`);
   });
   await boss.schedule(QUEUES.outageAlerts, "* * * * *", {}, { tz: "Europe/Berlin" });
+
+  const messaging = options.messaging;
+  if (messaging) {
+    await boss.work<TenantJobData>(QUEUES.messaging, async (jobs) => {
+      for (const job of jobs) {
+        const tenant = await findTenantById(pool, job.data.tenantId);
+        if (!tenant) continue;
+        const r = await runMessaging(pool, tenant, messaging, messaging.platformDomain);
+        if (r.queued || r.sent || r.failed) console.log(`[messaging] ${tenant.slug}: queued ${r.queued}, sent ${r.sent}, failed ${r.failed}`);
+      }
+    });
+    await boss.work(QUEUES.messagingAll, async () => {
+      const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+      for (const t of rows) await boss.send(QUEUES.messaging, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `messaging:${t.id}`, singletonSeconds: 50 });
+    });
+    await boss.schedule(QUEUES.messagingAll, "* * * * *", {}, { tz: "Europe/Berlin" });
+  }
 
   await boss.work(QUEUES.subscriptionBilling, async () => {
     // trials and Test Mode are not billed; a failing tenant does not stop the others

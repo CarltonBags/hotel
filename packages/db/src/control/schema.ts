@@ -116,7 +116,13 @@ export const userPreferences = control.table("user_preferences", {
   quickAccess: jsonb("quick_access"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   floorLanguage: text("floor_language"),
-}, (t) => [check("user_preferences_floor_language_check", sql`${t.floorLanguage} in ('de', 'en', 'pl', 'ro', 'bg', 'hr', 'hu', 'tr', 'uk', 'ar')`)]);
+  alertEmail: boolean("alert_email").notNull().default(true),
+  alertSms: boolean("alert_sms").notNull().default(false),
+  alertPhone: text("alert_phone"),
+}, (t) => [
+  check("user_preferences_floor_language_check", sql`${t.floorLanguage} in ('de', 'en', 'pl', 'ro', 'bg', 'hr', 'hu', 'tr', 'uk', 'ar')`),
+  check("user_preferences_alert_phone_check", sql`${t.alertPhone} ~ '^\\+[1-9][0-9]{6,14}$'`),
+]);
 
 export const userWorkspace = control.table(
   "user_workspace",
