@@ -225,28 +225,26 @@ export async function createRoomBlockIn(tx: PoolClient, input: { roomId: string;
   if (input.to <= input.from) throw new Error("A block lasts at least one night");
   const reason = input.reason.trim().slice(0, 300);
   if (!reason) throw new Error("A Room Block needs a reason");
-  {
-    const room = (await tx.query<{ property_id: string }>("select property_id from rooms where id = $1", [input.roomId])).rows[0];
-    if (!room) throw new Error("Room not found");
-    // availability changes: the property lock first, as for every reservation writer
-    await lockProperty(tx, room.property_id);
-    if (!can(viewer.actor, BLOCK_RIGHT[input.kind], room.property_id)) throw new Error("Not allowed to set this Room Block");
-    const { businessDate } = await businessDateOf(tx, room.property_id);
-    if (input.from < businessDate) throw new Error("A block starts on the Business Date or later");
-    const overlap = (await tx.query(`select 1 from room_blocks b where b.room_id = $1 and ${blockOn("b", "$2", "$3")}`, [input.roomId, input.from, input.to])).rows.length;
-    if (overlap) throw new Error("The room is already blocked on some of those nights");
-    const { rows } = await tx.query<{ id: string }>(
-      "insert into room_blocks (property_id, room_id, kind, from_date, to_date, reason, created_by) values ($1, $2, $3, $4, $5, $6, $7) returning id",
-      [room.property_id, input.roomId, input.kind, input.from, input.to, reason, viewer.userId],
-    );
-    const conflicts = (await tx.query<{ reservation_id: string; confirmation_number: string; guest: string; from_date: string; to_date: string }>(
-      `select r.id as reservation_id, b.confirmation_number, g.last_name as guest, to_char(a.from_date, 'YYYY-MM-DD') as from_date, to_char(a.to_date, 'YYYY-MM-DD') as to_date
-       from room_assignments a join reservations r on r.id = a.reservation_id join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id
-       where a.room_id = $1 and a.from_date < $3 and a.to_date > $2 and r.status in ('confirmed', 'checked_in') order by a.from_date`,
-      [input.roomId, input.from, input.to],
-    )).rows.map((c) => ({ reservationId: c.reservation_id, confirmationNumber: c.confirmation_number, guestName: c.guest, from: c.from_date, to: c.to_date }));
-    return { id: rows[0]!.id, conflicts };
-  }
+  const room = (await tx.query<{ property_id: string }>("select property_id from rooms where id = $1", [input.roomId])).rows[0];
+  if (!room) throw new Error("Room not found");
+  // availability changes: the property lock first, as for every reservation writer
+  await lockProperty(tx, room.property_id);
+  if (!can(viewer.actor, BLOCK_RIGHT[input.kind], room.property_id)) throw new Error("Not allowed to set this Room Block");
+  const { businessDate } = await businessDateOf(tx, room.property_id);
+  if (input.from < businessDate) throw new Error("A block starts on the Business Date or later");
+  const overlap = (await tx.query(`select 1 from room_blocks b where b.room_id = $1 and ${blockOn("b", "$2", "$3")}`, [input.roomId, input.from, input.to])).rows.length;
+  if (overlap) throw new Error("The room is already blocked on some of those nights");
+  const { rows } = await tx.query<{ id: string }>(
+    "insert into room_blocks (property_id, room_id, kind, from_date, to_date, reason, created_by) values ($1, $2, $3, $4, $5, $6, $7) returning id",
+    [room.property_id, input.roomId, input.kind, input.from, input.to, reason, viewer.userId],
+  );
+  const conflicts = (await tx.query<{ reservation_id: string; confirmation_number: string; guest: string; from_date: string; to_date: string }>(
+    `select r.id as reservation_id, b.confirmation_number, g.last_name as guest, to_char(a.from_date, 'YYYY-MM-DD') as from_date, to_char(a.to_date, 'YYYY-MM-DD') as to_date
+     from room_assignments a join reservations r on r.id = a.reservation_id join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id
+     where a.room_id = $1 and a.from_date < $3 and a.to_date > $2 and r.status in ('confirmed', 'checked_in') order by a.from_date`,
+    [input.roomId, input.from, input.to],
+  )).rows.map((c) => ({ reservationId: c.reservation_id, confirmationNumber: c.confirmation_number, guestName: c.guest, from: c.from_date, to: c.to_date }));
+  return { id: rows[0]!.id, conflicts };
 }
 
 /** End a block early (from tonight on the room is unblocked); a block in force leaves the room Dirty. */
@@ -256,19 +254,17 @@ export async function endRoomBlock(pool: Pool, schema: string, blockId: string, 
 
 export async function endRoomBlockIn(tx: PoolClient, blockId: string, viewer: Viewer): Promise<void> {
   if (!isUuid(blockId)) throw new Error("Block not found");
-  {
-    const owner = (await tx.query<{ property_id: string }>("select property_id from room_blocks where id = $1", [blockId])).rows[0];
-    if (!owner) throw new Error("Block not found");
-    await lockProperty(tx, owner.property_id);
-    const b = (await tx.query<BlockRow & { property_id: string }>(`select ${BLOCK_COLUMNS}, property_id from room_blocks where id = $1 for update`, [blockId])).rows[0]!;
-    if (!can(viewer.actor, BLOCK_RIGHT[b.kind], b.property_id)) throw new Error("Not allowed to end this Room Block");
-    const { businessDate } = await businessDateOf(tx, b.property_id);
-    if (b.to_date <= businessDate || b.to_date === b.from_date) throw new Error("The block has already ended");
-    // a block not begun yet is cancelled; one in force ends tonight
-    const end = b.from_date > businessDate ? b.from_date : businessDate;
-    await tx.query("update room_blocks set to_date = $2, ended_at = clock_timestamp(), ended_by = $3 where id = $1", [blockId, end, viewer.userId]);
-    if (b.from_date <= businessDate) await markDirty(tx, [b.room_id], "block_end", viewer.userId);
-  }
+  const owner = (await tx.query<{ property_id: string }>("select property_id from room_blocks where id = $1", [blockId])).rows[0];
+  if (!owner) throw new Error("Block not found");
+  await lockProperty(tx, owner.property_id);
+  const b = (await tx.query<BlockRow & { property_id: string }>(`select ${BLOCK_COLUMNS}, property_id from room_blocks where id = $1 for update`, [blockId])).rows[0]!;
+  if (!can(viewer.actor, BLOCK_RIGHT[b.kind], b.property_id)) throw new Error("Not allowed to end this Room Block");
+  const { businessDate } = await businessDateOf(tx, b.property_id);
+  if (b.to_date <= businessDate || b.to_date === b.from_date) throw new Error("The block has already ended");
+  // a block not begun yet is cancelled; one in force ends tonight
+  const end = b.from_date > businessDate ? b.from_date : businessDate;
+  await tx.query("update room_blocks set to_date = $2, ended_at = clock_timestamp(), ended_by = $3 where id = $1", [blockId, end, viewer.userId]);
+  if (b.from_date <= businessDate) await markDirty(tx, [b.room_id], "block_end", viewer.userId);
 }
 
 /** Give a room's Housekeeping Task of the Business Date to a Housekeeper (null: unassigned); the caller checked the assignee is one at the property. */

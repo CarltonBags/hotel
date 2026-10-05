@@ -74,8 +74,23 @@ export class S3FileStore implements FileStore {
     if (!res.ok && res.status !== 404) throw new Error(`Storage did not delete the file (${res.status})`);
   }
 
-  /** A presigned GET (query-string SigV4). */
-  signedUrl(key: string, seconds: number, now = new Date()): string {
+  /** Every object under a prefix, listed a page at a time (ListObjectsV2), each deleted. */
+  async deletePrefix(prefix: string): Promise<number> {
+    let n = 0;
+    for (;;) {
+      const url = this.signedUrl("", 60, new Date(), { "list-type": "2", prefix, "max-keys": "1000" });
+      const res = await this.fetcher(url, { signal: AbortSignal.timeout(60_000) });
+      if (!res.ok) throw new Error(`Storage did not list the files (${res.status})`);
+      const keys = [...(await res.text()).matchAll(/<Key>([^<]+)<\/Key>/g)].map((m) => m[1]!.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">"));
+      if (!keys.length) return n;
+      for (const key of keys) await this.delete(key);
+      n += keys.length;
+    }
+  }
+
+  /** A presigned GET (query-string SigV4); with extra query parameters for a bucket listing. */
+  signedUrl(key: string, seconds: number, now = new Date(), extra: Record<string, string> = {}): string {
+    // an empty key is the bucket itself, for a listing
     const t = this.target(key);
     const date = amzDate(now);
     const day = date.slice(0, 8);
@@ -86,6 +101,7 @@ export class S3FileStore implements FileStore {
       ["X-Amz-Date", date],
       ["X-Amz-Expires", String(seconds)],
       ["X-Amz-SignedHeaders", "host"],
+      ...Object.entries(extra),
     ];
     const query = params.map(([k, v]) => `${enc(k)}=${enc(v)}`).sort().join("&");
     const canonical = ["GET", t.path, query, `host:${t.host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");

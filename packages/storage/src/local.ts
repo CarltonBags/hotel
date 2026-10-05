@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { FileStore } from "./store";
 
@@ -33,6 +33,13 @@ export class LocalFileStore implements FileStore {
 
   async delete(key: string): Promise<void> {
     await rm(this.path(key), { force: true });
+  }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    const dir = this.path(prefix.replace(/\/$/, ""));
+    const files = (await readdir(dir, { recursive: true, withFileTypes: true }).catch(() => [])).filter((e) => e.isFile());
+    await rm(dir, { recursive: true, force: true });
+    return files.length;
   }
 
   signedUrl(): null {

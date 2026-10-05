@@ -8,7 +8,7 @@ export { S3FileStore, type S3Config } from "./s3";
 export { LocalFileStore } from "./local";
 export { ClamdScanner, FakeScanner, type VirusScanner } from "./scan";
 
-/** The file store of this process: the EU bucket when S3_BUCKET is set, else a local directory (refused in production). */
+/** The file store of this process: the EU bucket when S3_BUCKET is set, else a local directory (refused in production). One per process: the first call's environment decides. */
 export function fileStore(env: NodeJS.ProcessEnv = process.env): FileStore {
   const g = globalThis as { __hsFiles?: FileStore };
   if (g.__hsFiles) return g.__hsFiles;
@@ -21,6 +21,11 @@ export function fileStore(env: NodeJS.ProcessEnv = process.env): FileStore {
     g.__hsFiles = new LocalFileStore(env.FILES_DIR ?? `${process.cwd()}/../../.files`);
   }
   return g.__hsFiles;
+}
+
+/** Store and scanner together, as an upload needs them. */
+export function fileServices(env: NodeJS.ProcessEnv = process.env): { store: FileStore; scanner: VirusScanner } {
+  return { store: fileStore(env), scanner: virusScanner(env) };
 }
 
 /** The virus scanner: ClamAV at CLAMD_HOST, else the fake (refused in production). */

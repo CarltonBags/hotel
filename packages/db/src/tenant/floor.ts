@@ -3,7 +3,7 @@ import { HOUSEKEEPING_NOTE_CODES, can, cleanlinessScope, type HousekeepingNoteCo
 import { isUuid } from "./catalogue-common";
 import { postServiceChargeIn } from "./folios";
 import { TaskChangedMeanwhile, workHousekeepingTaskIn } from "./housekeeping";
-import { fixIssueIn, reportIssueIn, seesIssues, takeIssueIn, type FixedIssue } from "./maintenance";
+import { blockNotOver, fixIssueIn, reportIssueIn, seesIssues, takeIssueIn, type FixedIssue } from "./maintenance";
 import type { Viewer } from "./room-state";
 import { withTenant } from "./with-tenant";
 
@@ -133,7 +133,7 @@ async function openIssues(tx: PoolClient, propertyId: string, businessDate: stri
   const { rows } = await tx.query<{ id: string; number: string | null; place: string; pick: ProblemPick; urgency: Urgency; note: string; status: "open" | "in_progress"; reported_by: string; reported_at: Date; taken_by: string | null; has_photo: boolean; block: FloorIssue["block"] }>(
     `select i.id, m.number, i.place, i.pick, i.urgency, i.note, i.status, i.reported_by, i.reported_at, i.taken_by, (i.photo is not null or i.photo_file_id is not null) as has_photo,
        -- the issue's own Room Block in force: fixing asks whether to end it
-       (select b.kind from room_blocks b where b.id = i.block_id and b.from_date <= $2 and b.to_date > $2) as block
+       (select b.kind from room_blocks b where b.id = i.block_id and ${blockNotOver("b", "$2")}) as block
      from maintenance_issues i left join rooms m on m.id = i.room_id
      where i.property_id = $1 and i.status <> 'done'
      order by case i.urgency when 'now' then 0 when 'today' then 1 else 2 end, i.reported_at`,
@@ -144,18 +144,18 @@ async function openIssues(tx: PoolClient, propertyId: string, businessDate: stri
 
 export type PhoneChangeOutcome = { outcome: "applied" | "conflict" | "refused"; message: string; fixed?: FixedIssue };
 
-/**
- * Apply a change a phone sent, once: the same change sent again (a retry
- * after a lost answer) returns the first outcome. A change to a task the
- * supervisor changed since the phone saw it is not applied (supervisor
- * wins) and the outcome says so; any other refusal says why.
- */
 /** Whether a change was received before (sent again from the phone). */
 export async function phoneChangeSeen(pool: Pool, schema: string, id: string): Promise<boolean> {
   if (!isUuid(id)) return false;
   return withTenant(pool, schema, async (tx) => (await tx.query("select 1 from phone_changes where id = $1", [id])).rows.length > 0);
 }
 
+/**
+ * Apply a change a phone sent, once: the same change sent again (a retry
+ * after a lost answer) returns the first outcome. A change to a task the
+ * supervisor changed since the phone saw it is not applied (supervisor
+ * wins) and the outcome says so; any other refusal says why.
+ */
 export async function applyPhoneChange(pool: Pool, schema: string, propertyId: string, op: PhoneOp, viewer: Viewer): Promise<PhoneChangeOutcome> {
   return withTenant(pool, schema, async (tx) => {
     const claimed = await tx.query(
@@ -193,7 +193,8 @@ async function roomAt(tx: PoolClient, roomId: string, propertyId: string): Promi
   return room;
 }
 
-function decodePhoto(photo: string | undefined): { bytes: Buffer | null; type: string | null } {
+/** A photo the phone sent as a data URL: its bytes and type. */
+export function decodePhoto(photo: string | undefined): { bytes: Buffer | null; type: string | null } {
   if (!photo) return { bytes: null, type: null };
   const [head, data = ""] = photo.split(",");
   return { bytes: Buffer.from(data, "base64"), type: head!.slice(5, head!.indexOf(";")) };

@@ -24,4 +24,16 @@ describe("S3 signing", () => {
     expect(h["x-amz-server-side-encryption"]).toBe("AES256");
     expect(h.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=AK\/\d{8}\/eu-central-1\/s3\/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-server-side-encryption, Signature=[0-9a-f]{64}$/);
   });
+
+  it("deletes everything under a tenant's prefix, page by page", async () => {
+    const urls: string[] = [];
+    let listed = 0;
+    const store = new S3FileStore({ endpoint: "https://s3.eu.example", region: "eu-central-1", bucket: "hs-files", accessKeyId: "AK", secretAccessKey: "SK", pathStyle: true }, (async (url: string, init?: RequestInit) => {
+      urls.push(`${init?.method ?? "GET"} ${url.split("?")[0]}${url.includes("list-type") ? "?list" : ""}`);
+      if (url.includes("list-type=2")) return new Response(listed++ === 0 ? "<ListBucketResult><Contents><Key>t1/issue_photo/a</Key></Contents><Contents><Key>t1/fix_photo/b</Key></Contents></ListBucketResult>" : "<ListBucketResult></ListBucketResult>", { status: 200 });
+      return new Response(null, { status: 204 });
+    }) as typeof fetch);
+    expect(await store.deletePrefix("t1/")).toBe(2);
+    expect(urls).toEqual(["GET https://s3.eu.example/hs-files/?list", "DELETE https://s3.eu.example/hs-files/t1/issue_photo/a", "DELETE https://s3.eu.example/hs-files/t1/fix_photo/b", "GET https://s3.eu.example/hs-files/?list"]);
+  });
 });

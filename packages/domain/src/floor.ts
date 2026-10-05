@@ -57,9 +57,6 @@ export type PhoneOp = { id: string; at: string } & (
   | { kind: "issue"; issueId: string; step: "take" | "fixed"; note: string; endBlock?: boolean | undefined; photo?: string | undefined; photoFileId?: string | undefined }
 );
 
-/** Maintenance photos are kept a year after the issue is fixed (ticket 36). */
-export const ISSUE_PHOTO_DAYS = 365;
-
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TASK_STEPS = ["start", "done", "undo", "declined", "dnd"] as const;
 /** A photo as a data URL of a JPEG or PNG, at most about 1.5 MB (the phone shrinks it to a few hundred KB). */

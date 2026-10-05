@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { ISSUE_PHOTO_DAYS, PROBLEM_PICKS, URGENCIES, addDays, can, type ProblemPick, type Urgency } from "@hoteloftware/domain";
+import { ISSUE_PHOTO_DAYS, PROBLEM_PICKS, URGENCIES, addDays, can, type ProblemPick, type RoomBlockKind, type Urgency } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
 import { fileIn, setFileRetention, type FileKind, type StoredFile } from "./files";
 import { createRoomBlockIn, endRoomBlockIn, type Viewer } from "./room-state";
@@ -22,8 +22,18 @@ export interface IssueReport {
   note: string;
   photoFileId: string | null;
   /** Take the room out from tonight for this many nights. */
-  block: { kind: "out_of_order" | "out_of_service"; nights: number } | null;
+  block: { kind: RoomBlockKind; nights: number } | null;
 }
+
+/** What the fixer gives: a note, a photo, and with a Room Block not over whether to end it. */
+export interface IssueFix {
+  note: string;
+  photoFileId: string | null;
+  endBlock: boolean;
+}
+
+/** A Room Block not over yet (in force, or still to begin) on a date: fixing the issue offers to end it. */
+export const blockNotOver = (b: string, date: string) => `(${b}.to_date > ${date} and ${b}.to_date > ${b}.from_date)`;
 
 /** The issue rights: who sees and works the queue. */
 export function seesIssues(viewer: Viewer, propertyId: string): boolean {
@@ -84,44 +94,44 @@ export async function takeIssueIn(tx: PoolClient, propertyId: string, issueId: s
 export interface FixedIssue {
   issueId: string;
   reportedBy: string;
-  what: string;
+  roomNumber: string | null;
+  place: string;
+  pick: ProblemPick;
 }
 
 /**
  * Mark fixed, with note and photo. With a Room Block in force the fixer
  * decides: end it (the room turns Dirty) or keep it. Photos are kept a year.
  */
-export async function fixIssueIn(tx: PoolClient, propertyId: string, issueId: string, input: { note: string; photoFileId: string | null; endBlock: boolean }, viewer: Viewer, at = new Date()): Promise<FixedIssue> {
+export async function fixIssueIn(tx: PoolClient, propertyId: string, issueId: string, input: IssueFix, viewer: Viewer, at = new Date()): Promise<FixedIssue> {
   const issue = await lockedIssue(tx, propertyId, issueId, viewer);
   const photo = await ownUpload(tx, input.photoFileId, "fix_photo", propertyId, viewer);
   let decision: "ended" | "kept" | null = null;
   if (issue.block_id) {
-    const inForce = (
-      await tx.query("select 1 from room_blocks b join properties p on p.id = b.property_id where b.id = $1 and b.to_date > p.business_date and b.to_date > b.from_date", [issue.block_id])
-    ).rows.length;
-    if (inForce) {
+    const notOver = (await tx.query(`select 1 from room_blocks b join properties p on p.id = b.property_id where b.id = $1 and ${blockNotOver("b", "p.business_date")}`, [issue.block_id])).rows.length;
+    if (notOver) {
       if (input.endBlock) await endRoomBlockIn(tx, issue.block_id, viewer);
       decision = input.endBlock ? "ended" : "kept";
     }
   }
-  const { rows } = await tx.query<{ reported_by: string; what: string; d: string }>(
+  const { rows } = await tx.query<{ reported_by: string; room_number: string | null; place: string; pick: ProblemPick; d: string }>(
     `update maintenance_issues i set status = 'done', fixed_at = $2, fixed_by = $3, fix_note = $4, fix_photo_file_id = $5, block_decision = $6,
             taken_by = coalesce(taken_by, $3), taken_at = coalesce(taken_at, $2)
      where id = $1
-     returning reported_by, coalesce((select 'Room ' || r.number from rooms r where r.id = i.room_id), i.place) || ' · ' || i.pick as what,
+     returning reported_by, (select r.number from rooms r where r.id = i.room_id) as room_number, place, pick,
                to_char((select business_date from properties where id = i.property_id), 'YYYY-MM-DD') as d`,
     [issueId, at, viewer.userId, input.note.trim().slice(0, 1000), photo, decision],
   );
   const r = rows[0]!;
   await setFileRetention(tx, [issue.photo_file_id, photo], addDays(r.d, ISSUE_PHOTO_DAYS));
-  return { issueId, reportedBy: r.reported_by, what: r.what };
+  return { issueId, reportedBy: r.reported_by, roomNumber: r.room_number, place: r.place, pick: r.pick };
 }
 
 export async function takeIssue(pool: Pool, schema: string, propertyId: string, issueId: string, viewer: Viewer): Promise<void> {
   await withTenant(pool, schema, (tx) => takeIssueIn(tx, propertyId, issueId, viewer));
 }
 
-export async function fixIssue(pool: Pool, schema: string, propertyId: string, issueId: string, input: { note: string; photoFileId: string | null; endBlock: boolean }, viewer: Viewer): Promise<FixedIssue> {
+export async function fixIssue(pool: Pool, schema: string, propertyId: string, issueId: string, input: IssueFix, viewer: Viewer): Promise<FixedIssue> {
   return withTenant(pool, schema, (tx) => fixIssueIn(tx, propertyId, issueId, input, viewer));
 }
 
@@ -144,7 +154,8 @@ export interface IssueRow {
   fixPhotoFileId: string | null;
   /** An old photo kept in the database (before file storage). */
   legacyPhoto: boolean;
-  block: { id: string; kind: "out_of_order" | "out_of_service"; until: string; inForce: boolean } | null;
+  /** The issue's Room Block; `notOver` while it is in force or still to begin. */
+  block: { id: string; kind: RoomBlockKind; until: string; notOver: boolean } | null;
   blockDecision: "ended" | "kept" | null;
 }
 
@@ -155,7 +166,7 @@ export async function listIssues(pool: Pool, schema: string, propertyId: string,
     const { rows } = await tx.query(
       `select i.id, i.room_id, m.number, i.place, i.pick, i.urgency, i.note, i.status, i.reported_by, i.reported_at, i.taken_by, i.fixed_by, i.fixed_at, i.fix_note,
               i.photo_file_id, i.fix_photo_file_id, i.photo is not null as legacy_photo, i.block_decision,
-              b.id as block_id, b.kind as block_kind, to_char(b.to_date, 'YYYY-MM-DD') as block_until, (b.to_date > p.business_date and b.to_date > b.from_date) as block_in_force
+              b.id as block_id, b.kind as block_kind, to_char(b.to_date, 'YYYY-MM-DD') as block_until, ${blockNotOver("b", "p.business_date")} as block_not_over
        from maintenance_issues i join properties p on p.id = i.property_id left join rooms m on m.id = i.room_id left join room_blocks b on b.id = i.block_id
        where i.property_id = $1 and ${which === "open" ? "i.status <> 'done'" : "i.status = 'done'"}
        order by ${which === "open" ? "case i.urgency when 'now' then 0 when 'today' then 1 else 2 end, i.reported_at" : "i.fixed_at desc"}
@@ -180,7 +191,7 @@ export async function listIssues(pool: Pool, schema: string, propertyId: string,
       photoFileId: r.photo_file_id,
       fixPhotoFileId: r.fix_photo_file_id,
       legacyPhoto: r.legacy_photo,
-      block: r.block_id ? { id: r.block_id, kind: r.block_kind, until: r.block_until, inForce: r.block_in_force } : null,
+      block: r.block_id ? { id: r.block_id, kind: r.block_kind, until: r.block_until, notOver: r.block_not_over } : null,
       blockDecision: r.block_decision,
     }));
   });

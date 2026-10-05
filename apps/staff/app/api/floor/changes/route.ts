@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
 import { DEVICE_COOKIE, changeKeyUser, deviceByToken } from "@hoteloftware/auth";
-import { applyPhoneChange, loadActor, phoneChangeSeen, storeFile, type PhoneChangeOutcome } from "@hoteloftware/db";
-import { fileStore, virusScanner } from "@hoteloftware/storage";
-import { parsePhoneOp } from "@hoteloftware/domain";
+import { FileRefused, applyPhoneChange, decodePhoto, loadActor, phoneChangeSeen, storeFile, type PhoneChangeOutcome } from "@hoteloftware/db";
+import { fileServices } from "@hoteloftware/storage";
+import { can, parsePhoneOp } from "@hoteloftware/domain";
 import { pool } from "@/lib/db";
 import { floorContext } from "@/lib/floor";
 import { notifyFixed } from "@/lib/maintenance";
@@ -51,27 +51,27 @@ export async function POST(request: Request): Promise<Response> {
       results.push({ id, outcome: "refused", message: err instanceof Error ? err.message : "Bad change" });
       continue;
     }
-    try {
-      // a Maintenance photo goes to file storage first (virus scan, tenant prefix); a change sent again keeps its first photo
-      if ((op.kind === "problem" || op.kind === "issue") && op.photo && !(await phoneChangeSeen(pool(), tenant.schemaName, op.id))) {
-        const [head, data = ""] = op.photo.split(",");
-        try {
-          op.photoFileId = await storeFile(pool(), tenant.schemaName, { store: fileStore(), scanner: virusScanner() }, {
-            tenantId: tenant.id,
-            kind: op.kind === "problem" ? "issue_photo" : "fix_photo",
-            bytes: Buffer.from(data, "base64"),
-            contentType: head!.slice(5, head!.indexOf(";")),
-            propertyId,
-            userId,
-          });
-        } catch (err) {
-          results.push({ id, outcome: "refused", message: err instanceof Error ? err.message : "Photo not kept" });
-          continue;
+    let photoNote = "";
+    // a Maintenance photo goes to file storage first (virus scan, tenant prefix): from someone who may report or fix, once per change
+    const photoKind = op.kind === "problem" ? "issue_photo" : op.kind === "issue" && op.step === "fixed" ? "fix_photo" : null;
+    const photoRight = photoKind === "issue_photo" ? "report_maintenance_issues" : "work_maintenance";
+    if (photoKind && (op.kind === "problem" || op.kind === "issue") && op.photo && can(actor, photoRight, propertyId) && !(await phoneChangeSeen(pool(), tenant.schemaName, op.id))) {
+      const photo = decodePhoto(op.photo);
+      try {
+        op.photoFileId = await storeFile(pool(), tenant.schemaName, fileServices(), { tenantId: tenant.id, kind: photoKind, bytes: new Uint8Array(photo.bytes!), contentType: photo.type!, propertyId, userId });
+      } catch (err) {
+        // the photo itself refused: the report or fix is kept without it; scanning or storage down: the phone keeps the batch and sends it again
+        if (!(err instanceof FileRefused)) {
+          console.error(err);
+          return new Response(null, { status: 503, headers: { "retry-after": "60" } });
         }
+        photoNote = ` (without the photo: ${err.message})`;
       }
+    }
+    try {
       const outcome = await applyPhoneChange(pool(), tenant.schemaName, propertyId, op, { userId, actor });
       if (outcome.fixed) await notifyFixed(tenant, outcome.fixed);
-      results.push({ id, outcome: outcome.outcome, message: outcome.message });
+      results.push({ id, outcome: outcome.outcome, message: outcome.message + (outcome.outcome === "applied" ? photoNote : "") });
     } catch (err) {
       // a database failure on one change must not hold back the others or be retried for ever
       console.error(err);
@@ -80,4 +80,3 @@ export async function POST(request: Request): Promise<Response> {
   }
   return Response.json({ results }, { headers: { "cache-control": "no-store" } });
 }
-

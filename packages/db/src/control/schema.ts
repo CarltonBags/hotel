@@ -458,6 +458,7 @@ export const tenantDeletions = control.table("tenant_deletions", {
   endedReason: text("ended_reason"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull().defaultNow(),
   deletedBy: text("deleted_by").notNull(),
+  filesDeletedAt: timestamp("files_deleted_at", { withTimezone: true }),
 });
 
 export const counters = control.table("counters", {

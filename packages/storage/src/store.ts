@@ -8,6 +8,8 @@ export interface FileStore {
   put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
   get(key: string): Promise<Uint8Array | null>;
   delete(key: string): Promise<void>;
+  /** Delete every file under a prefix (a deleted tenant's files); how many went. */
+  deletePrefix(prefix: string): Promise<number>;
   /** A URL the browser fetches directly, valid for the given seconds; null when the app serves the file itself. */
   signedUrl(key: string, seconds: number, now?: Date): string | null;
 }

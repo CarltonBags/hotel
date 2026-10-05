@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { fixIssue, reportIssue, storeFile, takeIssue, type FileKind } from "@hoteloftware/db";
 import { PROBLEM_PICKS, URGENCIES, type ProblemPick, type Urgency } from "@hoteloftware/domain";
-import { fileStore, virusScanner } from "@hoteloftware/storage";
+import { fileServices } from "@hoteloftware/storage";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { field, flag, formAction, type FormState } from "@/lib/form";
@@ -13,7 +13,7 @@ import { notifyFixed } from "@/lib/maintenance";
 async function upload(formData: FormData, kind: FileKind, ctx: { tenantId: string; schema: string; propertyId: string; userId: string }): Promise<string | null> {
   const file = formData.get("photo");
   if (!(file instanceof File) || file.size === 0) return null;
-  return storeFile(pool(), ctx.schema, { store: fileStore(), scanner: virusScanner() }, { tenantId: ctx.tenantId, kind, bytes: new Uint8Array(await file.arrayBuffer()), contentType: file.type, propertyId: ctx.propertyId, userId: ctx.userId });
+  return storeFile(pool(), ctx.schema, fileServices(), { tenantId: ctx.tenantId, kind, bytes: new Uint8Array(await file.arrayBuffer()), contentType: file.type, propertyId: ctx.propertyId, userId: ctx.userId });
 }
 
 async function scope(formData: FormData, action: "report_maintenance_issues" | "work_maintenance") {

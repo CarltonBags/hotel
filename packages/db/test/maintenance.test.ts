@@ -7,7 +7,8 @@ import { addDays, todayIn, type Actor } from "@hoteloftware/domain";
 import { FakeScanner, LocalFileStore } from "@hoteloftware/storage";
 import { migrateControl } from "../src/control/migrate-control";
 import { controlMigrations, tenantMigrations } from "../src/migrations/load";
-import { provisionTenant, type Tenant } from "../src/tenant/provision";
+import { deleteTenant, provisionTenant, type Tenant } from "../src/tenant/provision";
+import { deleteFilesOfDeletedTenants } from "../src/control/exit";
 import { createLegalEntity } from "../src/tenant/legal-entities";
 import { createProperty } from "../src/tenant/properties";
 import { createRoomType, createRooms } from "../src/tenant/rooms";
@@ -87,13 +88,13 @@ describe("Maintenance Issues and file storage", () => {
     // Maintenance holds the right to end an Out of Order block
     const supervisor = { userId: "user_mt", actor: { tenantRole: undefined, propertyRoles: [{ propertyId, role: "maintenance" as const }] } };
     const fixed = await fixIssue(pool, alpha.schemaName, propertyId, id, { note: "Seal replaced", photoFileId: fixPhoto, endBlock: true }, supervisor);
-    expect(fixed).toMatchObject({ reportedBy: "user_pm", what: "Room 101 · plumbing" });
+    expect(fixed).toMatchObject({ reportedBy: "user_pm", roomNumber: "101", pick: "plumbing" });
     const room = (await listRoomStates(pool, alpha.schemaName, propertyId, pm("user_pm"))).rooms.find((r) => r.number === "101")!;
     expect(room.cleanliness).toBe("dirty");
     const done = await listIssues(pool, alpha.schemaName, propertyId, "done", mt);
-    expect(done[0]).toMatchObject({ fixNote: "Seal replaced", fixPhotoFileId: fixPhoto, blockDecision: "ended", block: { inForce: false } });
+    expect(done[0]).toMatchObject({ fixNote: "Seal replaced", fixPhotoFileId: fixPhoto, blockDecision: "ended", block: { notOver: false } });
     // fixing the lobby door keeps no block
-    expect((await fixIssue(pool, alpha.schemaName, propertyId, lobby.id, { note: "", photoFileId: null, endBlock: false }, mt)).what).toBe("Lobby · door");
+    expect(await fixIssue(pool, alpha.schemaName, propertyId, lobby.id, { note: "", photoFileId: null, endBlock: false }, mt)).toMatchObject({ roomNumber: null, place: "Lobby", pick: "door" });
   });
 
   it("retention deletes files past their day, from storage and record", async () => {
@@ -106,5 +107,16 @@ describe("Maintenance Issues and file storage", () => {
     for (const f of files) expect(await store.store.get(f.key)).toBeNull();
     const done = await listIssues(pool, alpha.schemaName, propertyId, "done", mt);
     expect(done.every((i) => i.photoFileId === null && i.fixPhotoFileId === null)).toBe(true);
+  });
+
+  it("a deleted tenant's files go from the bucket with the daily job", async () => {
+    const key = `${beta.id}/issue_photo/${crypto.randomUUID()}`;
+    await store.store.put(key, JPEG, "image/jpeg");
+    await pool.query("update control.tenants set ended_at = now(), ended_reason = 'test', deletion_due = current_date where id = $1", [beta.id]);
+    await deleteTenant(pool, beta.id, "test");
+    expect(await deleteFilesOfDeletedTenants(pool, store.store)).toEqual(["beta"]);
+    expect(await store.store.get(key)).toBeNull();
+    // once
+    expect(await deleteFilesOfDeletedTenants(pool, store.store)).toEqual([]);
   });
 });

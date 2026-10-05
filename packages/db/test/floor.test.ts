@@ -193,7 +193,7 @@ describe("phone view", () => {
     await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "issue", issueId: queue[0]!.id, step: "take", note: "" }, asMax());
     const fixed = await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "issue", issueId: queue[0]!.id, step: "fixed", note: "Cleared" }, asMax());
     // the reporter is named, to be told
-    expect(fixed.fixed).toMatchObject({ reportedBy: anna, what: "Room 101 · plumbing" });
+    expect(fixed.fixed).toMatchObject({ reportedBy: anna, roomNumber: "101", pick: "plumbing" });
     expect((await floorDay(pool, s(), berlin, asMax())).issues!.map((i) => i.roomNumber)).toEqual(["103"]);
     // a housekeeper cannot work the queue
     expect((await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "issue", issueId: queue[1]!.id, step: "fixed", note: "" }, asAnna)).outcome).toBe("refused");

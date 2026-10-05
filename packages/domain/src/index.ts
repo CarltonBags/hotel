@@ -232,7 +232,6 @@ export {
   PROBLEM_PICKS,
   URGENCIES,
   floorSections,
-  ISSUE_PHOTO_DAYS,
   isFloorLanguage,
   isRtl,
   parsePhoneOp,
@@ -257,3 +256,4 @@ export * from "./report-builder";
 export * from "./subscription";
 export * from "./non-payment";
 export * from "./messages";
+export { ISSUE_PHOTO_DAYS } from "./maintenance";

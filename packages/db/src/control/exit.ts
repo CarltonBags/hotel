@@ -100,3 +100,20 @@ export async function deleteEndedTenants(pool: Pool, today: string): Promise<str
   }
   return done;
 }
+
+/**
+ * The files of deleted tenants (ticket 36): their bucket prefix is emptied by
+ * the daily job, once per deletion, and the deletion record says when.
+ */
+export async function deleteFilesOfDeletedTenants(pool: Pool, store: { deletePrefix(prefix: string): Promise<number> }): Promise<string[]> {
+  const { rows } = await pool.query<{ id: string; tenant_id: string; slug: string }>("select id, tenant_id, slug from control.tenant_deletions where files_deleted_at is null order by deleted_at");
+  const done: string[] = [];
+  for (const r of rows) {
+    // a tenant created again under the same id would be a new tenant: only ids no longer in use are emptied
+    if ((await pool.query("select 1 from control.tenants where id = $1", [r.tenant_id])).rows.length) continue;
+    await store.deletePrefix(`${r.tenant_id}/`);
+    await pool.query("update control.tenant_deletions set files_deleted_at = now() where id = $1", [r.id]);
+    done.push(r.slug);
+  }
+  return done;
+}

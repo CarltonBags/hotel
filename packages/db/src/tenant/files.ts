@@ -10,7 +10,16 @@ import { withTenant } from "./with-tenant";
  */
 export type FileKind = "issue_photo" | "fix_photo";
 
-const TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+// photos only, for now; documents come with the tickets that store them
+const TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+/** An upload refused for what it is (type, size, content, virus): saying so is the answer, trying again does not help. */
+export class FileRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FileRefused";
+  }
+}
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const UNUSED_UPLOAD_DAYS = 2;
 
@@ -30,12 +39,12 @@ export async function storeFile(
   files: { store: FileStore; scanner: VirusScanner },
   input: { tenantId: string; kind: FileKind; bytes: Uint8Array; contentType: string; propertyId: string | null; userId: string },
 ): Promise<string> {
-  if (!TYPES.includes(input.contentType)) throw new Error("Only photos (JPEG, PNG, WebP) and PDF files can be uploaded");
-  if (!input.bytes.length) throw new Error("The file is empty");
-  if (input.bytes.length > MAX_FILE_BYTES) throw new Error("The file is larger than 10 MB");
-  if (!sniff(input.bytes, input.contentType)) throw new Error("The file is not what its type says");
+  if (!TYPES.includes(input.contentType)) throw new FileRefused("Only photos (JPEG, PNG, WebP) can be uploaded");
+  if (!input.bytes.length) throw new FileRefused("The file is empty");
+  if (input.bytes.length > MAX_FILE_BYTES) throw new FileRefused("The file is larger than 10 MB");
+  if (!sniff(input.bytes, input.contentType)) throw new FileRefused("The file is not what its type says");
   const found = await files.scanner.scan(input.bytes);
-  if (found) throw new Error(`The file was refused: it carries a virus (${found})`);
+  if (found) throw new FileRefused(`The file was refused: it carries a virus (${found})`);
   const id = crypto.randomUUID();
   const key = tenantKey(input.tenantId, input.kind, id);
   await files.store.put(key, input.bytes, input.contentType);
@@ -58,7 +67,6 @@ function sniff(b: Uint8Array, type: string): boolean {
   if (type === "image/jpeg") return starts(0xff, 0xd8, 0xff);
   if (type === "image/png") return starts(0x89, 0x50, 0x4e, 0x47);
   if (type === "image/webp") return starts(0x52, 0x49, 0x46, 0x46) && b[8] === 0x57 && b[9] === 0x45;
-  if (type === "application/pdf") return starts(0x25, 0x50, 0x44, 0x46);
   return false;
 }
 
@@ -83,14 +91,23 @@ export async function setFileRetention(tx: PoolClient, ids: (string | null)[], d
   if (list.length) await tx.query("update stored_files set delete_after = $2 where id = any($1)", [list, deleteAfter]);
 }
 
-/** The retention job: files past their day are deleted from storage, then their records (references are cleared). */
+/**
+ * The retention job: files past their day are deleted from storage, then
+ * their records (references are cleared). Deleting is repeatable: a record
+ * left after its file went is removed next time. One failing file does not
+ * stop the others.
+ */
 export async function deleteExpiredFiles(pool: Pool, schema: string, store: FileStore, today: string): Promise<number> {
   const due = await withTenant(pool, schema, async (tx) => (await tx.query<{ id: string; key: string }>("select id, key from stored_files where delete_after <= $1 order by delete_after limit 500", [today])).rows);
   let n = 0;
   for (const f of due) {
-    await store.delete(f.key);
-    await withTenant(pool, schema, (tx) => tx.query("delete from stored_files where id = $1", [f.id]));
-    n++;
+    try {
+      await store.delete(f.key);
+      await withTenant(pool, schema, (tx) => tx.query("delete from stored_files where id = $1", [f.id]));
+      n++;
+    } catch (err) {
+      console.error(`[files] ${f.key} not deleted`, err);
+    }
   }
   return n;
 }

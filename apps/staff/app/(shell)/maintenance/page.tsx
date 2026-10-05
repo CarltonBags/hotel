@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { listIssues, listRooms, listTenantUsers, seesIssues, type IssueRow } from "@hoteloftware/db";
-import { PROBLEM_PICKS, URGENCIES, can } from "@hoteloftware/domain";
+import { PROBLEM_PICKS, ROOM_BLOCK_KINDS, URGENCIES, can } from "@hoteloftware/domain";
 import { ActionForm, Field, Select } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -26,7 +26,7 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
   const show = (await searchParams).show === "done" ? "done" : "open";
   const sees = seesIssues(viewer, property.id);
   const works = can(actor, "work_maintenance", property.id);
-  const blocks = (["out_of_order", "out_of_service"] as const).filter((k) => can(actor, k === "out_of_order" ? "manage_out_of_order" : "manage_out_of_service", property.id));
+  const blocks = ROOM_BLOCK_KINDS.filter((k) => can(actor, k === "out_of_order" ? "manage_out_of_order" : "manage_out_of_service", property.id));
   const [rooms, issues, users] = await Promise.all([listRooms(pool(), tenant.schemaName, property.id), sees ? listIssues(pool(), tenant.schemaName, property.id, show, viewer) : Promise.resolve([] as IssueRow[]), listTenantUsers(pool(), tenant.id)]);
   const name = new Map(users.map((u) => [u.id, u.name]));
   const when = (d: Date) => new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "short", timeStyle: "short", timeZone: property.timeZone }).format(d);
@@ -89,7 +89,7 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
                   <span className="text-base font-medium">{i.roomNumber ? `${m["mi.room"]} ${i.roomNumber}` : i.place}</span>
                   <span className={`rounded-full px-2 py-0.5 text-xs ${badge[i.urgency]}`}>{m[`mi.urgency.${i.urgency}`]}</span>
                   <span className="text-xs text-ink-60">{m[`mi.status.${i.status}`]}</span>
-                  {i.block ? <span className="rounded-full bg-ink px-2 py-0.5 text-xs text-canvas" data-block={i.block.inForce ? "in_force" : "over"}>{m[`mi.block.${i.block.kind}`]}{i.block.inForce ? ` · ${i.block.until}` : ""}</span> : null}
+                  {i.block ? <span className="rounded-full bg-ink px-2 py-0.5 text-xs text-canvas" data-block={i.block.notOver ? "not_over" : "over"}>{m[`mi.block.${i.block.kind}`]}{i.block.notOver ? ` · ${i.block.until}` : ""}</span> : null}
                   {i.blockDecision ? <span className="text-xs text-ink-60">{m[`mi.blockDecision.${i.blockDecision}`]}</span> : null}
                 </div>
                 <p>
@@ -120,7 +120,7 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
                         <span>{m["mi.fixPhoto"]}</span>
                         <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" />
                       </label>
-                      {i.block?.inForce ? (
+                      {i.block?.notOver ? (
                         <label className="flex items-center gap-2" data-end-block>
                           <input type="hidden" name="endBlock" value="off" />
                           <input type="checkbox" name="endBlock" defaultChecked /> {m["mi.endBlock"]}

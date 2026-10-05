@@ -4,7 +4,7 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { claimDueReminders, deleteEndedTenants, deleteExpiredFiles, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
+import { claimDueReminders, deleteEndedTenants, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -133,6 +133,9 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     }
     const gone = await deleteEndedTenants(pool, today);
     if (gone.length) console.log(`[maintenance] deleted ended tenants ${gone.join(", ")}`);
+    // deleted tenants' files leave the bucket (ticket 36)
+    const emptied = await deleteFilesOfDeletedTenants(pool, fileStore()).catch((err) => (console.error("[maintenance] files of deleted tenants", err), [] as string[]));
+    if (emptied.length) console.log(`[maintenance] removed the files of deleted tenants ${emptied.join(", ")}`);
     // Meldeschein records go on schedule: Germany from day 365 after departure, Austria after 7 years (ticket 45)
     const { rows: all } = await pool.query<{ slug: string; schema_name: string }>("select slug, schema_name from control.tenants");
     for (const t of all) {

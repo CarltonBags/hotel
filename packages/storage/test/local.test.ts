@@ -17,6 +17,9 @@ describe("local file store", () => {
     expect(() => tenantKey("../x", "issue_photo", "22222222-2222-2222-2222-222222222222")).toThrow();
     await store.delete(key);
     expect(await store.get(key)).toBeNull();
+    await store.put(key, new Uint8Array([1]), "image/jpeg");
+    expect(await store.deletePrefix(`${t}/`)).toBe(1);
+    expect(await store.get(key)).toBeNull();
   });
 
   it("the fake scanner finds the EICAR test file", async () => {
