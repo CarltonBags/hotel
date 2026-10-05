@@ -10,6 +10,7 @@ import { PropertyMenu } from "./PropertyMenu";
 import { MODULES, type ModuleDef } from "./registry";
 import { useShell } from "./ShellProvider";
 import { onArrowKeys } from "./useDismiss";
+import { InboxButton } from "./InboxButton";
 import { Notifications } from "./Notifications";
 import { TabStrip } from "./TabStrip";
 import { ThemeToggle, UserMenu } from "./UserMenu";
@@ -63,6 +64,7 @@ export function Shell({ children, banner }: { children: React.ReactNode; banner?
           })}
         </nav>
         <SearchBox visible={visible} />
+        <InboxButton />
         <ThemeToggle />
         <UserMenu />
       </header>

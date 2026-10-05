@@ -8,8 +8,9 @@ const nextConfig: NextConfig = {
   async headers() {
     return [{ source: "/g/:path*", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] }];
   },
-  // City Tax evidence (up to 5 MB) and Maintenance photos (up to 10 MB) are uploaded through server actions
-  experimental: { serverActions: { bodySizeLimit: "11mb" } },
+  // City Tax evidence (up to 5 MB), Maintenance photos and Conversation files (up to 10 MB) are uploaded through
+  // server actions; the proxy in front must pass the whole body too, or a file just over 10 MB arrives cut off
+  experimental: { serverActions: { bodySizeLimit: "11mb" }, proxyClientMaxBodySize: "11mb" },
   // the invoice and report PDFs embed these fonts, read from disk at render time
   outputFileTracingIncludes: { "/**": ["../../packages/invoices/fonts/**"] },
 };

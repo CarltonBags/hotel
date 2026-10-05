@@ -84,7 +84,7 @@ export const MODULES: ModuleDef[] = [
   { ...soon("channel_sync", "rates", "module.channel_sync", "RefreshCw", "#6b7280", 37), requiresModule: "channel" },
   { id: "guests", group: "guests", label: "module.guests", icon: "User", hue: "#7c5cff", href: "/guests", requiresProperty: "view_guests" },
   { id: "companies", group: "guests", label: "module.companies", icon: "Building", hue: "#6b7280", href: "/companies", requiresProperty: "view_companies" },
-  { ...soon("guest_inbox", "guests", "module.guest_inbox", "MessageCircle", "#0aa5a5", 42), requiresModule: "guest_portal" },
+  { id: "guest_inbox", group: "guests", label: "module.guest_inbox", icon: "MessageCircle", hue: "#0aa5a5", href: "/inbox", requiresProperty: "use_guest_inbox", requiresModule: "guest_portal" },
   { id: "housekeeping", group: "housekeeping", label: "module.housekeeping", icon: "Sparkles", hue: "#e0900b", href: "/rooms", requiresProperty: "view_rooms" },
   { id: "housekeeping_tasks", group: "housekeeping", label: "module.housekeeping_tasks", icon: "ClipboardCheck", hue: "#e0900b", href: "/housekeeping", requiresProperty: "assign_housekeeping" },
   { id: "maintenance", group: "housekeeping", label: "module.maintenance", icon: "Wrench", hue: "#6b7280", href: "/maintenance", requiresProperty: "report_maintenance_issues" },

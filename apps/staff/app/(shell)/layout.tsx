@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { dueTourismReports, findProperty, getDowntimeOptions, modulePeriods, tenantLifecycle } from "@hoteloftware/db";
+import { dueTourismReports, findProperty, getDowntimeOptions, getNotificationChannels, modulePeriods, tenantLifecycle } from "@hoteloftware/db";
 import { OfflineDesk } from "@/shell/offline-desk";
 import { downtimeText } from "@/lib/downtime-text";
 import { isSupportConsoleUser } from "@/lib/support";
@@ -132,6 +132,7 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       supportStaff={(await isSupportConsoleUser()) !== null}
       tenantActions={(Object.keys(TENANT_ACTIONS) as TenantAction[]).filter((a) => !lockedByNonPayment(stage, a) && can(actor, a))}
       activeModules={activeModules}
+      inboxSound={(await getNotificationChannels(pool(), session.user.id)).sound}
     >
       {idleMinutes ? <IdleLock minutes={idleMinutes} /> : null}
       {deskProperty ? (

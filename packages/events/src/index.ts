@@ -52,9 +52,18 @@ export { DATA_CHANGE_PREFIX, isDataChange } from "@hoteloftware/domain";
  * Tell every user of the tenant that data of a kind changed at a property, so
  * open lists can refresh. Carries no personal data: kind and property id only.
  */
-export function publishDataChange(db: Queryable, input: { tenantId: string; kind: "reservations"; propertyId: string }): Promise<number> {
+export function publishDataChange(db: Queryable, input: { tenantId: string; kind: "reservations" | "conversations"; propertyId: string }): Promise<number> {
   // the property id rides in the body: these rows are tenant-wide and carry no personal data
   return publishNotification(db, { tenantId: input.tenantId, userId: null, kind: DATA_KINDS[input.kind], title: "", body: input.propertyId });
+}
+
+/**
+ * A staff member is writing in a Conversation (ticket 42): colleagues see it
+ * live. Tenant-wide like data changes; carries the Conversation id and the
+ * writer's name only.
+ */
+export function publishTyping(db: Queryable, input: { tenantId: string; propertyId: string; conversationId: string; userId: string; name: string }): Promise<number> {
+  return publishNotification(db, { tenantId: input.tenantId, userId: null, kind: DATA_KINDS.typing, title: JSON.stringify({ c: input.conversationId, u: input.userId, n: input.name }), body: input.propertyId });
 }
 
 /** The newest notification id, the starting cursor for a fresh stream. */

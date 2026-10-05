@@ -207,6 +207,11 @@ export async function maySeeFile(tx: PoolClient, fileId: string, viewer: Viewer)
     const { rows } = await tx.query<{ property_id: string }>("select r.property_id from reservation_documents d join reservations r on r.id = d.reservation_id where d.file_id = $1", [fileId]);
     return rows.some((r) => can(viewer.actor, "check_in", r.property_id));
   }
+  if (f.kind === "conversation_file") {
+    // sent in a Conversation: whoever works the property's Guest Inbox (ticket 42)
+    const { rows } = await tx.query<{ property_id: string }>("select c.property_id from conversation_messages m join conversations c on c.id = m.conversation_id where m.file_id = $1", [fileId]);
+    return rows.some((r) => can(viewer.actor, "use_guest_inbox", r.property_id));
+  }
   const { rows } = await tx.query<{ property_id: string }>("select property_id from maintenance_issues where photo_file_id = $1 or fix_photo_file_id = $1", [fileId]);
   return rows.some((r) => seesIssues(viewer, r.property_id));
 }

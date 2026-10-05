@@ -493,3 +493,28 @@ export { channelConnection, channelOverview, connectChannels, connectedPropertie
 export { CHANNEL_USER, applyChannelRevision, channelProblems, channelSettings, ensureBookingWebhook, processChannelFeed, resolveChannelProblem, setChannelSetting, setGoogleChannel, type AppliedRevision, type ChannelProblem, type ChannelSetting, type FeedResult } from "./tenant/channel-bookings";
 export { MAX_COMPANIONS, PORTAL_USER, addPortalDocument, addPortalExtra, invitePortalGuest, portalInvoice, portalKeys, portalPhoto, portalSettings, portalSummary, portalView, type BookingRoom, type Companion, setPortalSettings, type PortalSummary, requestPortalCode, revokePortalLink, savePrecheckin, verifyPortalCode, type PortalView, type PrecheckinInput } from "./tenant/portal";
 export { cardGuaranteeOf, chargeStoredCard, claimDeclineNotice, closeUnfinishedPortalPayments, expressCheckout, expressCheckoutView, finishCardSetup, finishPortalPayment, portalProviderRef, startCardSetup, startPortalPayment, type CardGuarantee, type ExpressCheckout, type PortalPaymentResult, type PortalPaymentStart } from "./tenant/portal-payments";
+export {
+  claimConversation,
+  conversationOfReservation,
+  conversationView,
+  deleteQuickReply,
+  escalateConversations,
+  inboxSettings,
+  listConversations,
+  listQuickReplies,
+  markConversationSeen,
+  portalConversation,
+  portalConversationFile,
+  postGuestMessage,
+  postStaffMessage,
+  saveQuickReply,
+  setInboxSettings,
+  unreadConversations,
+  type ConversationListRow,
+  type ConversationView,
+  type Escalation,
+  type GuestPost,
+  type InboxSettings,
+  type QuickReply,
+  type ThreadMessage,
+} from "./tenant/conversations";

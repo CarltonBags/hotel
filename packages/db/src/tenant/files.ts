@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { CONVERSATION_FILE_TYPES } from "@hoteloftware/domain";
 import { tenantKey, type FileStore, type VirusScanner } from "@hoteloftware/storage";
 import { isUuid } from "./catalogue-common";
 import { withTenant } from "./with-tenant";
@@ -8,10 +9,11 @@ import { withTenant } from "./with-tenant";
  * scan), stored under the tenant's prefix, recorded here, handed out through
  * short-lived signed links, and deleted on their retention day.
  */
-export type FileKind = "issue_photo" | "fix_photo" | "id_document" | "portal_photo";
+export type FileKind = "issue_photo" | "fix_photo" | "id_document" | "portal_photo" | "conversation_file";
 
-// photos only, for now; documents come with the tickets that store them
-const TYPES = ["image/jpeg", "image/png", "image/webp"];
+const PHOTOS = ["image/jpeg", "image/png", "image/webp"];
+// photos, and in Conversations images and PDFs both ways (ticket 42)
+const TYPES: Record<FileKind, readonly string[]> = { issue_photo: PHOTOS, fix_photo: PHOTOS, id_document: PHOTOS, portal_photo: PHOTOS, conversation_file: CONVERSATION_FILE_TYPES };
 
 /** An upload refused for what it is (type, size, content, virus): saying so is the answer, trying again does not help. */
 export class FileRefused extends Error {
@@ -39,7 +41,7 @@ export async function storeFile(
   files: { store: FileStore; scanner: VirusScanner },
   input: { tenantId: string; kind: FileKind; bytes: Uint8Array; contentType: string; propertyId: string | null; userId: string },
 ): Promise<string> {
-  if (!TYPES.includes(input.contentType)) throw new FileRefused("Only photos (JPEG, PNG, WebP) can be uploaded");
+  if (!TYPES[input.kind].includes(input.contentType)) throw new FileRefused(input.kind === "conversation_file" ? "Only images (JPEG, PNG, WebP, GIF) and PDFs can be sent" : "Only photos (JPEG, PNG, WebP) can be uploaded");
   if (!input.bytes.length) throw new FileRefused("The file is empty");
   if (input.bytes.length > MAX_FILE_BYTES) throw new FileRefused("The file is larger than 10 MB");
   if (!sniff(input.bytes, input.contentType)) throw new FileRefused("The file is not what its type says");
@@ -67,6 +69,8 @@ function sniff(b: Uint8Array, type: string): boolean {
   if (type === "image/jpeg") return starts(0xff, 0xd8, 0xff);
   if (type === "image/png") return starts(0x89, 0x50, 0x4e, 0x47);
   if (type === "image/webp") return starts(0x52, 0x49, 0x46, 0x46) && b[8] === 0x57 && b[9] === 0x45;
+  if (type === "image/gif") return starts(0x47, 0x49, 0x46, 0x38);
+  if (type === "application/pdf") return starts(0x25, 0x50, 0x44, 0x46);
   return false;
 }
 

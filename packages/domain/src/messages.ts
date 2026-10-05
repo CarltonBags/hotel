@@ -2,8 +2,8 @@ import { rolesAt, type Actor } from "./permissions";
 
 /**
  * Automatic guest messages (ticket 39, "Notifications model"): Messages the
- * system sends a guest by email on an event (they join the reservation's
- * Conversation once Conversations exist, ticket 43). The types,
+ * system sends a guest by email on an event (they appear in the
+ * reservation's Conversation, ticket 42). The types,
  * when they go, which a property may switch off, the texts we ship in every
  * guest language, and the fixed layout they are rendered in.
  */
@@ -23,6 +23,8 @@ export const MESSAGE_TYPES = [
   "thanks",
   "portal_invitation",
   "portal_code",
+  "inbox_reply",
+  "desk_closed",
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 
@@ -64,6 +66,9 @@ export const MESSAGE_TYPE_INFO: Record<MessageType, MessageTypeInfo> = {
   // the Booker invites a room's guest; the one-time code when the guest has no link at hand (ticket 40)
   portal_invitation: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: true },
   portal_code: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
+  // a staff member answered in the Conversation; outside Desk Hours the automatic reply (ticket 42)
+  inbox_reply: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: false, repeatable: true, needsPortal: true },
+  desk_closed: { timing: "at_once", switchable: true, defaultOn: true, critical: false, essential: false, repeatable: true, needsPortal: true },
 };
 
 /** The Guest Portal hands out Portal Links (ticket 40); before it, messages that needed one stayed unsent. */
@@ -92,7 +97,7 @@ export interface MessageText {
 }
 
 /** The placeholders a text may use. The Portal Link and the reply address are wired with tickets 40 and 43. */
-export const PLACEHOLDERS = ["guest_name", "hotel_name", "confirmation", "arrival", "departure", "amount", "document_number", "portal_link", "reply_address", "checkout_time", "code"] as const;
+export const PLACEHOLDERS = ["guest_name", "hotel_name", "confirmation", "arrival", "departure", "amount", "document_number", "portal_link", "reply_address", "checkout_time", "code", "message", "desk_opens", "emergency_phone"] as const;
 export type Placeholder = (typeof PLACEHOLDERS)[number];
 
 /** The texts we ship, per type and language; a property edits subject and blocks, never layout or footer. */
@@ -157,6 +162,14 @@ export const SHIPPED_TEXTS: Record<MessageType, Record<MessageLanguage, MessageT
     de: { subject: "Ihr Code für {hotel_name}: {code}", blocks: ["Guten Tag {guest_name},", "Ihr Code zum Öffnen Ihrer Buchung {confirmation}: {code}", "Er gilt 10 Minuten. Haben Sie ihn nicht angefordert, können Sie diese Nachricht ignorieren."] },
     en: { subject: "Your code for {hotel_name}: {code}", blocks: ["Dear {guest_name},", "your code to open your booking {confirmation}: {code}", "It is valid for 10 minutes. If you did not ask for it, you can ignore this message."] },
   },
+  inbox_reply: {
+    de: { subject: "Neue Nachricht vom {hotel_name}", blocks: ["Guten Tag {guest_name},", "{message}", "Antworten und den ganzen Verlauf sehen Sie hier: {portal_link}"] },
+    en: { subject: "New message from {hotel_name}", blocks: ["Dear {guest_name},", "{message}", "Reply and see the whole conversation here: {portal_link}"] },
+  },
+  desk_closed: {
+    de: { subject: "Ihre Nachricht an das {hotel_name}", blocks: ["Guten Tag {guest_name},", "vielen Dank für Ihre Nachricht. Unsere Rezeption ist gerade nicht besetzt und antwortet Ihnen ab {desk_opens} Uhr.", "In dringenden Fällen erreichen Sie uns unter {emergency_phone}."] },
+    en: { subject: "Your message to {hotel_name}", blocks: ["Dear {guest_name},", "thank you for your message. Our front desk is closed right now and will answer you from {desk_opens}.", "If it is urgent, call us on {emergency_phone}."] },
+  },
 };
 
 export function fillPlaceholders(text: string, values: Partial<Record<Placeholder, string>>): string {
@@ -180,6 +193,8 @@ export const REQUIRED_PLACEHOLDERS: Record<MessageType, Placeholder[]> = {
   thanks: ["portal_link"],
   portal_invitation: ["portal_link"],
   portal_code: ["code"],
+  inbox_reply: ["message", "portal_link"],
+  desk_closed: ["desk_opens"],
 };
 
 /** Mandatory placeholders an edited text left out. */

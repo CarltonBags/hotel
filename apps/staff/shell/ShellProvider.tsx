@@ -31,6 +31,8 @@ export interface ShellProps {
   tenantActions: TenantAction[];
   /** Modules on (or readable) at a property in view: their screens show (ticket 88). */
   activeModules: Module[];
+  /** A sound with each new guest message (ticket 42). */
+  inboxSound?: boolean;
 }
 
 type Action =

@@ -22,8 +22,8 @@ describe("staff notifications", () => {
     await pool.query(`insert into control."user" (id, tenant_id, name, email) values ('u_pm', $1, 'Pia Manager', 'pia@alpha.example'), ('u_fd', $1, 'Fred Desk', 'fred@alpha.example')`, [alpha.id]);
     await setPropertyRoles(pool, { tenantId: alpha.id, userId: "u_pm", propertyId: berlin, roles: ["property_manager"] });
     await setPropertyRoles(pool, { tenantId: alpha.id, userId: "u_fd", propertyId: berlin, roles: ["front_desk"] });
-    await setNotificationChannels(pool, "u_pm", { email: false, sms: true, phone: "+49 170 1234567" });
-    await setNotificationChannels(pool, "u_fd", { email: true, sms: true, phone: "+491709999999" });
+    await setNotificationChannels(pool, "u_pm", { email: false, sms: true, phone: "+49 170 1234567", sound: false });
+    await setNotificationChannels(pool, "u_fd", { email: true, sms: true, phone: "+491709999999", sound: false });
   });
 
   afterAll(async () => {

@@ -53,7 +53,7 @@ export interface MessagingSettings {
 }
 
 // a property added after the migration starts when it was created
-const ENSURE = "insert into property_messaging (property_id, started_at) select id, created_at from properties where id = $1 on conflict do nothing";
+export const ENSURE_MESSAGING = "insert into property_messaging (property_id, started_at) select id, created_at from properties where id = $1 on conflict do nothing";
 /** The switch for channel bookings lives beside the type switches. */
 const CHANNEL_SWITCH = "channel_confirmation";
 /** How far back the scan looks: documents of a longer worker outage are still sent. */
@@ -62,13 +62,13 @@ const MAX_ATTEMPTS = OUTBOX_MAX_ATTEMPTS;
 const CODE_MASK = "••••••";
 const withCode = (text: string, code: string | null) => (code ? text.split(CODE_MASK).join(code) : text);
 
-function enabledTypes(switched: Record<string, boolean>): Record<MessageType, boolean> {
+export function enabledTypes(switched: Record<string, boolean>): Record<MessageType, boolean> {
   return Object.fromEntries(MESSAGE_TYPES.map((t) => [t, MESSAGE_TYPE_INFO[t].switchable ? (switched[t] ?? MESSAGE_TYPE_INFO[t].defaultOn) : true])) as Record<MessageType, boolean>;
 }
 
 export async function messagingSettings(pool: Pool, schema: string, propertyId: string): Promise<MessagingSettings> {
   return withTenant(pool, schema, async (tx) => {
-    await tx.query(ENSURE, [propertyId]);
+    await tx.query(ENSURE_MESSAGING, [propertyId]);
     const { rows } = await tx.query(
       `select to_char(sending_from, 'HH24:MI') as sending_from, to_char(sending_to, 'HH24:MI') as sending_to, fallback_language, use_guest_language, switched,
               sender_domain, sender_local, sender_verified, reply_to, pre_arrival_days, to_char(checkout_time, 'HH24:MI') as checkout_time
@@ -121,7 +121,7 @@ export async function setMessagingSettings(pool: Pool, schema: string, propertyI
     [CHANNEL_SWITCH]: input.channelConfirmation,
   };
   await withTenant(pool, schema, async (tx) => {
-    await tx.query(ENSURE, [propertyId]);
+    await tx.query(ENSURE_MESSAGING, [propertyId]);
     await tx.query(
       `update property_messaging set sending_from = $2, sending_to = $3, fallback_language = $4, use_guest_language = $5, switched = $6, reply_to = $7, pre_arrival_days = $8,
               checkout_time = $9, updated_at = now(), updated_by = $10
@@ -148,7 +148,7 @@ export async function setSenderDomain(pool: Pool, schema: string, input: { tenan
   }
   if (!/^[a-z0-9._-]{1,40}$/.test(input.local)) throw new Error("The sender name before @ may use letters, digits, dot, dash and underscore");
   await withTenant(pool, schema, async (tx) => {
-    await tx.query(ENSURE, [input.propertyId]);
+    await tx.query(ENSURE_MESSAGING, [input.propertyId]);
     await tx.query("delete from control.sender_domains where tenant_id = $1 and property_id = $2 and domain is distinct from $3", [input.tenantId, input.propertyId, domain]);
     if (domain) {
       const { rows } = await tx.query<{ tenant_id: string; property_id: string }>(
@@ -223,7 +223,7 @@ interface PropertyLook {
 }
 
 async function propertyLook(tx: PoolClient, propertyId: string): Promise<PropertyLook> {
-  await tx.query(ENSURE, [propertyId]);
+  await tx.query(ENSURE_MESSAGING, [propertyId]);
   const { rows } = await tx.query(
     `select p.name, p.country, p.time_zone, p.currency, le.name as le_name, le.address_line1, le.postal_code, le.city, le.vat_id,
             to_char(pm.sending_from, 'HH24:MI') as sending_from, to_char(pm.sending_to, 'HH24:MI') as sending_to, to_char(pm.checkout_time, 'HH24:MI') as checkout_time,
@@ -329,13 +329,17 @@ export async function queueGuestMessageIn(
     toEmail?: string;
     /** The one-time code (only in the mail; the stored copy is blanked once sent). */
     code?: string;
+    /** A staff member's message in the Conversation (ticket 42). */
+    message?: string;
+    /** The Portal Link to put in, when not the stay's own (the Booker's booking link). */
+    linkKey?: string;
   },
 ): Promise<string | null> {
   const f = await factsOf(tx, input.reservationId);
   if (!f) throw new Error("No such reservation");
   const look = await propertyLook(tx, f.property_id);
-  const { rows: setting } = await tx.query<{ fallback_language: MessageLanguage; use_guest_language: boolean; switched: Record<string, boolean> }>(
-    "select fallback_language, use_guest_language, switched from property_messaging where property_id = $1",
+  const { rows: setting } = await tx.query<{ fallback_language: MessageLanguage; use_guest_language: boolean; switched: Record<string, boolean>; desk_opens: string; emergency_phone: string | null }>(
+    "select fallback_language, use_guest_language, switched, to_char(desk_opens, 'HH24:MI') as desk_opens, emergency_phone from property_messaging where property_id = $1",
     [f.property_id],
   );
   const s = setting[0]!;
@@ -348,14 +352,20 @@ export async function queueGuestMessageIn(
     departure: dateText(f.departure, language),
     amount: input.amount == null ? "" : formatCurrency(input.amount, look.currency, language, look.country),
     document_number: input.documentNumber ?? "",
-    portal_link: input.links ? `${input.links.base}/g/${input.toEmail ? f.portal_key : (f.booking_key ?? f.portal_key)}` : "",
+    portal_link: input.links ? `${input.links.base}/g/${input.linkKey ?? (input.toEmail ? f.portal_key : (f.booking_key ?? f.portal_key))}` : "",
     // wired with Conversations (ticket 43)
     reply_address: "",
     checkout_time: look.checkoutTime,
     // the stored copy shows dots; the code goes in when the mail is sent
     code: input.code ? CODE_MASK : "",
+    message: input.message ?? "",
+    desk_opens: s.desk_opens,
+    emergency_phone: s.emergency_phone ?? "",
   };
-  const rendered = renderMessage(await textIn(tx, f.property_id, input.type, language), values, { hotelName: look.name, accent: look.accent }, look.footer);
+  const text = await textIn(tx, f.property_id, input.type, language);
+  // without an emergency number the sentence that gives it is left out
+  if (!values.emergency_phone) text.blocks = text.blocks.filter((b) => !b.includes("{emergency_phone}"));
+  const rendered = renderMessage(text, values, { hotelName: look.name, accent: look.accent }, look.footer);
   const info = MESSAGE_TYPE_INFO[input.type];
   // a message with a Portal Link waits until there is an address of the portal to put in it
   if (info.needsPortal && !input.links) return null;
