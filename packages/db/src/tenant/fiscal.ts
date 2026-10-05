@@ -294,7 +294,8 @@ export async function signReceipt(pool: Pool, schema: string, deps: FiscalDeps, 
     if (!client.registered) return { kind: "busy" as const };
     const unit = (await unitIn(tx, f.property_id))!;
     await tx.query("update fiscal_transactions set state = 'signing', claim = $2, claimed_at = clock_timestamp(), attempts = attempts + 1 where receipt_id = $1", [receiptId, claim]);
-    return { kind: "claimed" as const, row: f, unit, retry: f.attempts > 0 };
+    const tableKey = (await tx.query<{ bill: string | null }>("select f.outlet_bill_id as bill from receipts rc join payments p on p.id = rc.payment_id join folios f on f.id = p.folio_id where rc.id = $1", [receiptId])).rows[0]?.bill ?? null;
+    return { kind: "claimed" as const, row: f, unit, retry: f.attempts > 0, tableKey };
   });
   if (held.kind === "none") return { state: "none" };
   if (held.kind === "busy") return { state: "signing" };
@@ -311,6 +312,8 @@ export async function signReceipt(pool: Pool, schema: string, deps: FiscalDeps, 
       retry: held.retry,
       amountsPerVatRate: row.amounts.map((a) => ({ vatRate: fiscalVat(a.rate).tse, amount: fiscalAmount(a.amount) })),
       amountsPerPaymentType: [{ paymentType: pay.tse, amount: fiscalAmount(Number(row.amount)), currency: row.currency }],
+      // an outlet bill's Receipt carries the table key its signed orders carry (ticket 62)
+      ...(held.tableKey ? { metadata: { table_key: held.tableKey } } : {}),
     });
   } catch (err) {
     error = (err instanceof FiscalUnavailable || err instanceof Error ? err.message : "").slice(0, 200) || "TSE not available";

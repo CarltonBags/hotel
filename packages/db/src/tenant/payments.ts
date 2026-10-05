@@ -55,6 +55,9 @@ export interface Payment {
   postedBy: string;
   /** A tip on top (ticket 61): not revenue, not in the amount. */
   tip: number;
+  /** Taken by a reader offline (ticket 62), at the hotel's risk until forwarded. */
+  collectedOffline: boolean;
+  forwarded: boolean;
 }
 
 export interface PaymentRow {
@@ -79,9 +82,11 @@ export interface PaymentRow {
   provider_refund_id: string | null;
   property_id: string;
   tip: string;
+  collected_offline: boolean;
+  forwarded_at: Date | null;
 }
 
-export const PAYMENT_COLUMNS = "id, folio_id, reservation_id, tender, amount, currency, status, refund_of, card_brand, card_last4, reader_id, reference, error, posted_at, posted_by, provider, provider_intent_id, provider_refund_id, property_id, voucher_id, tip";
+export const PAYMENT_COLUMNS = "id, folio_id, reservation_id, tender, amount, currency, status, refund_of, card_brand, card_last4, reader_id, reference, error, posted_at, posted_by, provider, provider_intent_id, provider_refund_id, property_id, voucher_id, tip, collected_offline, forwarded_at";
 
 export function toPayment(r: PaymentRow): Payment {
   return {
@@ -101,6 +106,8 @@ export function toPayment(r: PaymentRow): Payment {
     postedAt: r.posted_at.toISOString(),
     postedBy: r.posted_by,
     tip: Number(r.tip ?? 0),
+    collectedOffline: r.collected_offline ?? false,
+    forwarded: !r.collected_offline || r.forwarded_at !== null,
   };
 }
 
@@ -420,10 +427,37 @@ export async function syncPayment(pool: Pool, schema: string, provider: PaymentP
   if (!isUuid(paymentId)) throw new Error("Payment not found");
   const p = await withTenant(pool, schema, async (tx) => (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [paymentId])).rows[0]);
   if (!p) throw new Error("Payment not found");
-  if (p.status !== "pending" || !p.provider_intent_id || p.refund_of) return toPayment(p);
+  // a payment a reader took offline is asked again until the reader has forwarded it (ticket 62)
+  const awaitingForward = p.status === "succeeded" && p.collected_offline && !p.forwarded_at;
+  if ((p.status !== "pending" && !awaitingForward) || !p.provider_intent_id || p.refund_of) return toPayment(p);
+  if (awaitingForward) {
+    const ctxF = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id, provider));
+    return forwardedFromIntent(pool, schema, p.id, await provider.getIntent(ctxF.accountId, p.provider_intent_id));
+  }
   const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, p.property_id, provider));
   const state = await provider.getIntent(ctx.accountId, p.provider_intent_id);
   return applyIntentToPayment(pool, schema, p.id, state);
+}
+
+/**
+ * A payment a reader took offline, once forwarded: from then on an ordinary
+ * card payment (refundable); declined only now, it is failed, at the hotel's
+ * risk, and its outlet bill shows the problem for staff to settle.
+ */
+async function forwardedFromIntent(pool: Pool, schema: string, paymentId: string, state: IntentState): Promise<Payment> {
+  return withTenant(pool, schema, async (tx) => {
+    if (state.offline) return toPayment((await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [paymentId])).rows[0]!);
+    const declined = state.status === "failed" || state.status === "cancelled";
+    const row = (await tx.query<PaymentRow>(
+      `update payments set forwarded_at = clock_timestamp(), status = case when $2 then 'failed' else status end, error = case when $2 then $3 else error end
+       where id = $1 and collected_offline and forwarded_at is null returning ${PAYMENT_COLUMNS}`,
+      [paymentId, declined, state.error ?? "Declined after the reader forwarded it"],
+    )).rows[0];
+    if (row && declined) {
+      await tx.query("update outlet_bills b set offline_problem = $2 from folios f where f.id = $1 and b.id = f.outlet_bill_id", [row.folio_id, `Card taken offline declined when forwarded (${row.amount}): collect again`]);
+    }
+    return toPayment(row ?? (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [paymentId])).rows[0]!);
+  });
 }
 
 /** Only a pending payment changes: webhook and desk polling cannot settle it twice. */
@@ -442,9 +476,9 @@ async function settleIntent(pool: Pool, schema: string, paymentId: string, state
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query<PaymentRow>(
       `update payments set status = coalesce($2, status), card_brand = coalesce($3, card_brand), card_last4 = coalesce($4, card_last4), error = $5,
-         settled_at = case when $2::text is not null then clock_timestamp() else settled_at end
+         settled_at = case when $2::text is not null then clock_timestamp() else settled_at end, collected_offline = $6
        where id = $1 and status = 'pending' returning ${PAYMENT_COLUMNS}`,
-      [paymentId, status, state.brand, state.last4, state.status === "cancelled" ? "Cancelled at the reader" : state.error],
+      [paymentId, status, state.brand, state.last4, state.status === "cancelled" ? "Cancelled at the reader" : state.error, state.offline === true && status === "succeeded"],
     );
     // a payment at an outlet's reader or phone closes its bill, or opens it again (ticket 61)
     if (rows[0] && status !== null) await settleOutletBillIn(tx, rows[0], state);
@@ -524,6 +558,8 @@ export async function refundPayment(
     else if (outletBill) await tx.query("select 1 from outlet_bills where id = $1 for update", [outletBill]);
     else throw new Error("Only a payment on a stay or an outlet bill is refunded here");
     if (orig.refund_of || orig.status !== "succeeded") throw new Error("Only a received payment can be refunded");
+    // taken by a reader offline: not refunded before the reader has forwarded it (ticket 62)
+    if (orig.collected_offline && !orig.forwarded_at) throw new Error("The reader has not forwarded this payment yet; refund it once it has");
     const refunds = (await tx.query<{ amount: string; status: PaymentStatus }>("select amount, status from payments where refund_of = $1", [orig.id])).rows.map((r) => ({ amount: Number(r.amount), status: r.status }));
     const limit = Number((await tx.query<{ refund_limit: string }>("select refund_limit from properties where id = $1", [orig.property_id])).rows[0]!.refund_limit);
     const refundable = refundableAmount(Number(orig.amount), refunds);

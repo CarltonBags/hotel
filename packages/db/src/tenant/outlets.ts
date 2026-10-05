@@ -24,6 +24,7 @@ import {
 import { useApproval, type ApprovalSubject } from "./approvals";
 import { bookCashPaymentIn, issueReceiptIn } from "./cash";
 import { postRoomChargeIn } from "./folios";
+import { recordRoundOrderIn, recordVoidOrderIn } from "./fiscal-orders";
 import { accountFor, failureOf, PAYMENT_COLUMNS, toPayment, type Payment, type PaymentRow } from "./payments";
 import { redeemableVoucherIn } from "./vouchers";
 import { isUuid } from "./catalogue-common";
@@ -348,23 +349,24 @@ async function tableOf(tx: PoolClient, outletId: string, tableId: string | null)
   return tableId;
 }
 
-async function newBillIn(tx: PoolClient, o: Outlet, input: { tableId: string | null; label: string; splitFrom?: string }, userId: string): Promise<string> {
+async function newBillIn(tx: PoolClient, o: Outlet, input: { tableId: string | null; label: string; splitFrom?: string; id?: string | undefined }, userId: string): Promise<string> {
   // numbers per outlet without gaps between parallel openings
   await tx.query("select 1 from outlets where id = $1 for update", [o.id]);
   const n = (await tx.query<{ n: number }>("select coalesce(max(number), 0)::int + 1 as n from outlet_bills where outlet_id = $1", [o.id])).rows[0]!.n;
   return (await tx.query<{ id: string }>(
-    "insert into outlet_bills (outlet_id, property_id, number, table_id, label, split_from, opened_by) values ($1, $2, $3, $4, $5, $6, $7) returning id",
-    [o.id, o.propertyId, n, input.tableId, input.label.trim().slice(0, 60), input.splitFrom ?? null, userId],
+    "insert into outlet_bills (id, outlet_id, property_id, number, table_id, label, split_from, opened_by) values (coalesce($8::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7) returning id",
+    [o.id, o.propertyId, n, input.tableId, input.label.trim().slice(0, 60), input.splitFrom ?? null, userId, input.id ?? null],
   )).rows[0]!.id;
 }
 
 /** Open a bill at a table, or for a guest or walk-in without one. */
-export async function openOutletBill(pool: Pool, schema: string, outletId: string, input: { tableId: string | null; label: string }, viewer: Viewer): Promise<string> {
+export async function openOutletBill(pool: Pool, schema: string, outletId: string, input: { tableId: string | null; label: string; id?: string | undefined }, viewer: Viewer): Promise<string> {
   return withTenant(pool, schema, async (tx) => {
     const o = await outletIn(tx, outletId);
     need(viewer, "serve_outlet", o.propertyId);
     if (!o.active) throw new Error("The outlet is closed");
-    return newBillIn(tx, o, { tableId: await tableOf(tx, o.id, input.tableId), label: input.label }, viewer.userId);
+    // a device that sold offline brings its own id (applied once, ticket 62)
+    return newBillIn(tx, o, { tableId: await tableOf(tx, o.id, input.tableId), label: input.label, id: input.id }, viewer.userId);
   });
 }
 
@@ -514,7 +516,7 @@ async function amountsIn(tx: PoolClient, b: BillRow) {
 }
 
 /** Add an item of the outlet's menu with its modifiers; it waits for the next order round. */
-export async function addBillItem(pool: Pool, schema: string, billId: string, input: { menuItemId: string; quantity: number; modifiers: string[]; note: string }, viewer: Viewer): Promise<string> {
+export async function addBillItem(pool: Pool, schema: string, billId: string, input: { menuItemId: string; quantity: number; modifiers: string[]; note: string; id?: string | undefined }, viewer: Viewer): Promise<string> {
   return withTenant(pool, schema, async (tx) => {
     const b = await openBillIn(tx, billId, viewer);
     // a closed outlet takes no more orders; its open bills are only paid
@@ -527,9 +529,9 @@ export async function addBillItem(pool: Pool, schema: string, billId: string, in
     if (!item) throw new Error("Menu item not found at this outlet");
     const line = lineFor({ name: item.name, price: Number(item.price), modifiers: item.modifiers }, Number(input.quantity), input.modifiers, input.note);
     return (await tx.query<{ id: string }>(
-      `insert into outlet_bill_lines (bill_id, menu_item_id, service_id, description, quantity, unit_price, amount, modifiers, note, printer_id, created_by)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id`,
-      [b.id, item.id, item.service_id, line.description, line.quantity, line.unitPrice, line.amount, JSON.stringify(line.modifiers), line.note, item.printer_id, viewer.userId],
+      `insert into outlet_bill_lines (id, bill_id, menu_item_id, service_id, description, quantity, unit_price, amount, modifiers, note, printer_id, created_by)
+       values (coalesce($12::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id`,
+      [b.id, item.id, item.service_id, line.description, line.quantity, line.unitPrice, line.amount, JSON.stringify(line.modifiers), line.note, item.printer_id, viewer.userId, input.id ?? null],
     )).rows[0]!.id;
   });
 }
@@ -549,17 +551,21 @@ export async function removeBillLine(pool: Pool, schema: string, billId: string,
  * printer make one print job per printer with the table, the items and
  * their modifiers. Returns the round's number (null when nothing was open).
  */
-export async function sendOrderRound(pool: Pool, schema: string, billId: string, viewer: Viewer & { name: string }): Promise<{ round: number | null; jobs: number }> {
+export async function sendOrderRound(pool: Pool, schema: string, billId: string, viewer: Viewer & { name: string }, offline: { id?: string; orderedAt?: Date; lineIds?: string[] } = {}): Promise<{ round: number | null; jobs: number }> {
   return withTenant(pool, schema, async (tx) => {
     const b = await openBillIn(tx, billId, viewer);
     const open = (await tx.query<{ id: string; description: string; quantity: number; modifiers: Modifier[]; note: string; printer_id: string | null; printer_active: boolean | null }>(
       `select l.id, l.description, l.quantity, l.modifiers, l.note, l.printer_id, p.active as printer_active
-       from outlet_bill_lines l left join outlet_printers p on p.id = l.printer_id where l.bill_id = $1 and l.round_id is null order by l.created_at, l.id`,
-      [b.id],
+       from outlet_bill_lines l left join outlet_printers p on p.id = l.printer_id where l.bill_id = $1 and l.round_id is null and ($2::uuid[] is null or l.id = any($2::uuid[])) order by l.created_at, l.id`,
+      [b.id, offline.lineIds ?? null],
     )).rows;
     if (!open.length) return { round: null, jobs: 0 };
     const number = (await tx.query<{ n: number }>("select coalesce(max(number), 0)::int + 1 as n from outlet_rounds where bill_id = $1", [b.id])).rows[0]!.n;
-    const round = (await tx.query<{ id: string; sent_at: Date }>("insert into outlet_rounds (bill_id, number, sent_by) values ($1, $2, $3) returning id, sent_at", [b.id, number, viewer.userId])).rows[0]!;
+    // offline: the round as ordered on the device (its tickets printed there already)
+    const round = (await tx.query<{ id: string; sent_at: Date }>(
+      "insert into outlet_rounds (id, bill_id, number, sent_by, ordered_at) values (coalesce($4::uuid, gen_random_uuid()), $1, $2, $3, $5) returning id, sent_at",
+      [b.id, number, viewer.userId, offline.id ?? null, offline.orderedAt ?? null],
+    )).rows[0]!;
     await tx.query("update outlet_bill_lines set round_id = $2 where id = any($1::uuid[])", [open.map((l) => l.id), round.id]);
     const table = b.table_id ? (await tx.query<{ name: string }>("select name from outlet_tables where id = $1", [b.table_id])).rows[0]!.name : null;
     const tickets = ticketsFor(
@@ -567,7 +573,9 @@ export async function sendOrderRound(pool: Pool, schema: string, billId: string,
       // a printer switched off prints nothing
       open.map((l) => ({ printerId: l.printer_active ? l.printer_id : null, description: l.description, quantity: l.quantity, modifiers: l.modifiers, note: l.note })),
     );
-    for (const t of tickets) await tx.query("insert into print_jobs (outlet_id, printer_id, round_id, ticket) values ($1, $2, $3, $4)", [b.outlet_id, t.printerId, round.id, JSON.stringify(t)]);
+    if (!offline.orderedAt) for (const t of tickets) await tx.query("insert into print_jobs (outlet_id, printer_id, round_id, ticket) values ($1, $2, $3, $4)", [b.outlet_id, t.printerId, round.id, JSON.stringify(t)]);
+    // Germany: the round is an order the TSE signs (ticket 62)
+    await recordRoundOrderIn(tx, round.id);
     return { round: number, jobs: tickets.length };
   });
 }
@@ -640,7 +648,7 @@ async function postBillIn(tx: PoolClient, b: BillRow, billTo: { companyId: strin
  * on the outlet's Cash Register, with a Receipt (signed in Germany and
  * Austria like any payment); an optional customer name.
  */
-export async function payOutletBillCash(pool: Pool, schema: string, billId: string, input: { customerName: string }, viewer: Viewer): Promise<{ paymentId: string; receiptToken: string; total: number }> {
+export async function payOutletBillCash(pool: Pool, schema: string, billId: string, input: { customerName: string; offlineAt?: Date }, viewer: Viewer): Promise<{ paymentId: string; receiptToken: string; total: number }> {
   return withTenant(pool, schema, async (tx) => {
     const pre = await billIn(tx, billId);
     await lockProperty(tx, pre.property_id);
@@ -656,6 +664,8 @@ export async function payOutletBillCash(pool: Pool, schema: string, billId: stri
     const registerId = await bookCashPaymentIn(tx, { id: paymentId, propertyId: b.property_id, amount: total }, viewer.userId);
     if (registerId !== b.outlet.cashRegisterId) throw new Error(`Open your Shift on ${b.outlet.name}'s Cash Register to take its cash`);
     await issueReceiptIn(tx, { id: paymentId, propertyId: b.property_id }, registerId, viewer.userId);
+    // sold without a connection: the Receipt says when it was really issued (ticket 62)
+    if (input.offlineAt) await tx.query("update receipts set issued_offline_at = $2 where payment_id = $1", [paymentId, input.offlineAt]);
     await tx.query("update outlet_bills set status = 'paid', customer_name = $2, closed_by = $3, closed_at = clock_timestamp() where id = $1", [b.id, input.customerName.trim().slice(0, 100), viewer.userId]);
     const token = (await tx.query<{ token: string }>("select token from receipts where payment_id = $1", [paymentId])).rows[0]!.token;
     return { paymentId, receiptToken: token, total };
@@ -714,6 +724,8 @@ export async function voidBillLine(pool: Pool, schema: string, billId: string, l
     if (!l.round_id) throw new Error("An item not sent yet is taken back, not voided");
     const approver = decidesAtOutlet(viewer.actor, viewer.userId, b.outlet) ? null : await useApproval(tx, outletSubject(b, "outlet_void", lineId, `Void of ${l.description} on bill ${b.outlet.name} ${b.number}`), viewer);
     await tx.query("update outlet_bill_lines set voided_at = clock_timestamp(), voided_by = $2, void_reason = $3, void_approved_by = $4 where id = $1", [lineId, viewer.userId, why, approver]);
+    // a signed order is cancelled by a new negative one (ticket 62)
+    await recordVoidOrderIn(tx, lineId);
   });
 }
 

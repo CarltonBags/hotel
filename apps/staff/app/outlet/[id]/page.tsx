@@ -42,6 +42,9 @@ export default async function OutletFloorPage({ params }: { params: Promise<{ id
               {m["outlet.setup"]}
             </Link>
           ) : null}
+          <Link href={`/outlet/${floor.outlet.id}/till`} className="text-accent underline" data-till-link>
+            {m["outlet.till"]}
+          </Link>
           <Link href="/cash" className="text-accent underline">
             {m["outlet.shift"]}
           </Link>

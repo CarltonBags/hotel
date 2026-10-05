@@ -180,9 +180,19 @@ async function errorOf(r: Response): Promise<FiskalyError> {
 }
 
 function finishBody(input: SignInput): Json {
+  const metadata = input.metadata ? { metadata: input.metadata } : {};
+  if (input.order) {
+    return {
+      state: "FINISHED",
+      client_id: input.clientId,
+      ...metadata,
+      schema: { standard_v1: { order: { line_items: input.order.lineItems.map((l) => ({ quantity: l.quantity, text: l.text, price_per_unit: l.pricePerUnit })) } } },
+    };
+  }
   return {
     state: "FINISHED",
     client_id: input.clientId,
+    ...metadata,
     schema: {
       standard_v1: {
         receipt: {

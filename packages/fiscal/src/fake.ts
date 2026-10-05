@@ -52,7 +52,7 @@ export class FakeFiscalProvider implements FiscalProvider {
       tssSerial: t.serial,
       clientSerial: c.serial,
       timestampFormat: "unixTime",
-      qrCodeData: `V0;${c.serial};Kassenbeleg-V1;Beleg^${input.amountsPerVatRate.map((a) => a.amount).join("_")}^${input.amountsPerPaymentType.map((p) => `${p.amount}:${p.paymentType === "CASH" ? "Bar" : "Unbar"}`).join("_")};${t.number};${t.counter};${Math.floor(now.getTime() / 1000)};${Math.floor(now.getTime() / 1000)};ecdsa-plain-SHA256;unixTime;FAKESIG;FAKE-PK`,
+      qrCodeData: input.order ? `V0;${c.serial};Bestellung-V1;${input.order.lineItems.map((l) => `${l.quantity};"${l.text}";${l.pricePerUnit}`).join("/")}` : `V0;${c.serial};Kassenbeleg-V1;Beleg^${input.amountsPerVatRate.map((a) => a.amount).join("_")}^${input.amountsPerPaymentType.map((p) => `${p.amount}:${p.paymentType === "CASH" ? "Bar" : "Unbar"}`).join("_")};${t.number};${t.counter};${Math.floor(now.getTime() / 1000)};${Math.floor(now.getTime() / 1000)};ecdsa-plain-SHA256;unixTime;FAKESIG;FAKE-PK`,
     };
     this.signed.set(input.txId, { ...tx, input });
     return tx;

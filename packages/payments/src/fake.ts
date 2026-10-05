@@ -110,6 +110,8 @@ export class FakePaymentProvider implements PaymentProvider {
       Object.assign(intent, { status: "failed", brand: "girocard", error: "girocard is not accepted by tap to pay: use the reader" });
       return;
     }
+    // a reader without a connection takes chip and PIN only, never by tap or girocard on a phone; stored until forwarded
+    if (card.offline) Object.assign(intent, { offline: true });
     Object.assign(intent, {
       brand: card.brand ?? "visa",
       last4: "4242",
@@ -118,6 +120,13 @@ export class FakePaymentProvider implements PaymentProvider {
       // a tip the guest adds on the reader is received on top
       ...(intent.hold ? { status: "authorised", capturable: intent.amount, captureBefore: new Date(Date.now() + 5 * 86_400_000) } : { status: "succeeded", received: Math.round((intent.amount + (card.tip ?? 0)) * 100) / 100 }),
     });
+  }
+
+  /** Test helper: the offline reader is back and forwards what it stored; `decline` for a card refused only now. */
+  forwardOffline(intentId: string, decline = false): void {
+    const i = this.intents.get(intentId);
+    if (!i?.offline) return;
+    Object.assign(i, decline ? { offline: false, status: "failed", received: 0, error: "Declined after forwarding" } : { offline: false });
   }
 
   async cancelTerminalPayment(accountId: string, readerId: string, intentId: string): Promise<void> {
@@ -249,8 +258,8 @@ export class FakePaymentProvider implements PaymentProvider {
   }
 
   private view(i: FakeIntent): IntentState {
-    const { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, customerId, captureBefore, extended, error } = i;
-    return { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, customerId, captureBefore, extended, error };
+    const { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, customerId, captureBefore, extended, error, offline } = i;
+    return { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, customerId, captureBefore, extended, error, offline: offline ?? false };
   }
 
   readonly publishableKey = null;

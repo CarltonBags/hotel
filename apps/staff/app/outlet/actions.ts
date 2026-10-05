@@ -23,6 +23,7 @@ import {
   removeBillLine,
   reportPrintJob,
   sendOrderRound,
+  signOutletOrders,
   splitOutletBill,
   takePrintJobs,
   type PrintJob,
@@ -33,7 +34,7 @@ import { paymentProvider, type SimulatedCard } from "@hoteloftware/payments";
 import { withApproval, type ApprovalMode, type ApprovalState } from "@/lib/approval";
 import { formAction, type FormState } from "@/lib/form";
 import { pool } from "@/lib/db";
-import { signPaymentReceipts } from "@/lib/fiscal";
+import { fiscalDeps, signPaymentReceipts } from "@/lib/fiscal";
 import { authorizeOutlet } from "@/lib/outlets";
 
 /** The user at the outlet, as the db layer checks them, with the name printed on tickets. */
@@ -72,6 +73,8 @@ export async function sendRoundAction(outletId: string, billId: string): Promise
   return formAction(async () => {
     const { tenant, viewer } = await authorizeOutlet("serve_outlet", { billId });
     const r = await sendOrderRound(pool(), tenant.schemaName, billId, viewer);
+    // Germany: the round's order signed now, well inside its 45 seconds (the worker signs any left)
+    await signOutletOrders(pool(), tenant.schemaName, fiscalDeps(), { billId }).catch((err) => console.error("[fiscal] orders", err));
     refresh(outletId);
     return { ok: true, message: r.round ? `Round ${r.round} sent (${r.jobs} printer${r.jobs === 1 ? "" : "s"}).` : "Nothing new to send." };
   });

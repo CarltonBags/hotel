@@ -44,6 +44,12 @@ export interface IntentState {
   extended: boolean;
   /** The provider's reason when it failed or was declined. */
   error: string | null;
+  /**
+   * Taken by a reader without a connection (chip and PIN, ticket 62): stored
+   * on the reader until it forwards it. Until then at the hotel's risk; it
+   * may still be declined.
+   */
+  offline?: boolean;
 }
 
 export interface OnlinePaymentInput {
@@ -87,6 +93,8 @@ export interface ProviderEvent {
 export interface SimulatedCard {
   brand?: "visa" | "mastercard" | "girocard";
   tip?: number;
+  /** The reader is offline: the payment is stored on it and forwarded later (forwardOffline). */
+  offline?: boolean;
 }
 
 export interface TerminalPaymentInput {

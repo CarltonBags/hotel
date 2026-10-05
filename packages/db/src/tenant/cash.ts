@@ -541,8 +541,10 @@ export interface ReceiptView {
   voucherSale: { codeEnd: string } | null;
   /** A tip on top of the amount (ticket 61). */
   tip: number;
+  /** Issued on a device without a connection (ticket 62): printed with that note, signed when it synced. */
+  issuedOfflineAt: Date | null;
   /** An Outlet Sale (ticket 60): the outlet, the bill and its items (type and quantity, KassenSichV). */
-  outletSale: { outlet: string; bill: number; lines: { description: string; quantity: number; amount: number }[] } | null;
+  outletSale: { outlet: string; bill: number; lines: { description: string; quantity: number; amount: number }[]; firstOrderAt: Date | null; tableKey: string } | null;
   /** Initial and surname: the Receipt may be opened by anyone holding its code. */
   guestName: string;
   token: string;
@@ -557,7 +559,8 @@ const RECEIPT_SELECT = `select rc.id, rc.number, rc.issued_at, rc.token, pr.name
     b.confirmation_number, coalesce(g.first_name, split_part(v.buyer_name, ' ', 1)) as first_name,
     coalesce(g.last_name, nullif(regexp_replace(v.buyer_name, '^[^ ]+ *', ''), ''), v.buyer_name) as last_name, v.code as voucher_code,
     to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
-    p.folio_id, coalesce(p.tip, 0) as tip, ob.number as outlet_bill, o.name as outlet_name, ob.customer_name
+    p.folio_id, coalesce(p.tip, 0) as tip, ob.id as outlet_bill_id, ob.number as outlet_bill, o.name as outlet_name, ob.customer_name,
+    (select min(coalesce(orr.ordered_at, orr.sent_at)) from outlet_rounds orr where orr.bill_id = ob.id) as first_order_at, rc.issued_offline_at
   from receipts rc join properties pr on pr.id = rc.property_id join legal_entities le on le.id = pr.legal_entity_id
   left join payments p on p.id = rc.payment_id left join vouchers v on v.id = rc.voucher_id
   left join reservations r on r.id = p.reservation_id left join bookings b on b.id = r.booking_id left join guests g on g.id = r.primary_guest_id
@@ -586,7 +589,8 @@ function toReceipt(r: Record<string, unknown>, fiscal: ReceiptFiscal | null = nu
     stay: r.arrival ? { arrival: r.arrival as string, departure: r.departure as string } : null,
     voucherSale: r.voucher_code ? { codeEnd: String(r.voucher_code).slice(-4) } : null,
     tip: Number(r.tip ?? 0),
-    outletSale: r.outlet_bill ? { outlet: r.outlet_name as string, bill: r.outlet_bill as number, lines: outletLines } : null,
+    outletSale: r.outlet_bill ? { outlet: r.outlet_name as string, bill: r.outlet_bill as number, lines: outletLines, firstOrderAt: (r.first_order_at as Date | null) ?? null, tableKey: r.outlet_bill_id as string } : null,
+    issuedOfflineAt: (r.issued_offline_at as Date | null) ?? null,
     // an Outlet Sale names its customer only when given
     guestName: r.outlet_bill ? String(r.customer_name ?? "") : `${String(r.first_name ?? "").slice(0, 1)}${r.first_name ? ". " : ""}${r.last_name as string}`.trim(),
     timeZone: r.time_zone as string,
