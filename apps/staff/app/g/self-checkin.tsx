@@ -6,8 +6,8 @@ import type { SelfCheckinView } from "@hoteloftware/db";
 import type { CheckInCondition } from "@hoteloftware/domain";
 import { FIELD_TEXT, GuestFormSteps, T as FORM_TEXT, type Lang } from "../tablet/guest-form";
 import { loadStripe, type StripeJs } from "./pay-panel";
-import { simulateAction, startPayAction } from "./pay-actions";
-import { findAction, finishAction, paidAction, registerAction, startAction, stepAction, viewAction } from "./self-checkin-actions";
+import { simulateAction, startCardAction, startPayAction } from "./pay-actions";
+import { cardStoredAction, findAction, finishAction, paidAction, registerAction, startAction, stepAction, viewAction } from "./self-checkin-actions";
 
 const T = {
   find: { de: "Ihre Buchung finden", en: "Find your booking" },
@@ -31,6 +31,8 @@ const T = {
   pay: { de: "Zahlung", en: "Payment" },
   due: { de: "Noch offen: {amount}", en: "Still due: {amount}" },
   payNow: { de: "{amount} bezahlen", en: "Pay {amount}" },
+  orCard: { de: "Oder eine Karte als Garantie hinterlegen; bezahlt wird später.", en: "Or leave a card as guarantee and pay later." },
+  leaveCard: { de: "Karte hinterlegen", en: "Leave a card" },
   confirm: { de: "Bestätigen", en: "Confirm" },
   testPay: { de: "Testkarte: Zahlung gelingt", en: "Test card: payment succeeds" },
   testDecline: { de: "Testkarte: abgelehnt", en: "Test card: declined" },
@@ -53,8 +55,9 @@ const T = {
 } as const;
 type Key = keyof typeof T;
 
-/** How long a kiosk waits for a touch before it forgets the guest. */
+/** How long a kiosk waits for a touch before it forgets the guest; longer while paying (the card form's touches do not reach the page). */
 const KIOSK_IDLE_MS = 120_000;
+const KIOSK_PAY_IDLE_MS = 600_000;
 const DOTS = ["find", "stay", "register", "pay", "result"] as const;
 type Screen = (typeof DOTS)[number] | "here" | "offline";
 
@@ -113,7 +116,7 @@ export function SelfCheckin({ channel, propertyName, portalKey, language, hereAl
     if (channel !== "kiosk") return;
     const touch = () => {
       if (idle.current) clearTimeout(idle.current);
-      idle.current = setTimeout(forget, KIOSK_IDLE_MS);
+      idle.current = setTimeout(forget, screen === "pay" ? KIOSK_PAY_IDLE_MS : KIOSK_IDLE_MS);
     };
     touch();
     window.addEventListener("pointerdown", touch);
@@ -123,7 +126,7 @@ export function SelfCheckin({ channel, propertyName, portalKey, language, hereAl
       window.removeEventListener("pointerdown", touch);
       window.removeEventListener("keydown", touch);
     };
-  }, [channel, forget]);
+  }, [channel, forget, screen]);
 
   /** A server call; a kiosk that cannot reach the server shows only "come to reception". */
   async function call<R>(fn: () => Promise<R>): Promise<R | null> {
@@ -169,14 +172,14 @@ export function SelfCheckin({ channel, propertyName, portalKey, language, hereAl
   function go(s: Screen) {
     setError("");
     setScreen(s);
-    if (key && (s === "register" || s === "pay")) void stepAction(key, s);
+    if (key && (s === "register" || s === "pay")) stepAction(key, s).catch(() => undefined);
   }
   async function finish(hereNow: boolean) {
     if (!key) return;
     const r = await call(() => finishAction(key, hereNow));
     if (!r) return;
     if (!r.ok) return setError(r.error);
-    setResult({ outcome: r.outcome, roomNumber: r.roomNumber, failed: view?.failed.filter((c) => c !== "room_not_ready") ?? [] });
+    setResult({ outcome: r.outcome, roomNumber: r.roomNumber, failed: r.failed });
     setScreen("result");
   }
 
@@ -198,11 +201,18 @@ export function SelfCheckin({ channel, propertyName, portalKey, language, hereAl
       <div data-step="find">
         <h1 className="text-4xl font-light sm:text-5xl">{t("find")}</h1>
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
-          <Scanner t={t} onLink={async (link) => {
-            const r = await call(() => findAction({ link }));
-            if (r?.ok) await begin(r.key);
-            else if (r) setError(t("notFound"));
-          }} />
+          <Scanner
+            t={t}
+            onLink={async (link) => {
+              const r = await call(() => findAction({ link }));
+              if (r?.ok) {
+                await begin(r.key);
+                return true;
+              }
+              if (r) setError(t("notFound"));
+              return false;
+            }}
+          />
           <form
             className="grid content-start gap-3 rounded-3xl bg-white/5 p-6"
             onSubmit={async (e) => {
@@ -341,7 +351,8 @@ export function SelfCheckin({ channel, propertyName, portalKey, language, hereAl
           <p className="mt-2 text-[8rem] font-extralight leading-none" data-room-number>
             {result.roomNumber}
           </p>
-          <div className="mx-auto mt-8 max-w-md rounded-3xl bg-white/5 p-6 text-lg">{t("keyReception")}</div>
+          {/* the key step follows the property's key handover; collected at reception until digital keys come */}
+          {view.property.keyHandover === "reception" ? <div className="mx-auto mt-8 max-w-md rounded-3xl bg-white/5 p-6 text-lg">{t("keyReception")}</div> : null}
         </div>
       ) : result.outcome === "waiting" ? (
         <div className="text-center" data-result="waiting">
@@ -399,7 +410,7 @@ export function SelfCheckin({ channel, propertyName, portalKey, language, hereAl
 type BarcodeDetectorLike = { detect: (v: HTMLVideoElement) => Promise<{ rawValue: string }[]> };
 
 /** The confirmation's QR code before the kiosk's camera, where the browser can read codes. */
-function Scanner({ t, onLink }: { t: (k: Key) => string; onLink: (link: string) => Promise<void> }) {
+function Scanner({ t, onLink }: { t: (k: Key) => string; onLink: (link: string) => Promise<boolean> }) {
   const video = useRef<HTMLVideoElement>(null);
   const [on, setOn] = useState(false);
   const found = useRef(onLink);
@@ -419,10 +430,9 @@ function Scanner({ t, onLink }: { t: (k: Key) => string; onLink: (link: string) 
         const detector = new Detector({ formats: ["qr_code"] });
         while (!stop) {
           const codes = await detector.detect(video.current).catch(() => []);
-          if (codes[0]) {
-            await found.current(codes[0].rawValue);
-            break;
-          }
+          // a code that finds nothing: keep reading (the next guest, or the right code)
+          if (codes[0] && (await found.current(codes[0].rawValue))) break;
+          if (codes[0]) await new Promise((r) => setTimeout(r, 2500));
           await new Promise((r) => setTimeout(r, 400));
         }
       } catch {
@@ -444,52 +454,75 @@ function Scanner({ t, onLink }: { t: (k: Key) => string; onLink: (link: string) 
   );
 }
 
-/** Pay what is due without leaving the flow: the card form from Stripe (card data never reaches us), 3-D Secure in place. */
+/**
+ * Pay what is due, or leave a card as the stay's guarantee, without leaving
+ * the flow: the card form from Stripe (card data never reaches us), 3-D
+ * Secure in place.
+ */
 function InlinePay({ portalKey, t, amount, button, onPaid }: { portalKey: string; t: (k: Key, v?: Record<string, string | number>) => string; amount: string; button: string; onPaid: () => Promise<void> }) {
-  const [started, setStarted] = useState<{ id: string; stripe: StripeJs | null; elements: unknown } | null>(null);
+  const [started, setStarted] = useState<{ kind: "payment" | "setup"; id: string; stripe: StripeJs | null; elements: unknown } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const mount = useRef<HTMLDivElement>(null);
-  async function settle(id: string) {
-    const r = await paidAction(portalKey, id);
+  async function settle(kind: "payment" | "setup", id: string) {
+    const r = kind === "payment" ? await paidAction(portalKey, id) : await cardStoredAction(portalKey, id);
     setStarted(null);
     if (r.ok) await onPaid();
     else setError(t("declined", { reason: r.error ?? "" }));
   }
-  async function begin() {
+  async function begin(kind: "payment" | "setup") {
     setBusy(true);
     setError("");
-    const s = await startPayAction(portalKey, false);
-    setBusy(false);
-    if (!s.ok) return setError(s.error);
-    if (!s.publishableKey) return setStarted({ id: s.id, stripe: null, elements: null });
-    const stripe = await loadStripe(s.publishableKey, s.accountId);
-    const elements = stripe.elements({ clientSecret: s.clientSecret, appearance: { theme: "night" } });
-    setStarted({ id: s.id, stripe, elements });
-    setTimeout(() => mount.current && elements.create("payment").mount(mount.current), 0);
+    try {
+      const s = kind === "payment" ? await startPayAction(portalKey, false) : await startCardAction(portalKey);
+      if (!s.ok) return setError(s.error);
+      if (!s.publishableKey) return setStarted({ kind, id: s.id, stripe: null, elements: null });
+      const stripe = await loadStripe(s.publishableKey, s.accountId);
+      const elements = stripe.elements({ clientSecret: s.clientSecret, appearance: { theme: "night" } });
+      setStarted({ kind, id: s.id, stripe, elements });
+      setTimeout(() => mount.current && elements.create("payment").mount(mount.current), 0);
+    } catch {
+      setError(t("error"));
+    } finally {
+      setBusy(false);
+    }
   }
   async function confirm() {
     if (!started?.stripe) return;
     setBusy(true);
-    const confirmPayment = started.stripe.confirmPayment as unknown as (o: { elements: unknown; redirect: "if_required"; confirmParams: { return_url: string } }) => Promise<{ error?: { type?: string; message?: string } }>;
-    const r = await confirmPayment({ elements: started.elements, redirect: "if_required", confirmParams: { return_url: window.location.href } });
-    setBusy(false);
-    if (r.error && r.error.type !== "card_error") return setError(r.error.message ?? "");
-    await settle(started.id);
+    try {
+      // the confirmation stays on this page (redirect only where the bank insists), so the flow goes on
+      const o = { elements: started.elements, redirect: "if_required", confirmParams: { return_url: window.location.href } };
+      const confirmIt = (started.kind === "payment" ? started.stripe.confirmPayment : started.stripe.confirmSetup) as unknown as (x: typeof o) => Promise<{ error?: { type?: string; message?: string } }>;
+      const r = await confirmIt(o);
+      if (r.error && r.error.type !== "card_error") return setError(r.error.message ?? "");
+      await settle(started.kind, started.id);
+    } finally {
+      setBusy(false);
+    }
   }
   async function simulate(outcome: "succeed" | "decline") {
     if (!started) return;
     setBusy(true);
-    await simulateAction(portalKey, "payment", started.id, outcome);
-    setBusy(false);
-    await settle(started.id);
+    try {
+      await simulateAction(portalKey, started.kind, started.id, outcome);
+      await settle(started.kind, started.id);
+    } finally {
+      setBusy(false);
+    }
   }
   return (
     <div className="grid gap-3" data-pay>
       {!started ? (
-        <button type="button" disabled={busy} onClick={() => void begin()} className={button} data-pay-start>
-          {t("payNow", { amount })}
-        </button>
+        <>
+          <button type="button" disabled={busy} onClick={() => void begin("payment")} className={button} data-pay-start>
+            {t("payNow", { amount })}
+          </button>
+          <p className="mt-2 opacity-70">{t("orCard")}</p>
+          <button type="button" disabled={busy} onClick={() => void begin("setup")} className={`${button} mt-0 bg-white/70`} data-card-start>
+            {t("leaveCard")}
+          </button>
+        </>
       ) : started.stripe ? (
         <>
           <div ref={mount} className="mt-4 rounded-2xl bg-white/5 p-3" />

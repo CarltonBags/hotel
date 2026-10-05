@@ -15,6 +15,7 @@ import { setRates } from "../src/tenant/rates";
 import { createGuest } from "../src/tenant/guests";
 import { createBooking } from "../src/tenant/reservations";
 import { portalKeys } from "../src/tenant/portal";
+import { assignRoom } from "../src/tenant/reservation-changes";
 import { findForKiosk, finishSelfCheckin, selfCheckinLine, selfCheckinRegister, startSelfCheckin } from "../src/tenant/self-checkin";
 import { resetTestDatabase, testPool } from "./helpers";
 
@@ -47,7 +48,7 @@ describe("Self Check-in", () => {
     propertyId = (await createProperty(pool, s(), { name: "Hotel Donau", legalEntityId: le, country: "AT", timeZone: "Europe/Vienna", currency: "EUR" })).id;
     kiosk.propertyId = propertyId;
     const dbl = (await createRoomType(pool, s(), { propertyId, code: "DBL", name: "Double", maxOccupancy: 3, maxAdults: 2, bedPlaces: 2, extraBeds: 1 })).id;
-    await createRooms(pool, s(), { propertyId, roomTypeId: dbl, numbers: ["501", "502", "503", "504", "505", "506"] });
+    await createRooms(pool, s(), { propertyId, roomTypeId: dbl, numbers: ["501", "502", "503", "504", "505", "506", "507", "508"] });
     await applyTaxPreset(pool, s(), le, "AT");
     const codes = await listTaxCodes(pool, s(), le);
     const room = await createService(pool, s(), { propertyId, code: "ROOM", name: "Room", defaultPrice: 0, taxCodeId: codes[0]!.id, revenueAccount: "4000", postingRhythm: "per_night", bookableOnline: false });
@@ -84,13 +85,14 @@ describe("Self Check-in", () => {
     const start = await startSelfCheckin(pool, s(), stay.key, kiosk);
     expect(start.failed).toEqual(["registration"]);
     expect(start.registration.form?.person.step).toBe("details");
-    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Sato" } });
-    await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] });
-    await expect(selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: null })).rejects.toThrow(/signature/);
-    const signed = await selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: png });
+    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Sato" } }, kiosk);
+    await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] }, kiosk);
+    await expect(selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: null }, kiosk)).rejects.toThrow(/signature/);
+    const signed = await selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: png }, kiosk);
     expect(signed.failed).toEqual([]);
     const done = await finishSelfCheckin(pool, s(), stay.key, kiosk);
-    expect(done).toMatchObject({ outcome: "checked_in", roomNumber: "501" });
+    // the guest signed; the ID Check is the desk's, still open
+    expect(done).toMatchObject({ outcome: "checked_in", roomNumber: "501", idCheckOpen: true });
     const r = (await pool.query(`select status, checked_in_by from ${s()}.reservations where id = $1`, [stay.id])).rows[0];
     expect(r).toEqual({ status: "checked_in", checked_in_by: "self-checkin" });
     expect((await pool.query(`select count(*)::int as n from ${s()}.charges where reservation_id = $1 and origin = 'stay' and voided_at is null`, [stay.id])).rows[0].n).toBeGreaterThan(0);
@@ -100,9 +102,9 @@ describe("Self Check-in", () => {
     await rooms("dirty");
     const stay = await book("Suzuki");
     await startSelfCheckin(pool, s(), stay.key, kiosk);
-    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Suzuki" } });
-    await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] });
-    const v = await selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: png });
+    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Suzuki" } }, kiosk);
+    await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] }, kiosk);
+    const v = await selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: png }, kiosk);
     expect(v.failed).toEqual(["room_not_ready"]);
     expect(await finishSelfCheckin(pool, s(), stay.key, kiosk)).toMatchObject({ outcome: "waiting", roomNumber: null });
     const r = (await pool.query(`select status, waiting_for_room_since is not null as waiting from ${s()}.reservations where id = $1`, [stay.id])).rows[0];
@@ -112,13 +114,25 @@ describe("Self Check-in", () => {
     expect(task).toEqual({ priority: true });
   });
 
+  it("an assigned room not ready gives way to a free ready room of the type", async () => {
+    await rooms("dirty");
+    const stay = await book("Mori");
+    await assignRoom(pool, s(), stay.id, fd, (await pool.query(`select id from ${s()}.rooms where number = '503'`)).rows[0].id);
+    await pool.query(`update ${s()}.rooms set cleanliness = 'inspected' where number = '504'`);
+    await startSelfCheckin(pool, s(), stay.key, kiosk);
+    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Mori" } }, kiosk);
+    await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] }, kiosk);
+    await selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: png }, kiosk);
+    expect(await finishSelfCheckin(pool, s(), stay.key, kiosk)).toMatchObject({ outcome: "checked_in", roomNumber: "504" });
+  });
+
   it("everyone staying is declared; a second adult's own form sends the guest to reception", async () => {
     await rooms("inspected");
     const stay = await book("Ito", { adults: 2 });
     await startSelfCheckin(pool, s(), stay.key, { kind: "phone" });
-    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Ito" } });
-    await expect(selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] })).rejects.toThrow(/companions/);
-    const v = await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [{ role: "partner", firstName: "Ken", lastName: "Ito", dateOfBirth: "1987-01-01", nationality: "JP" }] });
+    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Ito" } }, { kind: "phone" as const });
+    await expect(selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] }, { kind: "phone" as const })).rejects.toThrow(/companions/);
+    const v = await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [{ role: "partner", firstName: "Ken", lastName: "Ito", dateOfBirth: "1987-01-01", nationality: "JP" }] }, { kind: "phone" as const });
     expect(v.registration.status).toBe("reception");
     // on the phone only once the guest is at the hotel
     await expect(finishSelfCheckin(pool, s(), stay.key, { kind: "phone" })).rejects.toThrow(/at the hotel/);
@@ -128,14 +142,14 @@ describe("Self Check-in", () => {
   it("a balance still due: reception helps, and the desk's live line says why", async () => {
     const stay = await book("Kato", { plan: "full" });
     await startSelfCheckin(pool, s(), stay.key, kiosk);
-    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Kato" } });
-    await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] });
-    const v = await selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: png });
+    await selfCheckinRegister(pool, s(), stay.key, { step: "details", details: { ...details, lastName: "Kato" } }, kiosk);
+    await selfCheckinRegister(pool, s(), stay.key, { step: "companions", add: [] }, kiosk);
+    const v = await selfCheckinRegister(pool, s(), stay.key, { step: "review", signaturePng: png }, kiosk);
     expect(v.failed).toEqual(["payment"]);
     expect(v.amountDue).toBe(240);
     expect(await finishSelfCheckin(pool, s(), stay.key, kiosk)).toMatchObject({ outcome: "help", failed: ["payment"] });
     const line = await selfCheckinLine(pool, s(), [propertyId]);
     expect(line.find((l) => l.reservationId === stay.id)).toMatchObject({ guestName: "Aiko Kato", outcome: "help", reason: ["payment"], channel: "kiosk" });
-    expect(line.find((l) => l.outcome === "checked_in")).toMatchObject({ guestName: "Aiko Sato", roomNumber: "501" });
+    expect(line.find((l) => l.guestName === "Aiko Sato")).toMatchObject({ outcome: "checked_in", roomNumber: "501" });
   });
 });

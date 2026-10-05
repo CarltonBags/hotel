@@ -1,6 +1,7 @@
 "use server";
 
-import { claimDeclineNotice, findForKiosk, finishPortalPayment, finishSelfCheckin, selfCheckinRegister, selfCheckinStep, selfCheckinView, startSelfCheckin, TabletProblem, type SelfCheckinChannel, type SelfCheckinStep, type SelfCheckinView, type TabletInput } from "@hoteloftware/db";
+import { claimDeclineNotice, findForKiosk, finishCardSetup, finishPortalPayment, finishSelfCheckin, selfCheckinRegister, selfCheckinStep, selfCheckinView, startSelfCheckin, TabletProblem, type SelfCheckinChannel, type SelfCheckinStep, type SelfCheckinView, type TabletInput } from "@hoteloftware/db";
+import type { CheckInCondition } from "@hoteloftware/domain";
 import { notifyPortalDecline, notifySelfCheckin } from "@hoteloftware/events";
 import { paymentProvider } from "@hoteloftware/payments";
 import { pool } from "@/lib/db";
@@ -22,9 +23,22 @@ async function context(): Promise<{ schema: string; tenant: { id: string; schema
 
 export type SelfCheckinAnswer = { ok: true; view: SelfCheckinView } | { ok: false; error: string };
 
+/** What the guest may read of a refusal: our own words to guests; anything else is "error". */
+const GUEST_WORDS = new Set([
+  "This link does not open anything",
+  "Start Self Check-in again",
+  "This stay cannot be checked in",
+  "Reception will help you with the registration",
+  "Tell us you are at the hotel first",
+  "Nothing is due",
+  "Nothing can be paid on this stay any more",
+  "A card cannot be left on this stay any more",
+  "A payment is still being confirmed; please wait a moment and reload",
+]);
+
 const fail = (err: unknown): { ok: false; error: string } => {
   if (err instanceof TabletProblem) return { ok: false, error: `field:${err.message}` };
-  if (err instanceof Error && !("code" in err)) return { ok: false, error: err.message };
+  if (err instanceof Error && GUEST_WORDS.has(err.message)) return { ok: false, error: err.message };
   console.error("[self-checkin]", err);
   return { ok: false, error: "error" };
 };
@@ -51,7 +65,7 @@ export async function startAction(key: string): Promise<SelfCheckinAnswer> {
 export async function viewAction(key: string): Promise<SelfCheckinAnswer> {
   try {
     const c = await context();
-    return { ok: true, view: await selfCheckinView(pool(), c.schema, key) };
+    return { ok: true, view: await selfCheckinView(pool(), c.schema, key, c.channel) };
   } catch (err) {
     return fail(err);
   }
@@ -59,10 +73,10 @@ export async function viewAction(key: string): Promise<SelfCheckinAnswer> {
 
 export async function stepAction(key: string, step: SelfCheckinStep): Promise<void> {
   const c = await context();
-  await selfCheckinStep(pool(), c.schema, key, step).catch(() => undefined);
+  await selfCheckinStep(pool(), c.schema, key, step, c.channel).catch(() => undefined);
 }
 
-const REGISTER_STEPS = ["draft", "details", "companions", "back", "review"];
+const REGISTER_STEPS = ["details", "companions", "back", "review"];
 const MAX_SIGNATURE = 512 * 1024;
 
 /** One step of the registration on screen; the signature comes as a PNG data URL. */
@@ -72,7 +86,7 @@ export async function registerAction(key: string, raw: Record<string, unknown>):
     const signature = typeof raw.signature === "string" && raw.signature.length < MAX_SIGNATURE ? raw.signature : null;
     const input = (raw.step === "review" ? { step: "review", signaturePng: signature ? Uint8Array.from(Buffer.from(signature.replace(/^data:image\/png;base64,/, ""), "base64")) : null } : raw) as TabletInput;
     const c = await context();
-    return { ok: true, view: await selfCheckinRegister(pool(), c.schema, key, input) };
+    return { ok: true, view: await selfCheckinRegister(pool(), c.schema, key, input, c.channel) };
   } catch (err) {
     return fail(err);
   }
@@ -93,13 +107,24 @@ export async function paidAction(key: string, paymentId: string): Promise<{ ok: 
   }
 }
 
-/** Finish: checked in, waiting for the room, or reception helps; the desk is told how it ended. */
-export async function finishAction(key: string, here: boolean): Promise<{ ok: true; outcome: "checked_in" | "waiting" | "help"; roomNumber: string | null } | { ok: false; error: string }> {
+/** A card left as the stay's guarantee instead of paying now, confirmed in place. */
+export async function cardStoredAction(key: string, setupId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const c = await context();
+    const r = await finishCardSetup(pool(), c.schema, paymentProvider(), key, setupId);
+    return r.status === "succeeded" ? { ok: true } : { ok: false, error: r.error ?? r.status };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Finish: checked in, waiting for the room, or reception helps (and why); the desk is told how it ended. */
+export async function finishAction(key: string, here: boolean): Promise<{ ok: true; outcome: "checked_in" | "waiting" | "help"; roomNumber: string | null; failed: CheckInCondition[] } | { ok: false; error: string }> {
   try {
     const c = await context();
     const r = await finishSelfCheckin(pool(), c.schema, key, c.channel.kind === "phone" ? { kind: "phone", here: here === true } : c.channel);
-    await notifySelfCheckin(pool(), c.tenant, { ...r, reasons: r.failed.join(", ") }).catch((err) => console.error("self check-in not told", err));
-    return { ok: true, outcome: r.outcome, roomNumber: r.roomNumber };
+    await notifySelfCheckin(pool(), c.tenant, r).catch((err) => console.error("self check-in not told", err));
+    return { ok: true, outcome: r.outcome, roomNumber: r.roomNumber, failed: r.failed };
   } catch (err) {
     return fail(err);
   }

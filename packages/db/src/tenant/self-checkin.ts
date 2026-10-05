@@ -5,6 +5,7 @@ import { syncHousekeepingTasks } from "./housekeeping";
 import { amountDueIn, cardGuaranteeIn } from "./payments";
 import { reservationByKey } from "./portal";
 import { lockProperty } from "./property-lock";
+import { outOfOrderOn } from "./room-state";
 import { guestFormIn, guestStepIn, lockedRegistrationIn, openRegistrationIn, TabletProblem, type RegistrationView, type TabletInput, type TabletState } from "./registration";
 import { assignRoomIn, freeRoomsIn } from "./reservation-changes";
 import { withTenant } from "./with-tenant";
@@ -83,22 +84,30 @@ async function stayIn(tx: PoolClient, reservationId: string): Promise<Stay> {
 /** Cleanliness, nearest to ready first: the room a waiting guest gets is the one prepared soonest. */
 const READY_RANK: Record<Cleanliness, number> = { inspected: 0, clean: 1, dirty: 2 };
 
-/** The room for tonight: the one assigned (ready or not), else a free room of the type, a ready one first (none free: null). */
+/**
+ * The room for tonight: the one assigned when it is ready; else a free ready
+ * room of the type (the guest moves to it); else the one assigned, or the
+ * free room nearest to ready, to wait for. An assigned room Out of Order
+ * tonight is not one to wait for. None free: null.
+ */
 async function roomFor(tx: PoolClient, s: Stay): Promise<{ id: string; number: string; ready: boolean; assigned: boolean } | null> {
   const assigned = (await tx.query<{ id: string; number: string; cleanliness: Cleanliness; inspection_required: boolean }>(
     `select m.id, m.number, m.cleanliness, p.inspection_required from room_assignments a join rooms m on m.id = a.room_id join properties p on p.id = m.property_id
-     where a.reservation_id = $1 and a.from_date <= $2 and a.to_date > $2`,
+     where a.reservation_id = $1 and a.from_date <= $2 and a.to_date > $2
+       and not exists (select 1 from room_blocks ob where ob.room_id = m.id and ${outOfOrderOn("ob", "$2::date", "$2::date + 1")})`,
     [s.id, s.business_date],
   )).rows[0];
-  if (assigned) return { id: assigned.id, number: assigned.number, ready: isReady(assigned.cleanliness, assigned.inspection_required), assigned: true };
+  const mine = assigned ? { id: assigned.id, number: assigned.number, ready: isReady(assigned.cleanliness, assigned.inspection_required), assigned: true } : null;
+  if (mine?.ready) return mine;
   const free = await freeRoomsIn(tx, s.id, s.business_date);
-  if (!free.length) return null;
   const { rows } = await tx.query<{ id: string; number: string; cleanliness: Cleanliness; inspection_required: boolean }>(
     "select m.id, m.number, m.cleanliness, p.inspection_required from rooms m join properties p on p.id = m.property_id where m.id = any($1::uuid[]) order by m.number",
     [free.map((f) => f.id)],
   );
   const best = rows.sort((a, b) => READY_RANK[a.cleanliness] - READY_RANK[b.cleanliness])[0];
-  return best ? { id: best.id, number: best.number, ready: isReady(best.cleanliness, best.inspection_required), assigned: false } : null;
+  const other = best ? { id: best.id, number: best.number, ready: isReady(best.cleanliness, best.inspection_required), assigned: false } : null;
+  if (other?.ready) return other;
+  return mine ?? other;
 }
 
 /** How far the registration is: none needed or done, still on screen, or only at reception. */
@@ -145,8 +154,10 @@ async function viewIn(tx: PoolClient, runId: string): Promise<SelfCheckinView> {
 }
 
 /** The open run of a stay (the Portal Link's key), locked; none: refused. */
-async function runOf(tx: PoolClient, key: string): Promise<{ runId: string; reservationId: string; propertyId: string; status: string }> {
+async function runOf(tx: PoolClient, key: string, channel?: SelfCheckinChannel): Promise<{ runId: string; reservationId: string; propertyId: string; status: string }> {
   const r = await reservationByKey(tx, key, { lock: true });
+  // a kiosk serves its own property only
+  if (channel?.kind === "kiosk" && channel.propertyId !== r.property_id) throw new Error("This link does not open anything");
   const run = (await tx.query<{ id: string }>("select id from self_checkins where reservation_id = $1 and finished_at is null order by started_at desc limit 1 for update", [r.id])).rows[0];
   if (!run) throw new Error("Start Self Check-in again");
   return { runId: run.id, reservationId: r.id, propertyId: r.property_id, status: r.status };
@@ -194,15 +205,15 @@ export async function startSelfCheckin(pool: Pool, schema: string, key: string, 
   });
 }
 
-export async function selfCheckinView(pool: Pool, schema: string, key: string): Promise<SelfCheckinView> {
-  return withTenant(pool, schema, async (tx) => viewIn(tx, (await runOf(tx, key)).runId));
+export async function selfCheckinView(pool: Pool, schema: string, key: string, channel: SelfCheckinChannel): Promise<SelfCheckinView> {
+  return withTenant(pool, schema, async (tx) => viewIn(tx, (await runOf(tx, key, channel)).runId));
 }
 
 /** Where the guest is now, for the desk's live line. */
-export async function selfCheckinStep(pool: Pool, schema: string, key: string, step: SelfCheckinStep): Promise<void> {
+export async function selfCheckinStep(pool: Pool, schema: string, key: string, step: SelfCheckinStep, channel: SelfCheckinChannel): Promise<void> {
   if (!["stay", "register", "pay", "result"].includes(step)) throw new Error("Unknown step");
   await withTenant(pool, schema, async (tx) => {
-    const { runId } = await runOf(tx, key);
+    const { runId } = await runOf(tx, key, channel);
     await tx.query("update self_checkins set step = $2, updated_at = now() where id = $1", [runId, step]);
   });
 }
@@ -213,10 +224,10 @@ export async function selfCheckinStep(pool: Pool, schema: string, key: string, s
  * screen, the review with the signature. Once the persons are known and no
  * form is needed, the guest's part is done.
  */
-export async function selfCheckinRegister(pool: Pool, schema: string, key: string, input: TabletInput): Promise<SelfCheckinView> {
+export async function selfCheckinRegister(pool: Pool, schema: string, key: string, input: TabletInput, channel: SelfCheckinChannel): Promise<SelfCheckinView> {
   if (input.step === "welcome") throw new Error("Unknown step");
   return withTenant(pool, schema, async (tx) => {
-    const { runId, reservationId, status } = await runOf(tx, key);
+    const { runId, reservationId, status } = await runOf(tx, key, channel);
     if (status !== "confirmed") throw new Error("This stay cannot be checked in");
     const reg = await lockedRegistrationIn(tx, reservationId);
     const primary = reg?.persons.find((p) => p.role === "primary");
@@ -244,6 +255,8 @@ export interface SelfCheckinResult {
   roomNumber: string | null;
   /** What reception will help with (outcome help). */
   failed: CheckInCondition[];
+  /** The registration waits for the desk's ID Check. */
+  idCheckOpen: boolean;
   reservationId: string;
   propertyId: string;
   guestName: string;
@@ -258,44 +271,52 @@ export interface SelfCheckinResult {
  */
 export async function finishSelfCheckin(pool: Pool, schema: string, key: string, channel: SelfCheckinChannel & { here?: boolean }): Promise<SelfCheckinResult> {
   return withTenant(pool, schema, async (tx) => {
-    const { runId, reservationId, propertyId } = await runOf(tx, key);
-    if (channel.kind === "kiosk" && channel.propertyId !== propertyId) throw new Error("This link does not open anything");
+    // every writer takes the property's lock first, then the reservation's row
+    const pre = (await tx.query<{ property_id: string }>("select property_id from reservations where portal_key = $1", [key])).rows[0];
+    if (!pre) throw new Error("This link does not open anything");
+    await lockProperty(tx, pre.property_id);
+    const { runId, reservationId, propertyId } = await runOf(tx, key, channel);
     if (channel.kind === "phone" && channel.here !== true) throw new Error("Tell us you are at the hotel first");
-    await lockProperty(tx, propertyId);
     const v = await viewIn(tx, runId);
     const s = await stayIn(tx, reservationId);
+    // the registration done on screen still waits for the desk's ID Check (it completes only with both)
+    const idCheckOpen = !!(await tx.query("select 1 from registrations g join registration_persons p on p.registration_id = g.id where g.reservation_id = $1 and p.guest_done_at is not null and p.id_checked_at is null and p.completed_at is null", [reservationId])).rows.length;
     const done = async (outcome: SelfCheckinOutcome, failed: CheckInCondition[], roomNumber: string | null): Promise<SelfCheckinResult> => {
       await tx.query("update self_checkins set step = 'result', outcome = $2, reason = $3, finished_at = now(), updated_at = now() where id = $1", [runId, outcome, failed.join(",") || null]);
-      return { outcome, roomNumber, failed, reservationId, propertyId, guestName: `${s.first_name} ${s.last_name}`.trim() };
+      return { outcome, roomNumber, failed, idCheckOpen, reservationId, propertyId, guestName: `${s.first_name} ${s.last_name}`.trim() };
     };
     if (s.status !== "confirmed") return done("help", [], null);
     if (needsReception(v.failed)) return done("help", v.failed.filter((c) => c !== "room_not_ready"), null);
     const room = await roomFor(tx, s);
-    if (!room?.ready) {
-      // the room nearest to ready is planned for the guest, so its preparation is the priority on the board; the guest hears the number once it is ready
+    // whatever the check-in refuses (the stay changed meanwhile) ends at reception, not in an error
+    await tx.query("savepoint self_checkin");
+    try {
       if (room && !room.assigned) await assignRoomIn(tx, reservationId, SELF_CHECKIN_USER, room.id);
-      await tx.query("update reservations set waiting_for_room_since = coalesce(waiting_for_room_since, clock_timestamp()) where id = $1", [reservationId]);
-      await syncHousekeepingTasks(tx, propertyId, SELF_CHECKIN_USER);
-      return done("waiting", [], null);
+      if (!room?.ready) {
+        // the room nearest to ready is planned for the guest, so its preparation is the priority on the board; the guest hears the number once it is ready
+        await tx.query("update reservations set waiting_for_room_since = coalesce(waiting_for_room_since, clock_timestamp()) where id = $1", [reservationId]);
+        await syncHousekeepingTasks(tx, propertyId, SELF_CHECKIN_USER);
+        return done("waiting", [], null);
+      }
+      await checkInIn(tx, reservationId, SELF_CHECKIN_USER);
+      return done("checked_in", [], room.number);
+    } catch (err) {
+      await tx.query("rollback to savepoint self_checkin");
+      console.error("[self-checkin] check-in refused", err);
+      return done("help", [], null);
     }
-    if (!room.assigned) await assignRoomIn(tx, reservationId, SELF_CHECKIN_USER, room.id);
-    await checkInIn(tx, reservationId, SELF_CHECKIN_USER);
-    return done("checked_in", [], room.number);
   });
 }
-
 export interface SelfCheckinLine {
   id: string;
   reservationId: string;
   propertyId: string;
   guestName: string;
   channel: "kiosk" | "phone";
-  deviceId: string | null;
   step: SelfCheckinStep;
   outcome: SelfCheckinOutcome | null;
   reason: CheckInCondition[];
   roomNumber: string | null;
-  at: Date;
 }
 
 /** The desk's live line: guests in Self Check-in now, and how it ended in the last two hours. */
@@ -310,7 +331,7 @@ export async function selfCheckinLine(pool: Pool, schema: string, propertyIds: s
        order by c.updated_at desc limit 50`,
       [propertyIds],
     );
-    return rows.map((r) => ({ id: r.id, reservationId: r.reservation_id, propertyId: r.property_id, guestName: r.guest, channel: r.channel, deviceId: r.device_id, step: r.step, outcome: r.outcome, reason: (r.reason?.split(",") ?? []) as CheckInCondition[], roomNumber: r.room, at: r.at }));
+    return rows.map((r) => ({ id: r.id, reservationId: r.reservation_id, propertyId: r.property_id, guestName: r.guest, channel: r.channel, step: r.step, outcome: r.outcome, reason: (r.reason?.split(",") ?? []) as CheckInCondition[], roomNumber: r.room }));
   });
 }
 

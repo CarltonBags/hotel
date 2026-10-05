@@ -34,8 +34,11 @@ export async function notifyStaff(pool: Pool, tenant: { id: string; schemaName: 
 
 /** Notify the users who hold a right at the property (the desk that can take a payment, say). */
 export async function notifyWithRight(pool: Pool, tenant: { id: string; schemaName: string }, action: Action, propertyId: string, n: Omit<StaffNotification, "propertyId">): Promise<void> {
-  const users = (await listTenantUsers(pool, tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, action, propertyId));
-  await notifyStaff(pool, tenant, users, { ...n, propertyId });
+  await notifyStaff(pool, tenant, await usersWithRight(pool, tenant.id, action, propertyId), { ...n, propertyId });
+}
+
+async function usersWithRight(pool: Pool, tenantId: string, action: Action, propertyId: string): Promise<TenantUser[]> {
+  return (await listTenantUsers(pool, tenantId)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, action, propertyId));
 }
 
 /** A guest's online payment was declined in the Guest Portal: the desk is told once (ticket 41). */
@@ -43,19 +46,33 @@ export function notifyPortalDecline(pool: Pool, tenant: { id: string; schemaName
   return notifyWithRight(pool, tenant, "take_payments", d.propertyId, { kind: "payments.portal_declined", title: "Online payment declined in the Guest Portal", body: d.reason, href: `/reservations/${d.reservationId}` });
 }
 
+/** Why a guest needs help at Self Check-in, in the desk's words (ticket 49). */
+const SELF_CHECKIN_REASON: Record<string, string> = {
+  arrival_day: "not the arrival day",
+  too_early: "before the check-in time",
+  registration: "the registration needs reception",
+  payment: "a balance is due",
+  room_not_ready: "the room is not ready",
+};
+
 /**
  * How a Self Check-in ended, told to the desk (ticket 49): a guest who needs
  * help, or waits for a room, as any notification; a completed check-in only
- * in the app (one per arrival would flood the mailbox).
+ * in the app (one per arrival would flood the mailbox), unless the
+ * registration still waits for the desk's ID Check.
  */
 export async function notifySelfCheckin(
   pool: Pool,
   tenant: { id: string; schemaName: string },
-  r: { reservationId: string; propertyId: string; guestName: string; outcome: "checked_in" | "waiting" | "help"; roomNumber: string | null; reasons: string },
+  r: { reservationId: string; propertyId: string; guestName: string; outcome: "checked_in" | "waiting" | "help"; roomNumber: string | null; failed: string[]; idCheckOpen: boolean },
 ): Promise<void> {
   const href = `/reservations/${r.reservationId}`;
-  if (r.outcome === "help") return notifyWithRight(pool, tenant, "check_in", r.propertyId, { kind: "self_checkin.help", title: `${r.guestName} needs help at Self Check-in`, body: r.reasons, href });
-  if (r.outcome === "waiting") return notifyWithRight(pool, tenant, "check_in", r.propertyId, { kind: "self_checkin.waiting", title: `${r.guestName} is waiting for a room`, body: "Arrived, Waiting for Room: assign a room once one is ready and tell the guest.", href });
-  const users = (await listTenantUsers(pool, tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "check_in", r.propertyId));
-  for (const u of users) await publishNotification(pool, { tenantId: tenant.id, userId: u.id, kind: "self_checkin.done", title: "Self check-in complete", body: `${r.guestName} · Room ${r.roomNumber ?? "?"}`, href });
+  if (r.outcome === "help") {
+    const why = r.failed.map((c) => SELF_CHECKIN_REASON[c] ?? c).join(", ") || "the stay changed meanwhile";
+    return notifyWithRight(pool, tenant, "check_in", r.propertyId, { kind: "self_checkin.help", title: `${r.guestName} needs help at Self Check-in`, body: `Reason: ${why}.`, href });
+  }
+  if (r.outcome === "waiting") return notifyWithRight(pool, tenant, "check_in", r.propertyId, { kind: "self_checkin.waiting", title: `${r.guestName} is waiting for a room`, body: "Arrived, Waiting for Room: tell the guest the room once it is ready.", href });
+  const body = `${r.guestName} · Room ${r.roomNumber ?? "?"}`;
+  if (r.idCheckOpen) return notifyWithRight(pool, tenant, "check_in", r.propertyId, { kind: "self_checkin.id_check", title: "Self check-in complete: ID Check open", body: `${body}. Compare the registration with the guest's document to complete it.`, href });
+  for (const u of await usersWithRight(pool, tenant.id, "check_in", r.propertyId)) await publishNotification(pool, { tenantId: tenant.id, userId: u.id, kind: "self_checkin.done", title: "Self check-in complete", body, href });
 }

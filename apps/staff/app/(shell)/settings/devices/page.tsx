@@ -4,7 +4,7 @@ import { listTenantUsers, lobbyToken } from "@hoteloftware/db";
 import { can, canUsePin, mayLookAfterPinUser, pinRolesFor } from "@hoteloftware/domain";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
-import { env } from "@/lib/env";
+import { tenantUrl } from "@/lib/env";
 import { loadShell } from "@/lib/shell";
 import { ActionForm, Field, Select } from "@/components/form-fields";
 import { createPinUserAction, deviceUsersAction, idleAction, resetPinAction, revokeAction } from "./actions";
@@ -39,7 +39,7 @@ export default async function DevicesSettingsPage() {
   const floorIds = new Set(floor.map((u) => u.id));
   // the lobby QR code for Self Check-in on the phone (ticket 49), from the configured domain
   const token = manager ? await lobbyToken(pool(), tenant.schemaName, property.id) : null;
-  const lobbyUrl = token ? `${env.authUrl.startsWith("https") ? "https" : "http"}://${tenant.slug}.${env.appDomain}/here/${token}` : null;
+  const lobbyUrl = token ? tenantUrl(tenant.slug, `/here/${token}`) : null;
   const lobbyQr = lobbyUrl ? await QRCode.toString(lobbyUrl, { type: "svg", margin: 1 }) : null;
   return (
     <div className="mx-auto grid max-w-4xl gap-6 p-6">
