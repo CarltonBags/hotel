@@ -513,7 +513,8 @@ export async function updateRatePlan(pool: Pool, schema: string, propertyId: str
 
 export async function listRatePlans(pool: Pool, schema: string, propertyId: string, options: { includeInactive?: boolean } = {}): Promise<RatePlan[]> {
   return withTenant(pool, schema, async (tx) => {
-    const { rows } = await tx.query<Row>(`${SELECT} where p.property_id = $1 ${options.includeInactive ? "" : "and p.active"} order by p.sort_order, p.code`, [propertyId]);
+    // a group's own plan is kept on its group (ticket 58)
+    const { rows } = await tx.query<Row>(`${SELECT} where p.property_id = $1 and p.group_id is null ${options.includeInactive ? "" : "and p.active"} order by p.sort_order, p.code`, [propertyId]);
     return rows.map(toRatePlan);
   });
 }

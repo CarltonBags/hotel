@@ -194,11 +194,11 @@ async function occupancyReport(tx: PoolClient, req: ReportRequest, props: Proper
 async function pickupReport(tx: PoolClient, req: ReportRequest, props: PropertyInfo[], currency: string): Promise<ReportTable> {
   const rates = req.rates ?? {};
   const since = req.pickupSince ?? addDays(props[0]!.today, -7);
-  const byDate = new Map<string, { otb: number; pickN: number; pickR: number; available: number; ly: number; lyAvailable: number }>();
+  const byDate = new Map<string, { otb: number; held: number; pickN: number; pickR: number; available: number; ly: number; lyAvailable: number }>();
   for (const p of props) {
     // the stay as it stands, and as it stood at the start of the chosen day (property time); last year the same, 364 days earlier.
     // Each part is aggregated per date once, then joined: no per-date scans.
-    const { rows } = await tx.query<{ date: string; available: number; otb: number; then_n: number; now_r: string; then_r: string; ly: number; ly_available: number }>(
+    const { rows } = await tx.query<{ date: string; available: number; otb: number; held: number; then_n: number; now_r: string; then_r: string; ly: number; ly_available: number }>(
       `with d as (select generate_series($2::date, $3::date, interval '1 day')::date as date),
        types as (select id from room_types where property_id = $1 and ($6::uuid is null or id = $6)),
        cut as (select ($4::date)::timestamp at time zone $5 as at, now() - interval '${LAST_YEAR_SHIFT} days' as ly_at),
@@ -224,20 +224,30 @@ async function pickupReport(tx: PoolClient, req: ReportRequest, props: PropertyI
        then_n as (select date, count(*)::int as n from held_then group by date),
        ly_n as (select date + ${LAST_YEAR_SHIFT} as date, count(*)::int as n from held_ly group by date),
        now_r as (select rev.date, sum(rev.room) as v from rev join stays s on s.id = rev.reservation_id and s.date = rev.date where s.status in ${ACTIVE} group by rev.date),
+       -- Held Rooms of Definite groups not yet booked count as sold, shown apart (ticket 58)
+       held as (
+         select h.date, sum(greatest(h.rooms - (select count(*) from reservations r where r.group_holding_id = gh.id and r.room_type_id = h.room_type_id
+                                                 and r.status in ${ACTIVE} and r.arrival <= h.date and r.departure > h.date), 0))::int as n
+         from group_held_rooms h join group_holdings gh on gh.id = h.holding_id join groups g on g.id = gh.group_id
+         where g.property_id = $1 and g.status = 'definite' and gh.released_at is null and h.room_type_id in (select id from types) and h.date between $2 and $3
+         group by h.date
+       ),
        then_r as (select rev.date, sum(rev.room) as v from rev join held_then h on h.id = rev.reservation_id and h.date = rev.date group by rev.date)
        select to_char(d.date, 'YYYY-MM-DD') as date,
          (select n from room_count) - coalesce(ooo.n, 0) as available,
-         coalesce(now_n.n, 0) as otb, coalesce(then_n.n, 0) as then_n, coalesce(now_r.v, 0) as now_r, coalesce(then_r.v, 0) as then_r,
+         coalesce(now_n.n, 0) as otb, coalesce(held.n, 0) as held, coalesce(then_n.n, 0) as then_n, coalesce(now_r.v, 0) as now_r, coalesce(then_r.v, 0) as then_r,
          coalesce(ly_n.n, 0) as ly, (select n from room_count) - coalesce(ooo_ly.n, 0) as ly_available
        from d left join ooo on ooo.date = d.date left join ooo_ly on ooo_ly.date = d.date left join now_n on now_n.date = d.date left join then_n on then_n.date = d.date
          left join ly_n on ly_n.date = d.date left join now_r on now_r.date = d.date left join then_r on then_r.date = d.date
+         left join held on held.date = d.date
        order by 1`,
       [p.id, req.from, req.to, since, p.timeZone, req.roomTypeId ?? null],
     );
     for (const r of rows) {
-      const x = byDate.get(r.date) ?? { otb: 0, pickN: 0, pickR: 0, available: 0, ly: 0, lyAvailable: 0 };
+      const x = byDate.get(r.date) ?? { otb: 0, held: 0, pickN: 0, pickR: 0, available: 0, ly: 0, lyAvailable: 0 };
       byDate.set(r.date, {
         otb: x.otb + r.otb,
+        held: x.held + r.held,
         pickN: x.pickN + r.otb - r.then_n,
         pickR: roundMoney(x.pickR + convertAmount(Number(r.now_r) - Number(r.then_r), p.currency, currency, rates)),
         available: x.available + r.available,
@@ -246,15 +256,16 @@ async function pickupReport(tx: PoolClient, req: ReportRequest, props: PropertyI
       });
     }
   }
-  const rows: ReportRow[] = [...byDate.entries()].map(([date, x]) => ({ cells: { date, otb: x.otb, pickN: x.pickN, pickR: x.pickR, occ: percentOf(x.otb, x.available), ly: percentOf(x.ly, x.lyAvailable) } }));
-  const sum = (k: "otb" | "pickN" | "pickR" | "available" | "ly" | "lyAvailable") => [...byDate.values()].reduce((s, x) => s + x[k], 0);
-  rows.push({ cells: { date: t(req, "total"), otb: sum("otb"), pickN: sum("pickN"), pickR: roundMoney(sum("pickR")), occ: percentOf(sum("otb"), sum("available")), ly: percentOf(sum("ly"), sum("lyAvailable")) }, emphasis: true });
+  const rows: ReportRow[] = [...byDate.entries()].map(([date, x]) => ({ cells: { date, otb: x.otb, held: x.held, pickN: x.pickN, pickR: x.pickR, occ: percentOf(x.otb + x.held, x.available), ly: percentOf(x.ly, x.lyAvailable) } }));
+  const sum = (k: "otb" | "held" | "pickN" | "pickR" | "available" | "ly" | "lyAvailable") => [...byDate.values()].reduce((s, x) => s + x[k], 0);
+  rows.push({ cells: { date: t(req, "total"), otb: sum("otb"), held: sum("held"), pickN: sum("pickN"), pickR: roundMoney(sum("pickR")), occ: percentOf(sum("otb") + sum("held"), sum("available")), ly: percentOf(sum("ly"), sum("lyAvailable")) }, emphasis: true });
   return {
     title: REPORT_TITLES.pickup[req.language],
     notes: [...baseNotes(req, props, currency), t(req, "pickupNote").replace("{since}", since), t(req, "baseAvailable")],
     columns: [
       { key: "date", label: t(req, "date"), kind: "text" },
       { key: "otb", label: t(req, "onTheBooks"), kind: "int" },
+      { key: "held", label: t(req, "groupHeld"), kind: "int" },
       { key: "pickN", label: t(req, "pickupNights"), kind: "int" },
       { key: "pickR", label: t(req, "pickupRevenue"), kind: "money" },
       { key: "occ", label: t(req, "otbOccupancy"), kind: "percent" },

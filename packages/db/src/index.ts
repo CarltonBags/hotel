@@ -625,3 +625,4 @@ export {
   type AtSystemReceiptView,
 } from "./tenant/fiscal-at";
 export { listVouchers, sellVoucher, setVoucherLiabilityAccount, voucherByCode, type SoldVoucher, type VoucherRow, type VoucherSale } from "./tenant/vouchers";
+export { addHolding, bookFromGroup, createGroup, createSeries, groupView, listGroups, runGroupDuties, setGroupPrices, setGroupStatus, setHeldRooms, setReleaseDate, updateGroup, type GroupDuties, type GroupInput, type GroupNight, type GroupRow, type GroupView, type HoldingInput } from "./tenant/groups";

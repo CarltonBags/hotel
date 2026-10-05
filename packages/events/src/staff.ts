@@ -117,3 +117,24 @@ export function notifyReceiptRefused(pool: Pool, tenant: { id: string; schemaNam
     href: "/settings/cash-desk",
   });
 }
+
+/** Groups (ticket 58): Held Rooms releasing soon (extend before it passes), released, or a Tentative group lapsed — told to the desk that manages groups. */
+export async function notifyGroupDuties(
+  pool: Pool,
+  tenant: { id: string; schemaName: string },
+  d: {
+    released: { groupId: string; propertyId: string; groupName: string; arrival: string; rooms: number }[];
+    releasingSoon: { groupId: string; propertyId: string; groupName: string; arrival: string; releaseDate: string; unsold: number }[];
+    lapsed: { groupId: string; propertyId: string; groupName: string }[];
+  },
+): Promise<void> {
+  for (const r of d.releasingSoon) {
+    await notifyWithRight(pool, tenant, "manage_groups", r.propertyId, { kind: "group.release_soon", title: `${r.groupName}: Held Rooms release on ${r.releaseDate}`, body: `${r.unsold} room(s) of the arrival on ${r.arrival} are not booked yet. Extend the Release Date before it passes if the group needs them.`, href: `/groups/${r.groupId}` });
+  }
+  for (const r of d.released) {
+    await notifyWithRight(pool, tenant, "manage_groups", r.propertyId, { kind: "group.released", title: `${r.groupName}: unsold Held Rooms released`, body: `${r.rooms} room(s) of the arrival on ${r.arrival} are back on sale, channels included.`, href: `/groups/${r.groupId}` });
+  }
+  for (const g of d.lapsed) {
+    await notifyWithRight(pool, tenant, "manage_groups", g.propertyId, { kind: "group.lapsed", title: `${g.groupName} lapsed at its option date`, body: "The Tentative group was not made Definite in time.", href: `/groups/${g.groupId}` });
+  }
+}

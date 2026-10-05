@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { addDays, datesFrom, type AssignmentSegment, type ReservationStatus } from "@hoteloftware/domain";
 import { checkDate } from "./catalogue-common";
-import { loadQuoteData } from "./reservations";
+import { heldByNight, loadQuoteData } from "./reservations";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -25,6 +25,12 @@ export interface CalendarDay {
   free: number;
   /** Rooms of the type Out of Order that night (not for sale, not occupied). */
   outOfOrder: number;
+  /** Held for Definite groups and not yet booked: out of sale (ticket 58). */
+  held: number;
+  /** Wanted by Tentative groups: not out of sale. */
+  tentative: number;
+  /** The Tentative groups want more than is free. */
+  groupWarning: boolean;
   /** Lowest price of the public, active Rate Plans at base occupancy; null without a price. */
   lowestPrice: number | null;
   /** Stop sell on every public plan that has a price. */
@@ -109,6 +115,8 @@ export async function loadCalendar(pool: Pool, schema: string, propertyId: strin
     const sections = await tx.query<{ id: string; name: string }>("select id, name from sections where property_id = $1 order by sort_order, name", [propertyId]);
     const features = await tx.query<{ id: string; name: string }>("select id, name from room_features where property_id = $1 order by name", [propertyId]);
     const publicPlans = data.plans.filter((p) => p.public);
+    // Tentative groups only want their rooms: shown, and warned of when they exceed what is free (ticket 58)
+    const tentative = await heldByNight(tx, propertyId, from, to, [], "tentative");
     const roomTypes = data.types.map((t) => ({
       id: t.id,
       code: t.code,
@@ -128,6 +136,9 @@ export async function loadCalendar(pool: Pool, schema: string, propertyId: strin
           date,
           free: t.rooms - data.roomsTaken(t.id, date),
           outOfOrder: data.outOfOrder(t.id, date),
+          held: data.held(t.id, date),
+          tentative: tentative.get(`${t.id}|${date}`) ?? 0,
+          groupWarning: (tentative.get(`${t.id}|${date}`) ?? 0) > t.rooms - data.roomsTaken(t.id, date),
           lowestPrice: lowest?.price ?? null,
           stopSell: priced.length > 0 && priced.every((x) => x.restriction.stopSell),
           minStay: lowest && lowest.restriction.minStayArrival !== null && lowest.restriction.minStayArrival > 1 ? lowest.restriction.minStayArrival : null,

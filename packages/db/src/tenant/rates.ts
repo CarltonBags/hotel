@@ -780,7 +780,7 @@ export async function listPriceEnds(pool: Pool, schema: string, propertyId: stri
       `select p.id as rate_plan_id, p.code, p.name, rt.room_type_id, t.code as type_code,
          (select to_char(max(r.date), 'YYYY-MM-DD') from rates r where r.rate_plan_id = p.id and r.room_type_id = rt.room_type_id) as last_date
        from rate_plans p join rate_plan_room_types rt on rt.rate_plan_id = p.id join room_types t on t.id = rt.room_type_id
-       where p.property_id = $1 and p.kind = 'base' and p.active
+       where p.property_id = $1 and p.kind = 'base' and p.active and p.group_id is null
        order by p.sort_order, p.code, t.sort_order, t.code`,
       [propertyId],
     );

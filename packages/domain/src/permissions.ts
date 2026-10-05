@@ -162,6 +162,11 @@ export const PROPERTY_ACTIONS = {
   view_cash_desk: ["property_manager", "front_desk", "accounting"],
   /** The property's cash desk: on or off, Cash Registers, tolerance and Paid-out limit. */
   manage_cash_desk: ["property_manager"],
+  /** Groups ("Groups and allotments", ticket 58): Front Desk and Property Manager create and edit Groups; Revenue and Accounting see them. */
+  view_groups: ["property_manager", "front_desk", "revenue", "accounting"],
+  manage_groups: ["property_manager", "front_desk"],
+  /** Revenue edits contract prices and release dates too. */
+  edit_group_contract: ["property_manager", "front_desk", "revenue"],
   /** Matrix "Sell and redeem Vouchers at the desk" (ticket 53); the list of Vouchers in circulation too. */
   sell_vouchers: ["property_manager", "front_desk"],
   /** Enrol and revoke Devices of the property, choose who signs in on them (Property Manager). */

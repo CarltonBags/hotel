@@ -1,10 +1,10 @@
 import PgBoss from "pg-boss";
 import { todayIn } from "@hoteloftware/domain";
 import type { Pool } from "pg";
-import { pruneNotifications, publishNotification } from "@hoteloftware/events";
+import { notifyGroupDuties, pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { connectedProperties, enqueueFullPushes, pruneChannelOutbox, claimDueReminders, deleteEndedTenants, deleteExpiredConversations, deleteOldUnassignedWhatsApp, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
+import { runGroupDuties, connectedProperties, enqueueFullPushes, pruneChannelOutbox, claimDueReminders, deleteEndedTenants, deleteExpiredConversations, deleteOldUnassignedWhatsApp, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -53,6 +53,9 @@ export const QUEUES = {
   /** Every minute: Receipts signed, days closed for DSFinV-K, one job per tenant (ticket 51). */
   fiscalAll: "fiscal.all",
   fiscal: "fiscal",
+  /** Hourly: Held Rooms released on their date, warnings 3 days ahead, Tentative groups lapsed, one job per tenant (ticket 58). */
+  groupsAll: "groups.duties.all",
+  groups: "groups.duties",
   /** At night: the months' signed data and DSFinV-K exports archived outside the provider. */
   fiscalArchiveAll: "fiscal.archive.all",
   fiscalArchive: "fiscal.archive",
@@ -321,6 +324,22 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     // every 20 minutes from 02:00 to 04:40: a provider export still being prepared is asked again
     await boss.schedule(QUEUES.fiscalArchiveAll, "*/20 2-4 * * *", {}, { tz: "Europe/Berlin" });
   }
+
+  await boss.work<TenantJobData>(QUEUES.groups, async (jobs) => {
+    for (const job of jobs) {
+      const tenant = await findTenantById(pool, job.data.tenantId);
+      if (!tenant) continue;
+      const d = await runGroupDuties(pool, tenant.schemaName);
+      await notifyGroupDuties(pool, tenant, d).catch((err) => console.error("[groups] not told", err));
+      if (d.released.length || d.lapsed.length) console.log(`[groups] ${tenant.slug}: released ${d.released.length}, lapsed ${d.lapsed.length}`);
+    }
+  });
+  await boss.work(QUEUES.groupsAll, async () => {
+    const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+    for (const t of rows) await boss.send(QUEUES.groups, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `groups:${t.id}`, singletonSeconds: 300 });
+  });
+  // hourly: a Business Date moves on with each property's Night Audit
+  await boss.schedule(QUEUES.groupsAll, "20 * * * *", {}, { tz: "Europe/Berlin" });
 
   await boss.work(QUEUES.subscriptionBilling, async () => {
     // trials and Test Mode are not billed; a failing tenant does not stop the others
