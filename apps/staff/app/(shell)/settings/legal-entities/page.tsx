@@ -5,7 +5,7 @@ import { loadShell } from "@/lib/shell";
 import { fill, type Messages } from "@/i18n/messages";
 import { pool } from "@/lib/db";
 import { ActionForm, Field, Select } from "@/components/form-fields";
-import { saveLegalEntity, saveNumberRange } from "./actions";
+import { saveLegalEntity, saveNumberRange, saveVoucherAccount } from "./actions";
 
 function countryOptions(language: string) {
   const names = new Intl.DisplayNames([language], { type: "region" });
@@ -51,6 +51,13 @@ export default async function LegalEntitiesPage() {
             <LegalEntityForm entity={e} m={m} language={language} />
           </div>
           <NumberRanges legalEntityId={e.id} ranges={ranges.get(e.id) ?? []} m={m} />
+          {/* where sold Vouchers are booked: a liability, not revenue (ticket 53) */}
+          <div className="mt-6" data-voucher-account>
+            <ActionForm action={saveVoucherAccount} submitLabel={m["action.save"]} pendingLabel={m["action.saving"]} className="flex flex-wrap items-end gap-3">
+              <input type="hidden" name="legalEntityId" value={e.id} />
+              <Field label={m["settings.voucherAccount"]} name="account" defaultValue={e.voucherLiabilityAccount} />
+            </ActionForm>
+          </div>
         </details>
       ))}
       <section className="rounded-2xl bg-surface-2 p-5">

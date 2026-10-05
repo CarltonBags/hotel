@@ -83,7 +83,7 @@ export function fiscalAmount(n: number): string {
 }
 
 /** Money paid before the stay began is a deposit (Anzahlung); after, it settles the stay's sales. */
-export type FiscalBusinessCase = "Anzahlungseinstellung" | "Umsatz";
+export type FiscalBusinessCase = "Anzahlungseinstellung" | "Umsatz" | "MehrzweckgutscheinKauf";
 
 export interface ClosingTransaction {
   /** BON_ID: ascending per tenant, never the TSE's own id. */

@@ -151,9 +151,9 @@ export async function registerAtClients(pool: Pool, schema: string, deps: Fiscal
 export async function signAtReceipt(pool: Pool, schema: string, deps: FiscalDeps, receiptId: string): Promise<FiscalSignResult> {
   const claim = randomUUID();
   const held = await withTenant(pool, schema, async (tx) => {
-    const f = (await tx.query<{ state: string; stale: boolean; attempts: number; property_id: string; client_id: string; amounts: VatAmount[]; tender: string; currency: string; amount: string; receipt_type: string; refund_of: string | null }>(
-      `select f.state, coalesce(f.claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}), true) as stale, f.attempts, f.property_id, f.client_id, f.amounts, f.tender, trim(f.currency) as currency, f.amount, f.receipt_type, p.refund_of
-       from fiscal_transactions f join receipts rc on rc.id = f.receipt_id join payments p on p.id = rc.payment_id where f.receipt_id = $1 for update of f`,
+    const f = (await tx.query<{ state: string; stale: boolean; attempts: number; property_id: string; client_id: string; amounts: VatAmount[]; tender: string; currency: string; amount: string; receipt_type: string; refund_of: string | null; business_case: string }>(
+      `select f.state, coalesce(f.claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}), true) as stale, f.attempts, f.property_id, f.client_id, f.amounts, f.tender, trim(f.currency) as currency, f.amount, f.receipt_type, p.refund_of, f.business_case
+       from fiscal_transactions f join receipts rc on rc.id = f.receipt_id left join payments p on p.id = rc.payment_id where f.receipt_id = $1 for update of f`,
       [receiptId],
     )).rows[0];
     if (!f) return { kind: "none" as const };
@@ -175,7 +175,7 @@ export async function signAtReceipt(pool: Pool, schema: string, deps: FiscalDeps
         retry: f.attempts > 0,
         amountsPerVatRate: f.amounts.map((a) => ({ vatRate: atVatKey(a.rate), amount: fiscalAmount(a.amount) })),
         amountsPerPaymentType: [{ paymentType: fiscalPayment(f.tender).tse, amount: fiscalAmount(amount), currency: f.currency }],
-        lineItems: [{ quantity: "1", text: amount < 0 ? "Rückzahlung Beherbergung" : "Zahlung Beherbergung", pricePerUnit: fiscalAmount(amount) }],
+        lineItems: [{ quantity: "1", text: f.business_case === "MehrzweckgutscheinKauf" ? "Wertgutschein" : amount < 0 ? "Rückzahlung Beherbergung" : "Zahlung Beherbergung", pricePerUnit: fiscalAmount(amount) }],
         ...(original?.receipt_number ? { metadata: { cancels_receipt_number: original.receipt_number } } : {}),
       };
     } catch (err) {

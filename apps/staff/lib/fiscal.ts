@@ -1,4 +1,4 @@
-import { receiptsOfPaymentToSign, signReceipt, type FiscalDeps } from "@hoteloftware/db";
+import { receiptsOfPaymentToSign, signReceipt, withTenant, type FiscalDeps } from "@hoteloftware/db";
 import { notifyFiscalOutage, notifyReceiptRefused } from "@hoteloftware/events";
 import { atFiscalProvider, fiscalProvider, fiscalSecret } from "@hoteloftware/fiscal";
 import { pool } from "./db";
@@ -28,4 +28,13 @@ export async function signPaymentReceipts(tenant: { id: string; schemaName: stri
     if (r?.state === "failed" && r.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: r.propertyId, error: r.error }).catch(() => undefined);
     if (r?.state === "refused" && r.newly) await notifyReceiptRefused(pool(), tenant, { propertyId: r.propertyId, error: r.error ?? "" }).catch(() => undefined);
   }
+}
+
+/** Sign a Receipt by its code right after it was issued (a Voucher sold, ticket 53). */
+export async function signReceiptToken(tenant: { id: string; schemaName: string }, token: string): Promise<void> {
+  const id = await withTenant(pool(), tenant.schemaName, async (tx) => (await tx.query<{ id: string }>("select id from receipts where token = $1", [token])).rows[0]?.id).catch(() => undefined);
+  if (!id) return;
+  const r = await signReceipt(pool(), tenant.schemaName, fiscalDeps(), id).catch((err) => (console.error("[fiscal] sign", err), null));
+  if (r?.state === "failed" && r.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: r.propertyId, error: r.error }).catch(() => undefined);
+  if (r?.state === "refused" && r.newly) await notifyReceiptRefused(pool(), tenant, { propertyId: r.propertyId, error: r.error ?? "" }).catch(() => undefined);
 }

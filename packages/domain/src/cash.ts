@@ -37,12 +37,12 @@ export function closeCount(input: { expected: number; counted: number; tolerance
   return { difference, needsReason: Math.abs(difference) > input.tolerance };
 }
 
-export const CASH_MOVEMENT_KINDS = ["float", "payment", "refund", "paid_out", "deposit", "change_in", "transfer_out", "transfer_in", "tip_out", "difference"] as const;
+export const CASH_MOVEMENT_KINDS = ["float", "payment", "refund", "paid_out", "deposit", "change_in", "transfer_out", "transfer_in", "tip_out", "difference", "voucher_sale"] as const;
 export type CashMovementKind = (typeof CASH_MOVEMENT_KINDS)[number];
 
 /** Whether a kind brings cash into the register (+1) or takes it out (−1); float and difference carry their own sign. */
 export function movementSign(kind: Exclude<CashMovementKind, "float" | "difference">): 1 | -1 {
-  return kind === "payment" || kind === "change_in" || kind === "transfer_in" ? 1 : -1;
+  return kind === "payment" || kind === "change_in" || kind === "transfer_in" || kind === "voucher_sale" ? 1 : -1;
 }
 
 /** Running balance after each movement, and the balance now: the float plus every movement. */

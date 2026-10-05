@@ -162,6 +162,8 @@ export const PROPERTY_ACTIONS = {
   view_cash_desk: ["property_manager", "front_desk", "accounting"],
   /** The property's cash desk: on or off, Cash Registers, tolerance and Paid-out limit. */
   manage_cash_desk: ["property_manager"],
+  /** Matrix "Sell and redeem Vouchers at the desk" (ticket 53); the list of Vouchers in circulation too. */
+  sell_vouchers: ["property_manager", "front_desk"],
   /** Enrol and revoke Devices of the property, choose who signs in on them (Property Manager). */
   manage_devices: ["property_manager"],
   /** Create Housekeeper users, reset their PIN and unlock them (amendment "Shared-device login"); the Property Manager for every user. */

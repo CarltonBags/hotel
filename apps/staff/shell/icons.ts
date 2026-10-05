@@ -42,6 +42,7 @@ import {
   Wallet,
   Wrench,
   type LucideIcon,
+  Gift,
 } from "lucide-react";
 
 export const ICONS: Record<string, LucideIcon> = {
@@ -87,6 +88,7 @@ export const ICONS: Record<string, LucideIcon> = {
   UtensilsCrossed,
   Wallet,
   Wrench,
+  Gift,
 };
 
 export function iconFor(name: string): LucideIcon {

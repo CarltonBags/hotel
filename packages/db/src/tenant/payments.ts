@@ -25,6 +25,7 @@ import { mapProviderAccount } from "../control/external-ids";
 import { withTenant } from "./with-tenant";
 import { inTestMode } from "./go-live";
 import { bookCashPaymentIn, issueReceiptIn } from "./cash";
+import { redeemableVoucherIn } from "./vouchers";
 
 /**
  * Payments and Card Holds (ticket 27). The provider is called outside any
@@ -55,6 +56,7 @@ export interface Payment {
 
 interface PaymentRow {
   id: string;
+  voucher_id: string | null;
   folio_id: string;
   reservation_id: string;
   tender: Tender;
@@ -75,7 +77,7 @@ interface PaymentRow {
   property_id: string;
 }
 
-const PAYMENT_COLUMNS = "id, folio_id, reservation_id, tender, amount, currency, status, refund_of, card_brand, card_last4, reader_id, reference, error, posted_at, posted_by, provider, provider_intent_id, provider_refund_id, property_id";
+const PAYMENT_COLUMNS = "id, folio_id, reservation_id, tender, amount, currency, status, refund_of, card_brand, card_last4, reader_id, reference, error, posted_at, posted_by, provider, provider_intent_id, provider_refund_id, property_id, voucher_id";
 
 export function toPayment(r: PaymentRow): Payment {
   return {
@@ -349,7 +351,7 @@ export async function takePayment(
   pool: Pool,
   schema: string,
   provider: PaymentProvider,
-  input: { reservationId: string; folioId?: string | undefined; tender: string; amount: number; readerId?: string | undefined; reference?: string | undefined },
+  input: { reservationId: string; folioId?: string | undefined; tender: string; amount: number; readerId?: string | undefined; reference?: string | undefined; voucherCode?: string | undefined },
   userId: string,
 ): Promise<Payment> {
   if (!isOneOf(DESK_TENDERS, input.tender)) throw new Error("Unknown Tender");
@@ -370,17 +372,19 @@ export async function takePayment(
     const reader = viaProvider ? await readerOf(tx, res.property_id, String(input.readerId ?? "")) : null;
     // money before check-in must be taxable as a deposit before it is taken
     await assertDepositInvoiceable(tx, res.id, tender);
+    // a Voucher pays with what is left on it, at a property of the Legal Entity that sold it (ticket 53)
+    const voucherId = tender === "voucher" ? await redeemableVoucherIn(tx, res.property_id, input.voucherCode ?? "", amount) : null;
     const { rows } = await tx.query<PaymentRow>(
-      `insert into payments (folio_id, reservation_id, property_id, tender, amount, currency, status, provider, reader_id, reference, posted_by, settled_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning ${PAYMENT_COLUMNS}`,
-      [folio.id, res.id, res.property_id, tender, amount, ctx.currency, viaProvider ? "pending" : "succeeded", viaProvider ? provider.name : null, reader, reference, userId, viaProvider ? null : new Date()],
+      `insert into payments (folio_id, reservation_id, property_id, tender, amount, currency, status, provider, reader_id, reference, posted_by, settled_at, voucher_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning ${PAYMENT_COLUMNS}`,
+      [folio.id, res.id, res.property_id, tender, amount, ctx.currency, viaProvider ? "pending" : "succeeded", viaProvider ? provider.name : null, reader, reference, userId, viaProvider ? null : new Date(), voucherId],
     );
     // cash goes into the Cash Book of the user's open Shift
     const registerId = tender === "cash" ? await bookCashPaymentIn(tx, { id: rows[0]!.id, propertyId: res.property_id, amount }, userId) : null;
     // money received now, before check-in: its Deposit Invoice in the same transaction
     if (!viaProvider) await depositIn(tx, rows[0]!.id, userId);
-    // the Receipt after the Deposit Invoice, the order a settling card payment takes too
-    if (tender === "cash") await issueReceiptIn(tx, { id: rows[0]!.id, propertyId: res.property_id }, registerId, userId);
+    // the Receipt after the Deposit Invoice, the order a settling card payment takes too; a Voucher redeemed is signed like cash
+    if (tender === "cash" || tender === "voucher") await issueReceiptIn(tx, { id: rows[0]!.id, propertyId: res.property_id }, registerId, userId);
     return { row: rows[0]!, ctx, reader };
   });
   if (!viaProvider) return toPayment(prepared.row);
@@ -530,15 +534,17 @@ export async function refundPayment(
     }
     const viaProvider = Boolean(orig.provider_intent_id);
     const { rows } = await tx.query<PaymentRow>(
-      `insert into payments (folio_id, reservation_id, property_id, tender, amount, currency, status, refund_of, provider, provider_intent_id, card_brand, card_last4, reference, approved_by, posted_by, settled_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning ${PAYMENT_COLUMNS}`,
-      [orig.folio_id, orig.reservation_id, orig.property_id, orig.tender, -amount, orig.currency.trim(), viaProvider ? "pending" : "succeeded", orig.id, orig.provider, orig.provider_intent_id, orig.card_brand, orig.card_last4, reason, approvedBy, actor.userId, viaProvider ? null : new Date()],
+      `insert into payments (folio_id, reservation_id, property_id, tender, amount, currency, status, refund_of, provider, provider_intent_id, card_brand, card_last4, reference, approved_by, posted_by, settled_at, voucher_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) returning ${PAYMENT_COLUMNS}`,
+      // a Voucher redemption given back goes back onto the Voucher
+      [orig.folio_id, orig.reservation_id, orig.property_id, orig.tender, -amount, orig.currency.trim(), viaProvider ? "pending" : "succeeded", orig.id, orig.provider, orig.provider_intent_id, orig.card_brand, orig.card_last4, reason, approvedBy, actor.userId, viaProvider ? null : new Date(), orig.voucher_id],
     );
     // cash given back comes out of the register of the user's open Shift, with a Receipt
     if (orig.tender === "cash") {
       const registerId = await bookCashPaymentIn(tx, { id: rows[0]!.id, propertyId: orig.property_id, amount: -amount }, actor.userId);
       await issueReceiptIn(tx, { id: rows[0]!.id, propertyId: orig.property_id }, registerId, actor.userId);
     }
+    if (orig.tender === "voucher") await issueReceiptIn(tx, { id: rows[0]!.id, propertyId: orig.property_id }, null, actor.userId);
     return rows[0]!;
   });
   if (!refund.provider_intent_id) return toPayment(refund);

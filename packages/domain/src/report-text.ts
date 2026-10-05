@@ -88,9 +88,11 @@ export const REPORT_TEXT = {
   cashIn: { en: "Cash in", de: "Einnahmen" },
   cashOut: { en: "Cash out", de: "Ausgaben" },
   paidOuts: { en: "Paid-outs", de: "Auszahlungen" },
+  vouchersSold: { en: "Vouchers sold (liability)", de: "Gutscheinverkauf (Verbindlichkeit)" },
+  voucherLiability: { en: "Voucher liability, account", de: "Gutscheinverbindlichkeit, Konto" },
   deposits: { en: "Bank deposits", de: "Bankeinzahlungen" },
   differences: { en: "Cash Differences", de: "Kassendifferenzen" },
   user: { en: "User", de: "Benutzer" },
   shifts: { en: "Shifts", de: "Schichten" },
-  cashNote: { en: "Cash Book by Business Date; Cash Differences of the Shifts closed in the period, per user.", de: "Kassenbuch nach Geschäftstag; Kassendifferenzen der im Zeitraum geschlossenen Schichten, je Benutzer." },
+  cashNote: { en: "Cash Book by Business Date; Cash Differences of the Shifts closed in the period, per user. Vouchers sold are a liability, not revenue, on the account shown.", de: "Kassenbuch nach Geschäftstag; Kassendifferenzen der im Zeitraum geschlossenen Schichten, je Benutzer. Verkaufte Gutscheine sind eine Verbindlichkeit, kein Umsatz, auf dem genannten Konto." },
 } satisfies Record<string, Text>;

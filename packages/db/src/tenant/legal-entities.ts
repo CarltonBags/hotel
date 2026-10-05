@@ -23,6 +23,8 @@ export interface LegalEntityInput {
 export interface LegalEntity extends Required<LegalEntityInput> {
   id: string;
   createdAt: Date;
+  /** Where sold Vouchers are booked (a liability, ticket 53). */
+  voucherLiabilityAccount: string;
 }
 
 interface Row {
@@ -41,6 +43,7 @@ interface Row {
   invoice_email: string;
   invoice_phone: string;
   created_at: Date;
+  voucher_liability_account: string;
 }
 
 function toLegalEntity(r: Row): LegalEntity {
@@ -60,6 +63,7 @@ function toLegalEntity(r: Row): LegalEntity {
     invoiceEmail: r.invoice_email,
     invoicePhone: r.invoice_phone,
     createdAt: r.created_at,
+    voucherLiabilityAccount: r.voucher_liability_account,
   };
 }
 
@@ -68,7 +72,7 @@ function validate(input: LegalEntityInput): void {
   if (!isCountryCode(input.country)) throw new Error(`Unknown country: ${input.country}`);
 }
 
-const COLUMNS = "id, name, address_line1, address_line2, postal_code, city, country, vat_id, iban, bic, account_holder, tax_number, invoice_email, invoice_phone, created_at";
+const COLUMNS = "id, name, address_line1, address_line2, postal_code, city, country, vat_id, iban, bic, account_holder, tax_number, invoice_email, invoice_phone, created_at, voucher_liability_account";
 
 export async function createLegalEntity(pool: Pool, schema: string, input: LegalEntityInput): Promise<LegalEntity> {
   validate(input);

@@ -6,13 +6,13 @@
  */
 import { roundMoney } from "./money";
 
-/** Tenders of v1; vouchers come with their ticket. Cash only with the property's cash desk on (ticket 50). */
+/** Tenders of v1. Cash only with the property's cash desk on (ticket 50); a Voucher of the property's Legal Entity (ticket 53). */
 // website_tool: money the hotel's own website booking tool took (ticket 38), recorded, never at the desk
-export const TENDERS = ["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect", "cash", "website_tool"] as const;
+export const TENDERS = ["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect", "cash", "website_tool", "voucher"] as const;
 export type Tender = (typeof TENDERS)[number];
 
 /** Tenders staff pick at the desk; "card online" arises only from a hold renewed on the saved card. */
-export const DESK_TENDERS: readonly Tender[] = ["card_terminal", "cash", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect"];
+export const DESK_TENDERS: readonly Tender[] = ["card_terminal", "cash", "voucher", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect"];
 
 /** Tenders taken through the payment provider (the rest are recorded by staff). */
 export const PROVIDER_TENDERS: readonly Tender[] = ["card_terminal", "ota_virtual_card"];

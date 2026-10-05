@@ -4,7 +4,7 @@ import { TENDERS, DESK_TENDERS, captureAmount, folioBalance, holdExpiry, holdInc
 /** Seams: balance after payments; what may still be refunded and who may; Card Hold validity and limits (payments research, ticket 27). */
 describe("payments", () => {
   it("knows the v1 tenders; the website tool's is recorded, not taken at the desk", () => {
-    expect(TENDERS).toEqual(["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect", "cash", "website_tool"]);
+    expect(TENDERS).toEqual(["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect", "cash", "website_tool", "voucher"]);
     expect(DESK_TENDERS).not.toContain("website_tool");
   });
 

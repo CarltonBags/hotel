@@ -54,7 +54,7 @@ const done = async (tenantId: string, reservation: { id: string; propertyId: str
 
 export async function takePaymentAction(
   reservationId: string,
-  input: { folioId: string; tender: string; amount: number; readerId?: string; reference?: string },
+  input: { folioId: string; tender: string; amount: number; readerId?: string; reference?: string; voucherCode?: string },
 ): Promise<FormState & { paymentId?: string; pending?: boolean }> {
   let extra: { paymentId?: string; pending?: boolean } = {};
   const state = await formAction(async () => {
@@ -63,7 +63,7 @@ export async function takePaymentAction(
       pool(),
       schema,
       paymentProvider(),
-      { reservationId: reservation.id, folioId: String(input?.folioId ?? "") || undefined, tender: String(input?.tender), amount: Number(input?.amount), readerId: input?.readerId ? String(input.readerId) : undefined, reference: String(input?.reference ?? "") },
+      { reservationId: reservation.id, folioId: String(input?.folioId ?? "") || undefined, tender: String(input?.tender), amount: Number(input?.amount), readerId: input?.readerId ? String(input.readerId) : undefined, reference: String(input?.reference ?? ""), voucherCode: input?.voucherCode ? String(input.voucherCode) : undefined },
       userId,
     );
     extra = { paymentId: p.id, pending: p.status === "pending" };
