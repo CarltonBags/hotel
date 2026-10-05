@@ -27,8 +27,8 @@ export default async function SpaBookPage({ params, searchParams }: { params: Pr
   if (!day) notFound();
   return (
     <main className="mx-auto grid max-w-6xl gap-4 p-4" data-spa-book={date}>
-      {/* a guest's booking in the Portal shows at once (ticket 64) */}
-      <DataStream />
+      {/* an Appointment a guest takes in the Portal shows at once (ticket 64) */}
+      <DataStream offlineText={m["outlet.liveOff"]} />
       <LiveRefresh kind={DATA_KINDS.spa} propertyIds={[propertyId]} />
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-medium">

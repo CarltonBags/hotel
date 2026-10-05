@@ -10,7 +10,7 @@ export async function announceReservations(tenantId: string, propertyId: string)
   await announce(tenantId, "reservations", propertyId);
 }
 
-/** Tell open spa books of the property that appointments changed (ticket 64: a guest booked in the Portal). */
+/** Tell open spa books of the property that Appointments changed (ticket 64: also those a guest takes in the Portal). */
 export async function announceSpa(tenantId: string, propertyId: string): Promise<void> {
   await announce(tenantId, "spa", propertyId);
 }

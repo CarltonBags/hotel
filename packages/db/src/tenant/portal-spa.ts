@@ -1,16 +1,29 @@
 import type { Pool, PoolClient } from "pg";
-import { addDays, guestMayCancel, moduleState, openSpaSlots, todayIn, type Interval } from "@hoteloftware/domain";
+import { addDays, guestCancelDeadline, guestMayCancel, instantAt, moduleState, openSpaSlots, todayIn, type Interval } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
 import { PORTAL_USER, reservationByKey, type StayByKey } from "./portal";
-import { bookAppointmentIn } from "./spa";
+import { AppointmentRefused, bookAppointmentIn } from "./spa";
 import { withTenant } from "./with-tenant";
 
 /**
  * Spa self-booking in the Guest Portal (ticket 64): the guest of a Portal
- * Link books a treatment in the hours the spa has released, for a day of
- * the stay; the appointment belongs to the reservation and is charged to the
- * room at the visit. The guest cancels it up to the spa's hours before.
+ * Link takes an Appointment in the hours the spa has released, on a day of
+ * the stay before departure; it belongs to the reservation and is charged to
+ * the room at the visit. The guest cancels it up to the spa's hours before.
  */
+
+/** Why the Portal refused: the guest reads it in their own language. */
+export type PortalSpaRefusalCode = "taken" | "passed" | "clash" | "too_many" | "unavailable" | "not_found" | "too_late" | "no_longer";
+
+export class PortalSpaRefusal extends Error {
+  constructor(
+    readonly code: PortalSpaRefusalCode,
+    /** For "too_late": the spa's hours. */
+    readonly hours = 0,
+  ) {
+    super(code === "too_late" ? `Appointments can be cancelled up to ${hours} hours before; please contact the spa` : code);
+  }
+}
 
 /** Guests choose starts every this many minutes. */
 const SLOT_STEP = 30;
@@ -25,7 +38,7 @@ export interface PortalSpa {
   /** Where a treatment can start on that day. */
   slots: { outletId: string; treatmentId: string; startsAt: string }[];
   /** The stay's own appointments to come. */
-  appointments: { id: string; spa: string; treatment: string; startsAt: string; endsAt: string; status: "booked" | "done"; cancelUntil: string; mayCancel: boolean }[];
+  appointments: { id: string; spa: string; treatment: string; startsAt: string; endsAt: string; status: "booked" | "done"; cancelHours: number; cancelUntil: string; mayCancel: boolean }[];
 }
 
 /** The stay's spas with the Point of Sale Module on: active spa outlets with active treatments. */
@@ -41,11 +54,11 @@ async function spasIn(tx: PoolClient, r: StayByKey): Promise<{ id: string; name:
   )).rows;
 }
 
-/** The days of the stay a treatment can still be booked for: from today (or arrival) to the departure day. */
+/** The days of the stay an appointment can still be taken for: from today (or arrival) to the last night; on departure day the room is no longer charged. */
 function stayDays(r: StayByKey): string[] {
   const today = todayIn(r.time_zone);
   const out: string[] = [];
-  for (let d = r.arrival > today ? r.arrival : today; d <= r.departure && out.length < 31; d = addDays(d, 1)) out.push(d);
+  for (let d = r.arrival > today ? r.arrival : today; d < r.departure && out.length < 31; d = addDays(d, 1)) out.push(d);
   return out;
 }
 
@@ -66,16 +79,18 @@ export async function portalSpa(pool: Pool, schema: string, key: string, date: s
       [ids],
     )).rows;
     // the day in the property's zone; only released hours, only times still to come
-    const range = [day, r.time_zone];
+    const dayParams = [day, r.time_zone];
+    const dayStart = instantAt(day, "00:00", r.time_zone);
+    const dayEnd = instantAt(addDays(day, 1), "00:00", r.time_zone);
     const hours = (await tx.query<{ therapist_id: string; outlet_id: string; starts_at: Date; ends_at: Date }>(
       `select h.therapist_id, t.outlet_id, h.starts_at, h.ends_at from spa_hours h join spa_therapists t on t.id = h.therapist_id
        where t.outlet_id = any($1::uuid[]) and t.active and h.released and h.starts_at < (($2::date + 1)::timestamp at time zone $3) and h.ends_at > ($2::date::timestamp at time zone $3)`,
-      [ids, ...range],
+      [ids, ...dayParams],
     )).rows;
     const taken = (await tx.query<{ therapist_id: string; room_id: string | null; starts_at: Date; ends_at: Date }>(
       `select therapist_id, room_id, starts_at, ends_at from spa_appointments
        where outlet_id = any($1::uuid[]) and status in ('booked', 'done') and starts_at < (($2::date + 1)::timestamp at time zone $3) and ends_at > ($2::date::timestamp at time zone $3)`,
-      [ids, ...range],
+      [ids, ...dayParams],
     )).rows;
     const rooms = (await tx.query<{ id: string; outlet_id: string }>("select id, outlet_id from spa_rooms where outlet_id = any($1::uuid[]) and active", [ids])).rows;
     const iv = (x: { starts_at: Date; ends_at: Date }): Interval => ({ start: x.starts_at, end: x.ends_at });
@@ -92,7 +107,8 @@ export async function portalSpa(pool: Pool, schema: string, key: string, date: s
           t.minutes,
           SLOT_STEP,
         );
-        for (const f of free) if (f.start > now) starts.add(f.start.getTime());
+        // hours past midnight belong to the next day's list
+        for (const f of free) if (f.start > now && f.start >= dayStart && f.start < dayEnd) starts.add(f.start.getTime());
       }
       for (const s of [...starts].sort((a, b) => a - b)) slots.push({ outletId: t.outlet_id, treatmentId: t.id, startsAt: new Date(s).toISOString() });
     }
@@ -108,7 +124,8 @@ export async function portalSpa(pool: Pool, schema: string, key: string, date: s
       startsAt: a.starts_at.toISOString(),
       endsAt: a.ends_at.toISOString(),
       status: a.status,
-      cancelUntil: new Date(a.starts_at.getTime() - a.cancel_hours * 3_600_000).toISOString(),
+      cancelHours: a.cancel_hours,
+      cancelUntil: guestCancelDeadline(a.starts_at, a.cancel_hours).toISOString(),
       mayCancel: a.status === "booked" && guestMayCancel(a.starts_at, now, a.cancel_hours),
     }));
     return {
@@ -122,25 +139,28 @@ export async function portalSpa(pool: Pool, schema: string, key: string, date: s
 }
 
 /**
- * The guest books a treatment at a time: the first therapist free then in
+ * The guest takes an Appointment at a time: the first therapist free then in
  * released hours takes it (and a free room where it needs one). Taken in the
  * meantime: refused, the guest chooses again. The spa's property, for the
  * live update of its book.
  */
-export async function bookPortalAppointment(pool: Pool, schema: string, key: string, input: { outletId: string; treatmentId: string; startsAt: Date }): Promise<{ appointmentId: string; propertyId: string }> {
-  if (!isUuid(input.outletId) || !isUuid(input.treatmentId) || Number.isNaN(input.startsAt.getTime())) throw new Error("Choose a treatment and a time");
+export async function bookPortalAppointment(pool: Pool, schema: string, key: string, input: { outletId: string; treatmentId: string; startsAt: Date }, now = new Date()): Promise<{ appointmentId: string; propertyId: string }> {
+  if (!isUuid(input.outletId) || !isUuid(input.treatmentId) || Number.isNaN(input.startsAt.getTime())) throw new PortalSpaRefusal("not_found");
   return withTenant(pool, schema, async (tx) => {
     const r = await reservationByKey(tx, key, { lock: true });
-    if (!bookable(r)) throw new Error("This stay cannot book treatments");
-    if (!(await spasIn(tx, r)).some((o) => o.id === input.outletId)) throw new Error("This spa does not take bookings");
+    if (!bookable(r)) throw new PortalSpaRefusal("unavailable");
+    if (!(await spasIn(tx, r)).some((o) => o.id === input.outletId)) throw new PortalSpaRefusal("unavailable");
+    // only what the Portal offers: a time to come, on a day of the stay before departure
+    if (input.startsAt <= now) throw new PortalSpaRefusal("passed");
+    if (!stayDays(r).some((d) => input.startsAt >= instantAt(d, "00:00", r.time_zone) && input.startsAt < instantAt(addDays(d, 1), "00:00", r.time_zone))) throw new PortalSpaRefusal("unavailable");
     const booked = (await tx.query<{ n: number }>("select count(*)::int as n from spa_appointments where reservation_id = $1 and status = 'booked'", [r.id])).rows[0]!.n;
-    if (booked >= MAX_BOOKED) throw new Error("Please ask the spa for more treatments");
+    if (booked >= MAX_BOOKED) throw new PortalSpaRefusal("too_many");
     // the guest is in one treatment at a time
     const clash = (await tx.query(
       "select 1 from spa_appointments a join spa_treatments t on t.id = $3 where a.reservation_id = $1 and a.status = 'booked' and a.starts_at < $2::timestamptz + make_interval(mins => t.minutes) and a.ends_at > $2",
       [r.id, input.startsAt, input.treatmentId],
     )).rows.length;
-    if (clash) throw new Error("You already have a treatment at this time");
+    if (clash) throw new PortalSpaRefusal("clash");
     const therapists = (await tx.query<{ id: string }>(
       "select distinct t.id, t.name from spa_therapists t join spa_hours h on h.therapist_id = t.id where t.outlet_id = $1 and t.active and h.released and h.starts_at <= $2 and h.ends_at > $2 order by t.name",
       [input.outletId, input.startsAt],
@@ -151,34 +171,29 @@ export async function bookPortalAppointment(pool: Pool, schema: string, key: str
         const appointmentId = await bookAppointmentIn(tx, input.outletId, { treatmentId: input.treatmentId, therapistId: t.id, startsAt: input.startsAt, reservationId: r.id }, { userId: PORTAL_USER, via: "portal" });
         await tx.query("release savepoint portal_spa");
         return { appointmentId, propertyId: r.property_id };
-      } catch {
-        // this therapist is busy then: the next one
+      } catch (err) {
         await tx.query("rollback to savepoint portal_spa");
+        // this therapist is not free then: the next one; anything else is the answer
+        if (!(err instanceof AppointmentRefused)) throw err;
       }
     }
-    throw new Error("This time has just been taken; please choose another");
+    throw new PortalSpaRefusal("taken");
   });
-}
-
-/** The guest's cancellation was asked too late: the spa's rule, for the guest to read. */
-export class SpaCancelTooLate extends Error {
-  constructor(readonly hours: number) {
-    super(`Appointments can be cancelled up to ${hours} hours before; please contact the spa`);
-  }
 }
 
 /** The guest cancels their own appointment, up to the spa's hours before it. The spa's property, for the live update. */
 export async function cancelPortalAppointment(pool: Pool, schema: string, key: string, appointmentId: string, now = new Date()): Promise<{ propertyId: string }> {
-  if (!isUuid(appointmentId)) throw new Error("Appointment not found");
+  if (!isUuid(appointmentId)) throw new PortalSpaRefusal("not_found");
   return withTenant(pool, schema, async (tx) => {
     const r = await reservationByKey(tx, key);
+    if (!bookable(r)) throw new PortalSpaRefusal("no_longer");
     const a = (await tx.query<{ status: string; starts_at: Date; cancel_hours: number }>(
       "select a.status, a.starts_at, o.spa_cancel_hours as cancel_hours from spa_appointments a join outlets o on o.id = a.outlet_id where a.id = $1 and a.reservation_id = $2 for update of a",
       [appointmentId, r.id],
     )).rows[0];
-    if (!a) throw new Error("Appointment not found");
-    if (a.status !== "booked") throw new Error("This appointment can no longer be cancelled");
-    if (!guestMayCancel(a.starts_at, now, a.cancel_hours)) throw new SpaCancelTooLate(a.cancel_hours);
+    if (!a) throw new PortalSpaRefusal("not_found");
+    if (a.status !== "booked") throw new PortalSpaRefusal("no_longer");
+    if (!guestMayCancel(a.starts_at, now, a.cancel_hours)) throw new PortalSpaRefusal("too_late", a.cancel_hours);
     await tx.query("update spa_appointments set status = 'cancelled', cancelled_at = clock_timestamp(), cancelled_by = $2 where id = $1", [appointmentId, PORTAL_USER]);
     return { propertyId: r.property_id };
   });

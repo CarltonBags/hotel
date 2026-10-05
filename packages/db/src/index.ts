@@ -632,4 +632,4 @@ export { addBillItem, chargeBillToRoom, reopenPayingBill, servesAt, roomChargeSl
 export { ORDER_SIGN_SECONDS, signOutletOrders } from "./tenant/fiscal-orders";
 export { applyOutletOps, outletSnapshot, type OpResult, type OutletOp, type OutletSnapshot } from "./tenant/outlet-sync";
 export { addSpaHours, appointmentsOfReservation, billAppointment, bookAppointment, bookAppointmentIn, cancelAppointment, changeSpaHours, markNoShow, saveSpaRoom, saveTherapist, saveTreatment, setSpaCancelHours, spaDay, spaGuests, spaSetup, type AppointmentInput, type SpaAppointment, type SpaDay } from "./tenant/spa";
-export { SpaCancelTooLate, bookPortalAppointment, cancelPortalAppointment, portalSpa, type PortalSpa } from "./tenant/portal-spa";
+export { PortalSpaRefusal, bookPortalAppointment, cancelPortalAppointment, portalSpa, type PortalSpa, type PortalSpaRefusalCode } from "./tenant/portal-spa";

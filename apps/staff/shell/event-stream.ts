@@ -19,14 +19,15 @@ export function announceData(n: StreamNotification): void {
  * Opens the worker's event stream with a short-lived token. The browser's
  * EventSource reconnects on its own and sends Last-Event-ID; when the token
  * has expired we fetch a new one and reopen with the last id, so nothing is
- * missed across a restart. Returns the function that closes it.
+ * missed across a restart. The caller keeps the last id (a ref), so a
+ * reopened stream also resumes where the closed one stopped. Returns the
+ * function that closes it.
  */
-export function openEventStream(on: { onNotification: (n: StreamNotification) => void; onState?: (online: boolean) => void }): () => void {
+export function openEventStream(on: { onNotification: (n: StreamNotification) => void; onState?: (online: boolean) => void; lastId: { current: string | null } }): () => void {
   if (!WORKER_URL) return () => undefined;
   let source: EventSource | null = null;
   let stopped = false;
   let retry = 1000;
-  let lastId: string | null = null;
   const again = () => {
     on.onState?.(false);
     if (!stopped) setTimeout(open, retry);
@@ -40,11 +41,11 @@ export function openEventStream(on: { onNotification: (n: StreamNotification) =>
       const { token } = (await res.json()) as { token: string };
       const url = new URL("/events", WORKER_URL);
       url.searchParams.set("token", token);
-      if (lastId) url.searchParams.set("lastEventId", lastId);
+      if (on.lastId.current) url.searchParams.set("lastEventId", on.lastId.current);
       source = new EventSource(url.toString());
       source.addEventListener("notification", (e) => {
         const msg = e as MessageEvent<string>;
-        lastId = msg.lastEventId;
+        on.lastId.current = msg.lastEventId;
         on.onNotification(JSON.parse(msg.data) as StreamNotification);
       });
       source.onopen = () => {

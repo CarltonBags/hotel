@@ -22,6 +22,13 @@ const PROBLEM_TEXT: Record<AppointmentProblem, string> = {
   room_busy: "No treatment room is free then",
 };
 
+/** The time is not free (outside the hours, therapist or room taken): another therapist or time may do. */
+export class AppointmentRefused extends Error {
+  constructor(readonly problem: AppointmentProblem) {
+    super(PROBLEM_TEXT[problem]);
+  }
+}
+
 async function spaIn(tx: PoolClient, outletId: string): Promise<SpaOutlet> {
   if (!isUuid(outletId)) throw new Error("Spa not found");
   const o = (await tx.query<{ id: string; property_id: string; name: string; kind: string; cash_register_id: string | null; active: boolean; managers: string[]; discount_percent: string }>(
@@ -234,7 +241,7 @@ export async function bookAppointmentIn(tx: PoolClient, outletId: string, input:
     }
   }
   const problem = appointmentProblem(slot, { hours, therapistBusy: await busy("therapist_id", input.therapistId), roomBusy: t.needs_room && !roomId ? [slot] : [] });
-  if (problem) throw new Error(PROBLEM_TEXT[problem]);
+  if (problem) throw new AppointmentRefused(problem);
   const reservationId = input.reservationId && isUuid(input.reservationId) ? input.reservationId : null;
   const guestName = (input.guestName ?? "").trim().slice(0, 100);
   if (reservationId) {

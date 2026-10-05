@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bell, X } from "lucide-react";
 import { isDataChange } from "@hoteloftware/domain";
 import { WORKER_URL, announceData, openEventStream, type StreamNotification } from "./event-stream";
@@ -34,6 +34,7 @@ export function Notifications() {
   const { t, tenant, user, inboxSound } = useShell();
   const [toasts, setToasts] = useState<StreamNotification[]>([]);
   const [offline, setOffline] = useState(false);
+  const lastId = useRef<string | null>(null);
 
   useEffect(
     () =>
@@ -50,6 +51,7 @@ export function Notifications() {
           setTimeout(() => setToasts((list) => list.filter((x) => x.id !== n.id)), TOAST_MS);
         },
         onState: (online) => setOffline(!online),
+        lastId,
       }),
     [tenant.id, user.id, inboxSound],
   );

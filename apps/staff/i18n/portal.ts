@@ -109,6 +109,11 @@ const T = {
   spaCancelUntil: { de: "Kostenfrei stornierbar bis {time}", en: "Free cancellation until {time}" },
   spaCancelRule: { de: "Termine sind bis {n} Stunden vorher stornierbar; bitte wenden Sie sich an das Spa.", en: "Appointments can be cancelled up to {n} hours before; please contact the spa." },
   spaClash: { de: "Sie haben zu dieser Zeit bereits eine Anwendung.", en: "You already have a treatment at this time." },
+  spaPassed: { de: "Diese Zeit ist vorbei; bitte wählen Sie eine andere.", en: "This time has passed; please choose another." },
+  spaTooMany: { de: "Für weitere Anwendungen wenden Sie sich bitte an das Spa.", en: "Please ask the spa for more treatments." },
+  spaUnavailable: { de: "Das Spa nimmt dafür keine Termine an.", en: "The spa takes no appointments for this." },
+  spaNotFound: { de: "Termin nicht gefunden.", en: "Appointment not found." },
+  spaNoLonger: { de: "Dieser Termin kann nicht mehr storniert werden.", en: "This appointment can no longer be cancelled." },
   spaTaken: { de: "Diese Zeit wurde gerade vergeben; bitte wählen Sie eine andere.", en: "This time has just been taken; please choose another." },
 } as const;
 

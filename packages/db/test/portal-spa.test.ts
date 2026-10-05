@@ -97,6 +97,9 @@ describe("Spa self-booking in the Guest Portal", () => {
     const view = (await portalSpa(pool, s(), key, day))!;
     expect(view.spas.map((x) => [x.name, x.treatments.map((t) => [t.name, t.minutes, t.price])])).toEqual([["Spa", [["Massage 60", 60, 89]]]]);
     expect(view.days).toContain(day);
+    // the departure day is not offered: the room is no longer charged then
+    expect(view.days).not.toContain(addDays(today, 2));
+    await expect(bookPortalAppointment(pool, s(), key, { outletId: spa, treatmentId: massage, startsAt: new Date(Date.now() - 60_000) })).rejects.toThrow(/passed/);
     expect(await times()).toEqual(["09:00", "09:30", "10:00", "10:30", "11:00"].map((h) => at(h).toISOString()));
     // the spa books 09:00 itself; the guest takes 10:30
     await bookAppointment(pool, s(), spa, { treatmentId: massage, therapistId: anna, startsAt: at("09:00"), guestName: "Frau Klein" }, sp);
@@ -120,6 +123,6 @@ describe("Spa self-booking in the Guest Portal", () => {
     expect(await times()).toEqual(["10:00", "10:30", "11:00"].map((h) => at(h).toISOString()));
     // one treatment at a time for the guest
     await bookPortalAppointment(pool, s(), key, { outletId: spa, treatmentId: massage, startsAt: at("10:00") });
-    await expect(bookPortalAppointment(pool, s(), key, { outletId: spa, treatmentId: massage, startsAt: at("10:30") })).rejects.toThrow(/already have a treatment/);
+    await expect(bookPortalAppointment(pool, s(), key, { outletId: spa, treatmentId: massage, startsAt: at("10:30") })).rejects.toThrow(/clash/);
   });
 });

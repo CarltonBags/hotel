@@ -93,7 +93,7 @@ export function SpaPanel({ portalKey, language, spa, timeZone, prices }: { porta
                   </span>
                 ) : (
                   <span className="text-white/70" data-spa-rule>
-                    {t("spaCancelRule", { n: spa.spas.find((s) => s.name === a.spa)?.cancelHours ?? 0 })}
+                    {t("spaCancelRule", { n: a.cancelHours })}
                   </span>
                 )
               ) : null}

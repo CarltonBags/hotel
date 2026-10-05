@@ -299,6 +299,7 @@ const catalog = {
   "spa.appointments": { en: "Spa appointments", de: "Spa-Termine" },
   "spa.from": { en: "From", de: "Von" },
   "spa.to": { en: "To", de: "Bis" },
+  "outlet.liveOff": { en: "Live updates are off; reload to see changes.", de: "Live-Aktualisierung aus; zum Aktualisieren neu laden." },
   "spa.portal": { en: "Guest Portal", de: "Gästeportal" },
   "spa.cancelHours": { en: "Guests cancel up to … hours before", de: "Gäste stornieren bis … Stunden vorher" },
   "spa.min": { en: "min", de: "Min." },
