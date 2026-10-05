@@ -1,13 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { CANTON_PRESETS, documentCopyAllowed, registrationAtReception, registrationNeeds, registrationRetentionUntil, registrationComplete, tessinCsv, tessinXml, type TessinRecord } from "../src/registration";
+import { CANTON_PRESETS, documentCopyAllowed, idCheckSignatureAllowed, tessinXmlProblems, registrationAtReception, registrationNeeds, registrationRetentionUntil, registrationComplete, tessinCsv, tessinXml, type TessinRecord } from "../src/registration";
 
 const p = (id: string, role: "primary" | "spouse" | "partner" | "child" | "other", nationality: string, dateOfBirth: string | null = "1980-01-01") => ({ id, role, nationality, dateOfBirth });
 
 describe("Switzerland: Canton Profiles (ticket 47)", () => {
-  it("Zürich registers all guests; Bern foreign guests only", () => {
+  it("Zürich registers all guests; Graubünden foreign guests only (Bern, by its statute, all)", () => {
     const people = [p("a", "primary", "CH"), p("b", "other", "DE")];
     expect(registrationNeeds("CH", people, "2026-10-05", CANTON_PRESETS.ZH)).toEqual({ a: "own_form", b: "own_form" });
-    expect(registrationNeeds("CH", people, "2026-10-05", CANTON_PRESETS.BE)).toEqual({ a: "none", b: "own_form" });
+    expect(registrationNeeds("CH", people, "2026-10-05", CANTON_PRESETS.GR)).toEqual({ a: "none", b: "own_form" });
+    expect(CANTON_PRESETS.BE.registers).toBe("all");
+  });
+
+  it("Tessin: a notification per adult; elsewhere spouse and minor children on the guest's form", () => {
+    const fam = [p("h", "primary", "FR"), p("s", "spouse", "FR"), p("k", "child", "FR", "2015-05-05")];
+    expect(registrationNeeds("CH", fam, "2026-10-05", CANTON_PRESETS.TI)).toEqual({ h: "own_form", s: "own_form", k: "counted" });
+    expect(registrationNeeds("CH", fam, "2026-10-05", CANTON_PRESETS.LU)).toEqual({ h: "own_form", s: "counted", k: "counted" });
+  });
+
+  it("the ID Check stands in for the signature only where the canton confirmed it, never in Graubünden", () => {
+    expect(idCheckSignatureAllowed({ canton: "GR", idCheckConfirmed: true })).toBe(false);
+    expect(idCheckSignatureAllowed({ canton: "ZH" })).toBe(false);
+    expect(idCheckSignatureAllowed({ canton: "ZH", idCheckConfirmed: true })).toBe(true);
   });
 
   it("one form per adult, couple or family", () => {
@@ -43,6 +56,10 @@ describe("Switzerland: Canton Profiles (ticket 47)", () => {
     expect(tessinXml(r)).toContain("<nationality>CHE</nationality>");
     expect(tessinXml(r)).toContain("<documentType>Passport</documentType>");
     expect(tessinXml({ ...r, firstName: "A & <B>" })).toContain("<firstname>A &amp; &lt;B&gt;</firstname>");
+    // what the schema cannot take is named, not made up
+    expect(tessinXmlProblems({ ...r, postalCode: "SW1A 1AA", dateOfBirth: "" })).toEqual(["date of birth", "postcode in digits"]);
+    expect(() => tessinXml({ ...r, nationality: "" })).toThrow(/nationality/);
+    expect(tessinCsv([{ ...r, lastName: "=HYPERLINK(1)" }]).split("\r\n")[1]).toContain(";'=HYPERLINK(1);");
     expect(tessinCsv([r])).toBe(
       "Id Struttura;Cognome;Nome;Data di nascita;Nazionalità;Data di arrivo;Data di partenza;Luogo di nascita;Numero bollettino;Indirizzo;CAP;Domicilio;Nazione;Numero autovettura;Mag14;Min14;Tipo documento;Numero documento\r\n" +
         "XNA9999;Pinco;Pallino;04.01.1984;CHE;01.05.2026;02.05.2026;Zurigo;33fa;Via Berna 11;6500;Bellinzona;CHE;TI383883;1;1;Passaporto;faf3e23\r\n",

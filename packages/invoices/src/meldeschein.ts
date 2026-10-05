@@ -12,6 +12,7 @@ export interface MeldescheinDocument {
   country: "DE" | "AT" | "CH";
   /** Switzerland: the canton and how it is confirmed (no signature line where the ID Check confirms). */
   canton?: string;
+  /** PNG of the signature given on the tablet (Austria; Switzerland where the canton allows it). */
   signature?: Uint8Array | null;
   signatureMode?: "handwritten" | "tablet" | "id_check";
   property: { name: string; address: string };
@@ -19,7 +20,6 @@ export interface MeldescheinDocument {
   departure: string;
   person: { firstName: string; lastName: string; dateOfBirth: string | null; nationality: string; addressLine1: string; postalCode: string; city: string; country: string; documentNumber: string; placeOfBirth?: string; documentType?: string; carNumber?: string };
   companions: { role: string; name: string; nationality: string; dateOfBirth: string | null }[];
-  /** PNG of the signature given on the tablet (Austria; Switzerland where the canton allows it). */
   /** "tablet", "paper:<who>", or "" while not yet confirmed (a form printed for signing). */
   confirmedBy: string;
   idCheck: string;
@@ -75,7 +75,16 @@ export async function renderMeldescheinPdf(doc: MeldescheinDocument): Promise<Ui
   }
   if (doc.companions.length) {
     y -= 8;
-    text(doc.country === "AT" ? "Mitreisende minderjährige Kinder" : "Mitreisende Ehegatten, Lebenspartner und Kinder / Accompanying spouse, partner and children", M, 9, bold);
+    text(
+      doc.country === "DE"
+        ? "Mitreisende Ehegatten, Lebenspartner und minderjährige Kinder (Anzahl, Staatsangehörigkeit)"
+        : doc.country === "AT"
+          ? "Mitreisende minderjährige Kinder"
+          : "Mitreisende Ehegatten, Lebenspartner und Kinder / Accompanying spouse, partner and children",
+      M,
+      9,
+      bold,
+    );
     y -= 16;
     text(`Anzahl / Number: ${doc.companions.length}`, M);
     y -= 14;
@@ -88,21 +97,19 @@ export async function renderMeldescheinPdf(doc: MeldescheinDocument): Promise<Ui
   y -= 30;
   if (doc.signatureMode === "id_check") {
     text("Ohne Unterschrift, Angaben mit dem Ausweis verglichen / No signature, details checked against the ID", M, 9, font, grey);
-    y -= 20;
-    if (doc.idCheck) text("ID Check recorded", M, 8, font, grey);
-    return pdf.save({ useObjectStreams: false });
-  }
-  text("Unterschrift / Signature", M, 9, font, grey);
-  if (doc.signature?.length) {
-    try {
-      const img = await pdf.embedPng(doc.signature);
-      const scale = Math.min(220 / img.width, 70 / img.height);
-      page.drawImage(img, { x: M + 150, y: y - 10, width: img.width * scale, height: img.height * scale });
-    } catch {
-      text("(signature image unreadable)", M + 150, 9, font, grey);
+  } else {
+    text("Unterschrift / Signature", M, 9, font, grey);
+    if (doc.signature?.length) {
+      try {
+        const img = await pdf.embedPng(doc.signature);
+        const scale = Math.min(220 / img.width, 70 / img.height);
+        page.drawImage(img, { x: M + 150, y: y - 10, width: img.width * scale, height: img.height * scale });
+      } catch {
+        text("(signature image unreadable)", M + 150, 9, font, grey);
+      }
     }
+    page.drawLine({ start: { x: M + 148, y: y - 14 }, end: { x: A4.w - M, y: y - 14 }, thickness: 0.4, color: grey });
   }
-  page.drawLine({ start: { x: M + 148, y: y - 14 }, end: { x: A4.w - M, y: y - 14 }, thickness: 0.4, color: grey });
   y -= 40;
   const confirmed = doc.confirmedBy === "tablet" ? "Signed on the tablet" : doc.confirmedBy.startsWith("paper:") ? "Signed on paper at the desk" : "";
   if (confirmed) text(confirmed, M, 8, font, grey);

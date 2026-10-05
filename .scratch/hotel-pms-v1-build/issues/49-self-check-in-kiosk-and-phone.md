@@ -10,3 +10,5 @@
 - [ ] All conditions met: reservation becomes Checked-in without staff and charges are posted
 - [ ] Room not ready: guest ends as Arrived, Waiting for Room and the room type shows the priority flag
 - [ ] Kiosk keeps no guest data after the flow and shows only "come to reception" when offline
+
+> Note from ticket 47: Self Check-in must hand over to reception while the registration needs a handwritten signature (Germany; Swiss Canton Profiles with the handwritten default). The rule is `registrationAtReception(country, profile)` in the domain package; the Guest Portal already uses it.

@@ -67,11 +67,11 @@ describe("Switzerland: Canton Profiles", () => {
     await expect(openRegistration(pool, s(), await book("Keller", "CH"), fd)).rejects.toThrow(/Canton Profile/);
   });
 
-  it("Zürich registers all guests; Bern foreign guests only", async () => {
+  it("Zürich registers all guests; Graubünden foreign guests only", async () => {
     await setCantonProfile(pool, s(), propertyId, CANTON_PRESETS.ZH);
     const zh = await openRegistration(pool, s(), await book("Meier", "CH"), fd);
     expect(zh.persons[0]!.need).toBe("own_form");
-    await setCantonProfile(pool, s(), propertyId, CANTON_PRESETS.BE);
+    await setCantonProfile(pool, s(), propertyId, CANTON_PRESETS.GR);
     const be = await openRegistration(pool, s(), await book("Huber", "CH"), fd);
     expect(be.persons[0]!.need).toBe("none");
     // a profile chosen later does not change a registration already open
@@ -112,7 +112,7 @@ describe("Switzerland: Canton Profiles", () => {
     await completeRegistrationPerson(pool, s(), head);
     const { records } = await tessinExport(pool, s(), propertyId, today, today);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ userId: "XNA9999", nationality: "IT", placeOfBirth: "Como", over14: 1, under14: 1, documentType: "passport", carNumber: "MI123AB" });
+    expect(records[0]).toMatchObject({ userId: "XNA9999", nationality: "IT", placeOfBirth: "Como", over14: 1, under14: 1, documentType: "passport", carNumber: "MI123AB", problems: [] });
     expect(tessinCsv(records).split("\r\n")[1]).toMatch(/^XNA9999;Bianchi;Marco;03\.02\.1980;ITA;/);
     const dir = await mkdtemp(join(tmpdir(), "ti-"));
     await writeFile(join(dir, "r.xml"), tessinXml(records[0]!));

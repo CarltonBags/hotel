@@ -1,5 +1,5 @@
 import { cantonProfileOf, tessinExport } from "@hoteloftware/db";
-import { CANTON_FIELDS, CANTONS, todayIn } from "@hoteloftware/domain";
+import { CANTON_FIELDS, CANTON_GROUPINGS, CANTON_SIGNATURES, CANTON_TRANSMISSIONS, CANTONS, RETENTION_ASSUMED, todayIn } from "@hoteloftware/domain";
 import { ActionForm, Field } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -33,7 +33,7 @@ export default async function CantonPage({ searchParams }: { searchParams: Promi
   const today = todayIn(property.timeZone);
   const from = /^\d{4}-\d{2}-\d{2}$/.test(q.from ?? "") ? q.from! : today;
   const to = /^\d{4}-\d{2}-\d{2}$/.test(q.to ?? "") ? q.to! : today;
-  const exported = profile?.transmission === "ti_export" && profile.tiUserId ? (await tessinExport(pool(), tenant.schemaName, property.id, from, to)).records : null;
+  const exported = profile?.transmission === "ti_export" && profile.tiUserId?.trim() ? (await tessinExport(pool(), tenant.schemaName, property.id, from, to)).records : null;
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
   const input = "h-9 rounded-xl border border-ink-10 bg-surface px-2";
   const radio = (name: string, value: string, label: string, checked: boolean) => (
@@ -78,7 +78,7 @@ export default async function CantonPage({ searchParams }: { searchParams: Promi
             </fieldset>
             <fieldset className="grid gap-1">
               <legend className="font-medium">{m["canton.grouping"]}</legend>
-              {(["adult", "couple", "family"] as const).map((g) => radio("grouping", g, m[`canton.grouping.${g}`], profile.grouping === g))}
+              {CANTON_GROUPINGS.map((g) => radio("grouping", g, m[`canton.grouping.${g}`], profile.grouping === g))}
             </fieldset>
             <fieldset className="grid gap-1">
               <legend className="font-medium">{m["canton.fields"]}</legend>
@@ -93,6 +93,7 @@ export default async function CantonPage({ searchParams }: { searchParams: Promi
               {radio("retention", "years", "", "years" in profile.retention)}
               <input name="retentionYears" type="number" min={1} max={10} defaultValue={"years" in profile.retention ? profile.retention.years : 5} className={`${input} w-20`} />
               {radio("retention", "end_of_next_january", m["canton.retentionGE"], "until" in profile.retention)}
+              {RETENTION_ASSUMED.includes(profile.canton) ? <span className="w-full text-warning" data-retention-assumed>{m["canton.retentionAssumed"]}</span> : null}
             </fieldset>
             <label className="flex items-center gap-2">
               <input type="hidden" name="documentCopy" value="off" />
@@ -100,11 +101,15 @@ export default async function CantonPage({ searchParams }: { searchParams: Promi
             </label>
             <fieldset className="grid gap-1">
               <legend className="font-medium">{m["canton.signature"]}</legend>
-              {(["handwritten", "tablet", "id_check"] as const).map((g) => radio("signature", g, m[`canton.sig.${g}`], profile.signature === g))}
+              {CANTON_SIGNATURES.map((g) => radio("signature", g, m[`canton.sig.${g}`], profile.signature === g))}
+              <label className="flex items-center gap-2 pl-6 text-ink-60">
+                <input type="hidden" name="idCheckConfirmed" value="off" />
+                <input type="checkbox" name="idCheckConfirmed" defaultChecked={profile.idCheckConfirmed === true} /> {m["canton.idCheckConfirmed"]}
+              </label>
             </fieldset>
             <fieldset className="grid gap-1">
               <legend className="font-medium">{m["canton.transmission"]}</legend>
-              {(["ti_export", "manual_entry", "keep"] as const).map((g) => radio("transmission", g, m[`canton.tx.${g}`], profile.transmission === g))}
+              {CANTON_TRANSMISSIONS.map((g) => radio("transmission", g, m[`canton.tx.${g}`], profile.transmission === g))}
             </fieldset>
             <Field label={m["canton.tiUserId"]} name="tiUserId" defaultValue={profile.tiUserId ?? ""} />
           </ActionForm>
@@ -129,9 +134,15 @@ export default async function CantonPage({ searchParams }: { searchParams: Promi
               <ul className="grid gap-1">
                 {exported.map((r) => (
                   <li key={r.personId}>
-                    <a href={`/registration-export?propertyId=${property.id}&from=${from}&to=${to}&format=xml&person=${r.personId}`} className="underline" data-tessin-xml>
-                      {r.name} · {r.arrival} (XML)
-                    </a>
+                    {r.problems.length ? (
+                      <span className="text-warning" data-tessin-problem>
+                        {r.name} · {r.arrival}: {m["canton.notForXml"]} {r.problems.join(", ")}
+                      </span>
+                    ) : (
+                      <a href={`/registration-export?propertyId=${property.id}&from=${from}&to=${to}&format=xml&person=${r.personId}`} className="underline" data-tessin-xml>
+                        {r.name} · {r.arrival} (XML)
+                      </a>
+                    )}
                   </li>
                 ))}
               </ul>

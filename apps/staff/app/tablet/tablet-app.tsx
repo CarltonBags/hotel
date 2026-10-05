@@ -205,7 +205,7 @@ export function TabletApp({ deviceName }: { deviceName: string }) {
           ).map(([name, label, value]) => (
             <label key={name} className="grid gap-1">
               <span className="opacity-80">{t(label)}</span>
-              <input name={name} defaultValue={value} type={name === "dateOfBirth" ? "date" : "text"} required={name !== "documentNumber" || swiss} className={field} />
+              <input name={name} defaultValue={value} type={name === "dateOfBirth" ? "date" : "text"} required={swiss ? name !== "addressLine1" && name !== "postalCode" && name !== "city" ? true : state.extraFields.includes("address") : name !== "documentNumber"} className={field} />
             </label>
           ))}
           <label className="grid gap-1">

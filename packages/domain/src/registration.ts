@@ -26,12 +26,14 @@ export interface RegistrationPerson {
   dateOfBirth: string | null;
 }
 
-function minorAt(dateOfBirth: string | null, on: string): boolean {
+/** Younger than `years` on a day (a missing date of birth counts as older). */
+export function youngerThan(years: number, dateOfBirth: string | null, on: string): boolean {
   if (!dateOfBirth) return false;
   const [y, m, d] = dateOfBirth.split("-").map(Number) as [number, number, number];
-  const adult = `${y + 18}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  return on < adult;
+  return on < `${y + years}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
+
+const minorAt = (dateOfBirth: string | null, on: string) => youngerThan(18, dateOfBirth, on);
 
 /** The cantons with a preset; any other canton starts from the federal minimum. */
 export const CANTONS = ["ZH", "BE", "GR", "VS", "LU", "GE", "TI", "BS", "other"] as const;
@@ -61,13 +63,16 @@ export interface CantonProfile {
   transmission: CantonTransmission;
   /** Tessin: the establishment's user id or LEAR / NO-LEAR number, first field of the export. */
   tiUserId?: string;
+  /** The property confirmed with its canton that the ID Check may stand in for the signature. */
+  idCheckConfirmed?: boolean;
 }
 
 const preset = (canton: Canton, registers: CantonProfile["registers"], retention: CantonProfile["retention"], transmission: CantonTransmission, more: Partial<CantonProfile> = {}): CantonProfile => ({
   canton,
   registers,
   extraFields: ["address"],
-  grouping: "family",
+  // the federal rule and the cantons read: the spouse and minor children on the guest's form
+  grouping: "couple",
   retention,
   documentCopy: true,
   signature: "handwritten",
@@ -78,19 +83,41 @@ const preset = (canton: Canton, registers: CantonProfile["registers"], retention
 /**
  * The presets ("verify with your canton", ticket 47 and "Switzerland guest
  * registration rules"): the default confirmation everywhere is the printed
- * form signed by hand; where a retention period was not found, five years.
+ * form signed by hand; where a retention period was not found, five years
+ * (RETENTION_ASSUMED). Bern registers every guest: its statute (GGG Art. 24)
+ * controls over the 2024 survey, as the research resolved.
  */
 export const CANTON_PRESETS: Record<Canton, CantonProfile> = {
   ZH: preset("ZH", "all", { years: 5 }, "manual_entry"),
-  BE: preset("BE", "foreign", { years: 5 }, "keep"),
+  BE: preset("BE", "all", { years: 5 }, "keep"),
   GR: preset("GR", "foreign", { years: 1 }, "keep"),
   VS: preset("VS", "all", { years: 5 }, "keep"),
   LU: preset("LU", "all", { years: 5 }, "keep"),
   GE: preset("GE", "all", { until: "end_of_next_january" }, "manual_entry"),
-  TI: preset("TI", "all", { years: 5 }, "ti_export", { documentCopy: false, extraFields: ["address", "car_number"], tiUserId: "" }),
+  // Tessin: a notification per adult, minors under 18 on a parent's (RL 942.120 Art. 4)
+  TI: preset("TI", "all", { years: 5 }, "ti_export", { documentCopy: false, grouping: "adult", extraFields: ["address", "car_number"], tiUserId: "" }),
   BS: preset("BS", "all", { years: 5 }, "manual_entry"),
   other: preset("other", "foreign", { years: 5 }, "keep", { extraFields: [] }),
 };
+
+/** Cantons whose preset retention is our assumption (no period found in their rules): the settings say so. */
+export const RETENTION_ASSUMED: readonly Canton[] = ["ZH", "VS", "BS", "other"];
+
+/**
+ * Whether a canton may take the ID Check instead of a signature: never in
+ * Graubünden (its ordinance asks a signature); elsewhere only once the canton
+ * confirmed it (federal law still asks foreign guests to sign until amended).
+ */
+export function idCheckSignatureAllowed(profile: Pick<CantonProfile, "canton" | "idCheckConfirmed">): boolean {
+  return profile.canton !== "GR" && profile.idCheckConfirmed === true;
+}
+
+function isRetention(r: unknown): r is CantonProfile["retention"] {
+  const v = r as { years?: unknown; until?: unknown } | null;
+  return !!v && ((Number.isInteger(v.years) && (v.years as number) >= 1 && (v.years as number) <= 10) || v.until === "end_of_next_january");
+}
+
+export const CANTON_GROUPINGS = ["adult", "couple", "family"] as const;
 
 export function isCantonProfile(v: unknown): v is CantonProfile {
   const p = v as CantonProfile | null;
@@ -100,11 +127,11 @@ export function isCantonProfile(v: unknown): v is CantonProfile {
     (p.registers === "foreign" || p.registers === "all") &&
     Array.isArray(p.extraFields) &&
     p.extraFields.every((f) => (CANTON_FIELDS as readonly string[]).includes(f)) &&
-    ["adult", "couple", "family"].includes(p.grouping) &&
-    (("years" in (p.retention ?? {}) && Number.isInteger((p.retention as { years: number }).years) && (p.retention as { years: number }).years >= 1 && (p.retention as { years: number }).years <= 10) ||
-      (p.retention as { until?: string })?.until === "end_of_next_january") &&
+    (CANTON_GROUPINGS as readonly string[]).includes(p.grouping) &&
+    isRetention(p.retention) &&
     typeof p.documentCopy === "boolean" &&
     (CANTON_SIGNATURES as readonly string[]).includes(p.signature) &&
+    (p.signature !== "id_check" || idCheckSignatureAllowed(p)) &&
     (CANTON_TRANSMISSIONS as readonly string[]).includes(p.transmission)
   );
 }
@@ -124,12 +151,17 @@ export function registrationAtReception(country: string, profile: CantonProfile 
   return isRegistrationCountry(country) && registrationSignature(country, profile) === "handwritten";
 }
 
+/** Whether a person is registered at all: Austria every guest; Germany foreign nationals; Switzerland foreign guests or all, as the canton says. */
+function registeredRule(country: RegistrationCountry, profile: CantonProfile | null): (p: RegistrationPerson) => boolean {
+  if (country === "AT" || (country === "CH" && profile?.registers === "all")) return () => true;
+  return (p) => p.nationality.toUpperCase() !== country;
+}
+
 /** The form a counted person is listed on: the family's head (see registrationNeeds). */
 export function familyHead(country: RegistrationCountry, persons: RegistrationPerson[], profile: CantonProfile | null = null): RegistrationPerson | null {
   const parents = persons.filter((p) => p.role === "primary" || p.role === "spouse" || p.role === "partner");
   if (country === "AT") return parents.find((p) => p.role === "primary") ?? parents[0] ?? null;
-  const home = country === "CH" ? "CH" : "DE";
-  const needs = (p: RegistrationPerson) => (country === "CH" && profile?.registers === "all") || p.nationality.toUpperCase() !== home;
+  const needs = registeredRule(country, profile);
   // the primary guest if registered, else a registered spouse or partner
   return parents.find((p) => p.role === "primary" && needs(p)) ?? parents.find((p) => p.role !== "primary" && needs(p)) ?? null;
 }
@@ -152,8 +184,7 @@ export function registrationNeeds(country: RegistrationCountry, persons: Registr
   }
   const grouping = country === "CH" ? (profile?.grouping ?? "family") : "couple";
   const family = (p: RegistrationPerson) => (grouping !== "adult" && (p.role === "spouse" || p.role === "partner")) || minor(p) || (grouping === "family" && p.role === "child");
-  const home = country === "CH" ? "CH" : "DE";
-  const registered = (p: RegistrationPerson) => (country === "CH" && profile?.registers === "all") || p.nationality.toUpperCase() !== home;
+  const registered = registeredRule(country, profile);
   for (const p of persons) {
     if (p === head) out[p.id] = "own_form";
     else if (head && family(p)) out[p.id] = "counted";
@@ -215,9 +246,25 @@ const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 const TI_DOCUMENT_XML = { passport: "Passport", id_card: "Identity card", other: "Other" } as const;
 const TI_DOCUMENT_CSV = { passport: "Passaporto", id_card: "Carta identità", other: "Altro" } as const;
 
-/** Tessin's XML (F-Modello_4.xsd): one registration per file, the elements in the schema's order. */
+/**
+ * What keeps a record out of Tessin's XML (its schema): a date of birth, a
+ * known nationality and country, a postcode in digits. Such a record goes by
+ * the CSV, or is entered on the portal by hand.
+ */
+export function tessinXmlProblems(r: TessinRecord): string[] {
+  const out: string[] = [];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(r.dateOfBirth)) out.push("date of birth");
+  if (!alpha3(r.nationality)) out.push("nationality");
+  if (!alpha3(r.country)) out.push("country of residence");
+  if (!/^\d+$/.test(r.postalCode)) out.push("postcode in digits");
+  return out;
+}
+
+/** Tessin's XML (F-Modello_4.xsd): one registration per file, the elements in the schema's order. Only for a record without problems (tessinXmlProblems). */
 export function tessinXml(r: TessinRecord): string {
-  const zip = /^\d+$/.test(r.postalCode) ? r.postalCode : "0";
+  const problems = tessinXmlProblems(r);
+  if (problems.length) throw new Error(`Not for the XML: ${problems.join(", ")}`);
+  const zip = r.postalCode;
   const el = (name: string, v: string | number) => `    <${name}>${xml(String(v))}</${name}>`;
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -227,13 +274,13 @@ export function tessinXml(r: TessinRecord): string {
     el("firstname", r.firstName),
     el("lastname", r.lastName),
     el("birthdate", r.dateOfBirth),
-    el("nationality", alpha3(r.nationality) || "XXX"),
+    el("nationality", alpha3(r.nationality)),
     el("arrivaldate", r.arrival),
     el("placeofbirth", r.placeOfBirth),
     el("street", r.street),
     el("zip", zip),
     el("city", r.city),
-    el("nation", alpha3(r.country) || alpha3(r.nationality) || "XXX"),
+    el("nation", alpha3(r.country)),
     el("departuredate", r.departure),
     el("persover14", r.over14),
     el("persunder14", r.under14),
@@ -249,12 +296,16 @@ export function tessinXml(r: TessinRecord): string {
 
 const TI_CSV_HEADER = "Id Struttura;Cognome;Nome;Data di nascita;Nazionalità;Data di arrivo;Data di partenza;Luogo di nascita;Numero bollettino;Indirizzo;CAP;Domicilio;Nazione;Numero autovettura;Mag14;Min14;Tipo documento;Numero documento";
 const swissDate = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
-const csvCell = (s: string) => s.replace(/[;\r\n]+/g, " ").trim();
+// a guest's name opening with = + - @ would run as a formula in a spreadsheet: quoted as text
+const csvCell = (s: string) => {
+  const v = s.replace(/[;\r\n]+/g, " ").trim();
+  return /^[=+\-@]/.test(v) ? `'${v}` : v;
+};
 
 /** Tessin's CSV (D-Modello_2): semicolon-separated, dates as DD.MM.YYYY, countries alpha-3, many registrations per file. */
 export function tessinCsv(records: TessinRecord[]): string {
   const rows = records.map((r) =>
-    [r.userId, r.lastName, r.firstName, swissDate(r.dateOfBirth), alpha3(r.nationality), swissDate(r.arrival), swissDate(r.departure), r.placeOfBirth, r.reference, r.street, r.postalCode, r.city, alpha3(r.country) || alpha3(r.nationality), r.carNumber, String(r.over14), String(r.under14), TI_DOCUMENT_CSV[r.documentType], r.documentNumber]
+    [r.userId, r.lastName, r.firstName, swissDate(r.dateOfBirth), alpha3(r.nationality), swissDate(r.arrival), swissDate(r.departure), r.placeOfBirth, r.reference, r.street, r.postalCode, r.city, alpha3(r.country), r.carNumber, String(r.over14), String(r.under14), TI_DOCUMENT_CSV[r.documentType], r.documentNumber]
       .map(csvCell)
       .join(";"),
   );

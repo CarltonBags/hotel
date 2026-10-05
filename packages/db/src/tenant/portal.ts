@@ -106,10 +106,16 @@ export type PortalView =
 
 const KEY = /^[0-9a-f]{64}$/;
 
+/** A Swiss property's Canton Profile, validated (null elsewhere or until chosen). */
+async function cantonProfileIn(tx: PoolClient, propertyId: string): Promise<CantonProfile | null> {
+  const v = (await tx.query<{ canton_profile: unknown }>("select canton_profile from properties where id = $1", [propertyId])).rows[0]?.canton_profile;
+  return isCantonProfile(v) ? v : null;
+}
+
 async function propertyOf(tx: PoolClient, propertyId: string): Promise<PortalProperty> {
-  const { rows } = await tx.query("select id, name, country, time_zone, currency, portal_info, portal_document_images, portal_photo_file_id, canton_profile from properties where id = $1", [propertyId]);
+  const { rows } = await tx.query("select id, name, country, time_zone, currency, portal_info, portal_document_images, portal_photo_file_id from properties where id = $1", [propertyId]);
   const p = rows[0]!;
-  const profile: CantonProfile | null = isCantonProfile(p.canton_profile) ? p.canton_profile : null;
+  const profile = await cantonProfileIn(tx, propertyId);
   return {
     id: p.id,
     name: p.name,
@@ -455,7 +461,7 @@ export async function addPortalDocument(pool: Pool, schema: string, key: string,
     const r = await reservationByKey(tx, key, { lock: true });
     const p = await propertyOf(tx, r.property_id);
     if (!p.documentImages || !isRegistrationCountry(r.country)) throw new Error("This hotel takes documents at reception");
-    const profile = r.country === "CH" ? ((await tx.query<{ canton_profile: unknown }>("select canton_profile from properties where id = $1", [r.property_id])).rows[0]?.canton_profile as CantonProfile | null) : null;
+    const profile = await cantonProfileIn(tx, r.property_id);
     const n = (await tx.query<{ n: number }>("select count(*)::int as n from reservation_documents where reservation_id = $1", [r.id])).rows[0]!.n;
     if (n >= DOCUMENTS_PER_STAY) throw new Error("Enough pictures for this stay");
     const f = await fileIn(tx, fileId);

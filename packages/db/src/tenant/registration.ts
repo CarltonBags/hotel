@@ -1,6 +1,5 @@
 import type { Pool, PoolClient } from "pg";
 import {
-  CANTON_PRESETS,
   PERSON_ROLES,
   familyHead,
   isCantonProfile,
@@ -11,6 +10,8 @@ import {
   registrationSignature,
   type CantonProfile,
   type CantonSignature,
+  tessinXmlProblems,
+  youngerThan,
   type TessinRecord,
   type PersonRole,
   type RegistrationCountry,
@@ -203,6 +204,14 @@ export interface PersonInput {
   countryOfResidence?: string | null;
 }
 
+/** A Swiss guest without a date of birth or Country of Residence. */
+export class MissingSwissDetails extends Error {
+  constructor() {
+    super("In Switzerland every guest needs a date of birth and a Country of Residence");
+    this.name = "MissingSwissDetails";
+  }
+}
+
 /**
  * Germany counts spouse, partner and children by number and nationality:
  * their names are not asked. Switzerland needs date of birth and Country of
@@ -214,7 +223,7 @@ function checkPerson(p: PersonInput, country: RegistrationCountry): void {
   if (!countedOnly && (!p.firstName.trim() || !p.lastName.trim())) throw new Error("Give the person's name");
   if (!/^[A-Z]{2}$/.test(p.nationality.toUpperCase())) throw new Error("Give the nationality");
   if (p.dateOfBirth && !/^\d{4}-\d{2}-\d{2}$/.test(p.dateOfBirth)) throw new Error("Date of birth as a date");
-  if (country === "CH" && (!p.dateOfBirth || !/^[A-Z]{2}$/.test((p.countryOfResidence ?? "").toUpperCase()))) throw new Error("In Switzerland every guest needs a date of birth and a Country of Residence");
+  if (country === "CH" && (!p.dateOfBirth || !/^[A-Z]{2}$/.test((p.countryOfResidence ?? "").toUpperCase()))) throw new MissingSwissDetails();
 }
 
 async function insertPerson(tx: PoolClient, registrationId: string, p: PersonInput): Promise<void> {
@@ -412,8 +421,13 @@ function realDate(s: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s && s > "1900-01-01";
 }
 
-function checkDetails(d: GuestDetails, country: RegistrationCountry): void {
-  for (const k of Object.keys(DRAFT_COLUMNS) as (keyof GuestDetails)[]) if (d[k] !== undefined && (typeof d[k] !== "string" || d[k]!.length > 120)) throw new TabletProblem(k);
+const OPTIONAL_DETAILS: (keyof GuestDetails)[] = ["placeOfBirth", "documentType", "carNumber"];
+
+function checkDetails(d: GuestDetails, country: RegistrationCountry, profile: CantonProfile | null): void {
+  for (const k of Object.keys(DRAFT_COLUMNS) as (keyof GuestDetails)[]) {
+    if (d[k] === undefined && OPTIONAL_DETAILS.includes(k)) continue;
+    if (typeof d[k] !== "string" || d[k]!.length > 120) throw new TabletProblem(k);
+  }
   if (!d.firstName.trim()) throw new TabletProblem("firstName");
   if (!d.lastName.trim()) throw new TabletProblem("lastName");
   if (!realDate(d.dateOfBirth)) throw new TabletProblem("dateOfBirth");
@@ -422,6 +436,7 @@ function checkDetails(d: GuestDetails, country: RegistrationCountry): void {
   if (!DOCUMENT_TYPES.includes(d.documentType ?? "")) throw new TabletProblem("documentType");
   // the Swiss federal minimum: place of birth, document type and number, and the Country of Residence of every guest
   if (country === "CH") {
+    if (profile?.extraFields.includes("address") && (!d.addressLine1.trim() || !d.postalCode.trim() || !d.city.trim())) throw new TabletProblem("addressLine1");
     if (!d.placeOfBirth?.trim()) throw new TabletProblem("placeOfBirth");
     if (!d.documentType) throw new TabletProblem("documentType");
     if (!d.documentNumber.trim()) throw new TabletProblem("documentNumber");
@@ -460,7 +475,7 @@ export async function tabletStep(pool: Pool, schema: string, device: { id: strin
       await tx.query("update registration_persons set language = $2 where id = $1", [personId, input.language === "en" ? "en" : "de"]);
     } else if (input.step === "details") {
       const d = input.details;
-      checkDetails(d, reg.country);
+      checkDetails(d, reg.country, reg.profile);
       const v = { firstName: d.firstName.trim(), lastName: d.lastName.trim(), dateOfBirth: d.dateOfBirth, nationality: d.nationality.toUpperCase(), addressLine1: d.addressLine1.trim(), postalCode: d.postalCode.trim(), city: d.city.trim(), country: d.country.trim().toUpperCase().slice(0, 2), documentNumber: d.documentNumber.trim(), gender: d.gender };
       const ch = { placeOfBirth: (d.placeOfBirth ?? "").trim(), documentType: d.documentType ?? "", carNumber: (d.carNumber ?? "").trim() };
       await tx.query(
@@ -485,7 +500,7 @@ export async function tabletStep(pool: Pool, schema: string, device: { id: strin
           nationality: p.nationality,
           countryOfResidence: typeof p.countryOfResidence === "string" ? p.countryOfResidence : null,
         }).catch((err: unknown) => {
-          throw err instanceof Error && err.message.startsWith("In Switzerland") ? new TabletProblem("companions") : err;
+          throw err instanceof MissingSwissDetails ? new TabletProblem("companions") : err;
         });
       }
     } else if (input.step === "review") {
@@ -599,6 +614,15 @@ export async function completeRegistrationPerson(pool: Pool, schema: string, per
     )).rows[0];
     if (!p) throw new Error("Person not found");
     if (p.completed_at) return;
+    if (p.country === "CH") {
+      // the head and those on their form: date of birth and Country of Residence (tourist taxes and guest cards depend on them)
+      const missing = (await tx.query<{ first_name: string }>(
+        `select first_name from registration_persons x where (x.id = $1 or x.registration_id = (select registration_id from registration_persons where id = $1))
+           and (x.date_of_birth is null or x.country !~ '^[A-Z]{2}$')`,
+        [personId],
+      )).rows;
+      if (missing.length) throw new Error(`Date of birth and Country of Residence still missing for: ${missing.map((m) => m.first_name || "?").join(", ")}`);
+    }
     const signature = registrationSignature(p.country, p.profile);
     if (!registrationComplete({ guestDone: p.guest_done_at !== null, confirmation: p.confirmation, idChecked: p.id_checked_at !== null, signature })) {
       throw new Error(signature === "id_check" ? "Complete needs the guest's part and the ID Check" : "Complete needs the guest's part, the signature and the ID Check");
@@ -648,18 +672,30 @@ export async function setCantonProfile(pool: Pool, schema: string, propertyId: s
     if (!p) throw new Error("Property not found");
     if (p.country !== "CH") throw new Error("Canton Profiles are for properties in Switzerland");
     await tx.query("update properties set canton_profile = $2 where id = $1", [propertyId, JSON.stringify(profile)]);
+    if (!profile.documentCopy) {
+      // no copy of an identity document may be kept here: pictures already stored go now (the file retention deletes them today)
+      await tx.query(
+        `update stored_files set delete_after = current_date where id in (select d.file_id from reservation_documents d join reservations r on r.id = d.reservation_id where r.property_id = $1)`,
+        [propertyId],
+      );
+      await tx.query("delete from reservation_documents d using reservations r where r.id = d.reservation_id and r.property_id = $1", [propertyId]);
+    }
   });
 }
 
-export { CANTON_PRESETS };
+
+export interface TessinExport {
+  records: (TessinRecord & { personId: string; name: string; problems: string[] })[];
+}
 
 /**
  * Tessin's export (ticket 47): the forms of registrations completed at the
  * property, by arrival day, as the police portal imports them: one XML per
  * form (the published schema takes one registration a file) and one CSV for
- * all. Persons over and under 14 count the head and those on their form.
+ * all. Persons over and under 14 count the head and those on their form. A
+ * record the XML schema cannot take is named with its problems.
  */
-export async function tessinExport(pool: Pool, schema: string, propertyId: string, from: string, to: string): Promise<{ records: (TessinRecord & { personId: string; name: string })[] }> {
+export async function tessinExport(pool: Pool, schema: string, propertyId: string, from: string, to: string): Promise<TessinExport> {
   if (!isUuid(propertyId) || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error("Choose the days");
   return withTenant(pool, schema, async (tx) => {
     const profile = (await tx.query<{ canton_profile: unknown }>("select canton_profile from properties where id = $1", [propertyId])).rows[0]?.canton_profile;
@@ -669,15 +705,13 @@ export async function tessinExport(pool: Pool, schema: string, propertyId: strin
       "select g.id from registrations g join reservations r on r.id = g.reservation_id where g.property_id = $1 and g.country = 'CH' and r.arrival between $2 and $3 order by r.arrival",
       [propertyId, from, to],
     )).rows;
-    const records: (TessinRecord & { personId: string; name: string })[] = [];
+    const records: TessinExport["records"] = [];
     for (const { id } of regs) {
       const reg = (await viewIn(tx, "g.id = $1", id))!;
-      const ages = (p: RegistrationPersonView) => (p.dateOfBirth && p.dateOfBirth > shiftYears(reg.arrival, -14) ? "under" : "over");
       for (const p of reg.persons.filter((x) => x.need === "own_form" && x.completed)) {
         const group = [p, ...reg.persons.filter((x) => x.countedOn === p.id)];
-        records.push({
-          personId: p.id,
-          name: `${p.firstName} ${p.lastName}`,
+        const under14 = group.filter((x) => youngerThan(14, x.dateOfBirth, reg.arrival)).length;
+        const record: TessinRecord = {
           userId: profile.tiUserId.trim(),
           firstName: p.firstName,
           lastName: p.lastName,
@@ -690,19 +724,17 @@ export async function tessinExport(pool: Pool, schema: string, propertyId: strin
           postalCode: p.postalCode,
           city: p.city,
           country: p.country,
-          over14: group.filter((x) => ages(x) === "over").length,
-          under14: group.filter((x) => ages(x) === "under").length,
+          over14: group.length - under14,
+          under14,
           documentType: p.documentType || "other",
           documentNumber: p.documentNumber,
           carNumber: p.carNumber,
-          reference: p.id.slice(0, 8),
-        });
+          // the form's own id: unique, and found again from the police's result page
+          reference: p.id,
+        };
+        records.push({ ...record, personId: p.id, name: `${p.firstName} ${p.lastName}`, problems: tessinXmlProblems(record) });
       }
     }
     return { records };
   });
-}
-
-function shiftYears(day: string, years: number): string {
-  return `${Number(day.slice(0, 4)) + years}${day.slice(4)}`;
 }

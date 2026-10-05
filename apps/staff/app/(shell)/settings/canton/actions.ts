@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { setCantonProfile } from "@hoteloftware/db";
-import { CANTON_FIELDS, CANTON_PRESETS, CANTONS, type Canton, type CantonField, type CantonProfile } from "@hoteloftware/domain";
+import { CANTON_FIELDS, CANTON_GROUPINGS, CANTON_PRESETS, CANTON_SIGNATURES, CANTON_TRANSMISSIONS, CANTONS, type Canton, type CantonField, type CantonProfile, idCheckSignatureAllowed } from "@hoteloftware/domain";
+import { cantonProfileOf } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { field, flag, formAction, type FormState } from "@/lib/form";
@@ -22,7 +23,10 @@ const canton = (v: string): Canton => {
 export async function presetAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const c = await scope(formData);
-    await setCantonProfile(pool(), c.schema, c.propertyId, CANTON_PRESETS[canton(field(formData, "canton"))]);
+    // the establishment's Tessin id is the property's own: kept across presets
+    const tiUserId = (await cantonProfileOf(pool(), c.schema, c.propertyId))?.tiUserId;
+    const preset = CANTON_PRESETS[canton(field(formData, "canton"))];
+    await setCantonProfile(pool(), c.schema, c.propertyId, { ...preset, ...(preset.transmission === "ti_export" && tiUserId ? { tiUserId } : {}) });
     revalidatePath("/settings/canton");
   });
 }
@@ -36,13 +40,15 @@ export async function profileAction(_prev: FormState, formData: FormData): Promi
       canton: which,
       registers: field(formData, "registers") === "all" ? "all" : "foreign",
       extraFields: CANTON_FIELDS.filter((f: CantonField) => formData.getAll("extraFields").includes(f)),
-      grouping: (["adult", "couple", "family"] as const).find((g) => g === field(formData, "grouping")) ?? "family",
+      grouping: CANTON_GROUPINGS.find((g) => g === field(formData, "grouping")) ?? "couple",
       retention: field(formData, "retention") === "end_of_next_january" ? { until: "end_of_next_january" } : { years },
       documentCopy: flag(formData, "documentCopy"),
-      signature: (["handwritten", "tablet", "id_check"] as const).find((g) => g === field(formData, "signature")) ?? "handwritten",
-      transmission: (["ti_export", "manual_entry", "keep"] as const).find((g) => g === field(formData, "transmission")) ?? "keep",
+      signature: CANTON_SIGNATURES.find((g) => g === field(formData, "signature")) ?? "handwritten",
+      transmission: CANTON_TRANSMISSIONS.find((g) => g === field(formData, "transmission")) ?? "keep",
       ...(field(formData, "transmission") === "ti_export" ? { tiUserId: field(formData, "tiUserId") } : {}),
+      idCheckConfirmed: flag(formData, "idCheckConfirmed"),
     };
+    if (profile.signature === "id_check" && !idCheckSignatureAllowed(profile)) throw new Error(profile.canton === "GR" ? "Graubünden asks a signature" : "Confirm with your canton that the ID Check may stand in for the signature, then tick that box");
     await setCantonProfile(pool(), c.schema, c.propertyId, profile);
     revalidatePath("/settings/canton");
   });
