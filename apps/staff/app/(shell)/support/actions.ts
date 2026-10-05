@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { endSupportAccess, reportIncident, scheduleMaintenance, startSupportAccess, updateIncident } from "@hoteloftware/db";
+import { endSupportAccess, reportIncident, scheduleMaintenance, setPrice, startSupportAccess, updateIncident } from "@hoteloftware/db";
 import { zonedInstant, type IncidentState } from "@hoteloftware/domain";
 import { authorize } from "@/lib/authorize";
 import { isSupportConsoleUser } from "@/lib/support";
@@ -65,6 +65,16 @@ export async function updateIncidentAction(_prev: FormState, formData: FormData)
     const userId = await supportStaffId();
     await updateIncident(pool(), field(formData, "incidentId"), { state: field(formData, "state") as IncidentState, message: field(formData, "message") }, userId);
     return { ok: true, message: "Update published." };
+  });
+}
+
+/** The price list (ticket 88): prices are configuration, entered here with the day they apply from. */
+export async function setPriceAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    await supportStaffId();
+    const unit = field(formData, "unit");
+    await setPrice(pool(), { key: field(formData, "key"), unit: unit === "property" ? "property" : unit === "percent" ? "percent" : "room", amount: Number(field(formData, "amount").replace(",", ".")), validFrom: field(formData, "validFrom") });
+    return { ok: true, message: "Price saved." };
   });
 }
 

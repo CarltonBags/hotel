@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById } from "@hoteloftware/db";
+import { deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -27,6 +27,8 @@ export const QUEUES = {
   /** Hourly: scheduled reports due, one job per tenant (ticket 82). */
   reportsAll: "reports.scheduled.all",
   reports: "reports.scheduled",
+  /** On the 1st: each live tenant's subscription invoices (ticket 88). */
+  subscriptionBilling: "subscription.billing",
   /** Every minute: a major incident on our side alerts the customers' Property Managers (ticket 86). */
   outageAlerts: "status.outage_alerts",
 } as const;
@@ -161,6 +163,23 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     if (n) console.log(`[outage] ${n} Property Manager(s) alerted`);
   });
   await boss.schedule(QUEUES.outageAlerts, "* * * * *", {}, { tz: "Europe/Berlin" });
+
+  await boss.work(QUEUES.subscriptionBilling, async () => {
+    // trials and Test Mode are not billed; a failing tenant does not stop the others
+    const { rows } = await pool.query<{ id: string }>("select id from control.tenants where live_at is not null and slug <> $1", [process.env.PLATFORM_TENANT_SLUG ?? "platform"]);
+    const month = `${new Date().toISOString().slice(0, 7)}-01`;
+    for (const t of rows) {
+      const tenant = await findTenantById(pool, t.id);
+      if (!tenant) continue;
+      try {
+        const issued = await issueSubscriptionInvoices(pool, tenant, month);
+        if (issued.length) console.log(`[billing] ${tenant.slug}: ${issued.join(", ")}`);
+      } catch (err) {
+        console.error(`[billing] ${tenant.slug}`, err);
+      }
+    }
+  });
+  await boss.schedule(QUEUES.subscriptionBilling, "30 4 1 * *", {}, { tz: "Europe/Berlin" });
 
   if (options.tenantCheckCron) {
     await boss.schedule(QUEUES.tenantCheckAll, options.tenantCheckCron, {}, { tz: "Europe/Berlin" });

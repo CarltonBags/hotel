@@ -27,6 +27,10 @@ export interface ShellProps {
   propertyActions: string[];
   /** The platform's support staff see the support console (ticket 93). */
   supportStaff?: boolean;
+  /** Tenant-level actions the user holds (some are the Owner's alone). */
+  tenantActions?: string[];
+  /** Modules on (or readable) at a property in view: their screens show (ticket 88). */
+  activeModules?: string[];
 }
 
 type Action =

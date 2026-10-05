@@ -1684,6 +1684,25 @@ export const savedReports = pgTable(
   (t) => [check("saved_reports_name_check", sql`length(trim(${t.name})) between 1 and 120`), index("saved_reports_owner_idx").on(t.ownerId), index("saved_reports_shared_idx").on(t.propertyId).where(sql`${t.shared}`)],
 );
 
+export const propertyModules = pgTable(
+  "property_modules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    module: text("module").notNull(),
+    onSince: date("on_since").notNull(),
+    offAt: date("off_at"),
+    switchedOnBy: text("switched_on_by").notNull(),
+    switchedOffBy: text("switched_off_by"),
+    checklist: jsonb("checklist").notNull().default(sql`'{}'`),
+  },
+  (t) => [
+    check("property_modules_module_check", sql`${t.module} in ('channel', 'guest_portal', 'point_of_sale', 'groups', 'whatsapp')`),
+    check("property_modules_order_check", sql`${t.offAt} is null or ${t.offAt} >= ${t.onSince}`),
+    uniqueIndex("property_modules_running_key").on(t.propertyId, t.module).where(sql`${t.offAt} is null`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1765,4 +1784,5 @@ export const tenantSchema = {
   budgets,
   budgetMonths,
   savedReports,
+  propertyModules,
 };
