@@ -602,7 +602,12 @@ export const bookings = pgTable(
     createdBy: text("created_by").notNull(),
     channelCollect: text("channel_collect"),
     virtualCardFrom: date("virtual_card_from"),
+    virtualCardUntil: date("virtual_card_until"),
     virtualCardAmount: numeric("virtual_card_amount", { precision: 12, scale: 2 }),
+    channelCardToken: text("channel_card_token"),
+    channelCardBrand: text("channel_card_brand"),
+    channelCardLast4: char("channel_card_last4", { length: 4 }),
+    channelNotes: text("channel_notes").notNull().default(""),
   },
   (t) => [
     check("bookings_channel_collect_check", sql`${t.channelCollect} in ('property', 'channel')`),
@@ -1853,6 +1858,7 @@ export const channelConnections = pgTable("channel_connections", {
   busyUntil: timestamp("busy_until", { withTimezone: true }),
   closedAt: timestamp("closed_at", { withTimezone: true }),
   google: boolean("google").notNull().default(false),
+  webhookAt: timestamp("webhook_at", { withTimezone: true }),
 });
 
 export const channelSettings = pgTable(

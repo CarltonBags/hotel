@@ -17,8 +17,10 @@ create table channel_settings (
   primary key (property_id, channel)
 );
 
--- Google's free booking links through the channel manager, switched on per property
+-- Google's free booking links through the channel manager, switched on per property (by support at the channel manager)
 alter table channel_connections add column google boolean not null default false;
+-- when our booking webhook was registered at the channel manager
+alter table channel_connections add column webhook_at timestamptz;
 
 create table channel_bookings (
   external_id text primary key,
@@ -55,7 +57,14 @@ alter table reservations add column channel_room_key text;
 -- who collects the guest's money on a channel booking; a booking site's virtual card and when it can be charged
 alter table bookings add column channel_collect text constraint bookings_channel_collect_check check (channel_collect in ('property', 'channel'));
 alter table bookings add column virtual_card_from date;
+alter table bookings add column virtual_card_until date;
 alter table bookings add column virtual_card_amount numeric(12, 2);
+-- a card the channel manager tokenised into the hotel's payment provider: token and last digits only
+alter table bookings add column channel_card_token text;
+alter table bookings add column channel_card_brand text;
+alter table bookings add column channel_card_last4 char(4);
+-- what the channel says (its booking number and remarks), kept apart from staff's notes
+alter table bookings add column channel_notes text not null default '';
 
 alter table payments drop constraint payments_tender_check;
 alter table payments add constraint payments_tender_check check (tender in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect', 'cash', 'website_tool'));

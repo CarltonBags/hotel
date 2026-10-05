@@ -45,3 +45,37 @@ export function channelNights(nights: { date: string; gross: number }[], include
     return { date: n.date, total: money(n.gross), components: [{ kind: "room" as const, serviceId: null, persons: null, unitPrice: roomAmount, amount: roomAmount }, ...parts] };
   });
 }
+
+export interface ChannelNightInput {
+  date: string;
+  /** The night as the channel priced it. */
+  price: number;
+  includesVat: boolean;
+  includesCityTax: boolean;
+  /** The plan's included Services: gross price per person and VAT. */
+  services: { serviceId: string; componentPrice: number; vatPercent: number }[];
+  persons: number;
+  roomVatPercent: number;
+  /** The City Tax of the night on the room's net price; null without a rule. */
+  cityTaxOnRoomNet: ((roomNet: number) => number) | null;
+}
+
+/**
+ * A channel night in our terms. The City Tax comes off first (it is no part of
+ * the VAT base), worked out on the room's net price without the included
+ * Services; a net price then gets VAT at the room's rate, the Services keep
+ * their own gross price. The guest pays the channel price: room, Services and
+ * City Tax together.
+ */
+export function channelNight(n: ChannelNightInput): { date: string; total: number; cityTax: number; components: ReturnType<typeof channelNights>[number]["components"] } {
+  const money = (x: number) => Math.round(x * 100) / 100;
+  const servicesGross = n.services.reduce((s, x) => s + x.componentPrice * n.persons, 0);
+  const servicesNet = n.services.reduce((s, x) => s + (x.componentPrice * n.persons) / (1 + x.vatPercent / 100), 0);
+  // the room's net price within a channel amount (VAT included or not)
+  const roomNet = (amount: number) => Math.max(0, n.includesVat ? (amount - servicesGross) / (1 + n.roomVatPercent / 100) : amount - servicesNet);
+  const tax = n.cityTaxOnRoomNet;
+  const amount = n.includesCityTax && tax ? splitCityTaxIncluded(n.price, (a) => tax(money(roomNet(a)))).gross : n.price;
+  const total = n.includesVat ? amount : money(roomNet(amount) * (1 + n.roomVatPercent / 100) + servicesGross);
+  const [night] = channelNights([{ date: n.date, gross: total }], n.services, n.persons);
+  return { ...night!, cityTax: money(n.price - amount) };
+}

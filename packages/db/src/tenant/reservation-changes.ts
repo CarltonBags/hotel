@@ -360,6 +360,11 @@ async function cancelIn(tx: PoolClient, r: ResRow, userId: string, now: Date, op
   return fee.amount;
 }
 
+/** A change to a reservation made outside staff's screens (a channel's revision, ticket 38), logged like theirs. */
+export async function logReservationChange(tx: PoolClient, id: string, userId: string, action: ReservationChangeAction, before: unknown, after: unknown): Promise<void> {
+  await logChange(tx, id, userId, action, before, after);
+}
+
 /** A cancellation from a booking site (ticket 38): no fee of ours; the caller holds the property lock. */
 export async function cancelForChannelIn(tx: PoolClient, reservationId: string, userId: string, now = new Date()): Promise<void> {
   await cancelIn(tx, await loadForChange(tx, reservationId), userId, now, { noFee: true });

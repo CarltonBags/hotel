@@ -130,11 +130,13 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
           {m["res.source"]}: {m[`res.source.${r.booking.source}`]}
           {r.booking.channelName ? ` · ${r.booking.channelName}` : ""}
           {r.booking.channelCollect === "channel" ? ` · ${m["res.channelCollects"]}` : ""}
-          {r.booking.virtualCard ? ` · ${fill(m["res.virtualCard"], { from: r.booking.virtualCard.from ? date(r.booking.virtualCard.from) : "?", amount: r.booking.virtualCard.amount === null ? "?" : money(r.booking.virtualCard.amount) })}` : ""}
+          {r.booking.virtualCard ? ` · ${fill(m["res.virtualCard"], { from: r.booking.virtualCard.from ? date(r.booking.virtualCard.from) : "?", amount: r.booking.virtualCard.amount === null ? "?" : money(r.booking.virtualCard.amount) })}${r.booking.virtualCard.until ? ` ${fill(m["res.virtualCardUntil"], { until: date(r.booking.virtualCard.until) })}` : ""}` : ""}
+          {r.booking.channelCard ? ` · ${fill(m["res.channelCard"], { card: [r.booking.channelCard.brand, r.booking.channelCard.last4 ? `•••• ${r.booking.channelCard.last4}` : ""].filter(Boolean).join(" ") })}` : ""}
           {r.booking.walkIn ? ` · ${m["res.walkIn"]}` : ""}
           {r.booking.rateCode ? ` · ${m["rates.rateCode"]} ${r.booking.rateCode}${r.booking.rateCodeCompanyName ? ` (${r.booking.rateCodeCompanyName})` : ""}` : ""}
         </p>
         {notes && r.booking.notes ? <p className="text-ink-80">{r.booking.notes}</p> : null}
+        {notes && r.booking.channelNotes ? <p className="whitespace-pre-line text-ink-60" data-channel-notes>{r.booking.channelNotes}</p> : null}
         {others.length ? (
           <p>
             {m["res.otherRooms"]}:{" "}

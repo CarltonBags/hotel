@@ -54,8 +54,8 @@ describe("channel push", () => {
     ch.revisions.push({
       id: "rev-9", bookingId: "bk-9", propertyId: ext, status: "new", channel: "Booking.com", channelCode: "99", currency: "EUR",
       customer: { firstName: "A", lastName: "B", email: null, phone: null, country: null, language: null, address: null, city: null, postalCode: null },
-      rooms: [{ key: "1", roomTypeId: "x", ratePlanId: "not-ours", arrival: "2026-12-01", departure: "2026-12-02", adults: 1, childAges: [], nights: [{ date: "2026-12-01", price: 80 }], guestName: null }],
-      notes: "", collect: "property", virtualCard: null, receivedAt: "2026-10-05T10:00:00.000Z",
+      rooms: [{ key: "1", roomTypeId: "x", ratePlanId: "not-ours", arrival: "2026-12-01", departure: "2026-12-02", adults: 1, childAges: [], childrenWithoutAge: 0, includesVat: null, includesCityTax: null, nights: [{ date: "2026-12-01", price: 80 }], guestName: null }],
+      notes: "", collect: "property", virtualCard: null, cardToken: null, receivedAt: "2026-10-05T10:00:00.000Z",
     });
     expect(await pullChannelBookings(pool, alpha, ch)).toEqual({ applied: 0, problems: 1 });
     expect(ch.acked.has("rev-9")).toBe(true);

@@ -20,7 +20,10 @@ export default async function ChannelsPage() {
       </div>
     );
   }
-  const { tenant, actor } = await requireAllowed("manage_rates", property.id);
+  // Revenue and the Property Manager manage the connection; the desk sees the channel bookings to look at
+  const { tenant, actor } = await requireAllowed(can(shell.principal.actor, "manage_rates", property.id) ? "manage_rates" : "manage_reservations", property.id);
+  const manages = can(actor, "manage_rates", property.id);
+  const resolves = can(actor, "manage_reservations", property.id);
   const [{ connection, status, mappings }, settings, problems] = await Promise.all([channelOverview(pool(), tenant.schemaName, property.id), channelSettings(pool(), tenant.schemaName, property.id), channelProblems(pool(), tenant.schemaName, property.id)]);
   const canSet = can(actor, "manage_property_settings", property.id);
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
@@ -28,7 +31,19 @@ export default async function ChannelsPage() {
     <ActionForm key={x?.channel ?? "new"} action={channelSettingAction} submitLabel={m["action.save"]} pendingLabel={m["action.saving"]} className="flex flex-wrap items-center gap-3 rounded-xl bg-surface p-3">
       {hidden}
       {x ? <input type="hidden" name="channel" value={x.channel} /> : null}
-      {x ? <span className="min-w-32 font-medium">{x.channel}</span> : <Field label={m["channels.channelName"]} name="channel" required />}
+      {x ? (
+        <span className="min-w-32 font-medium">{x.channel}</span>
+      ) : (
+        <label className="grid gap-1">
+          <span>{m["channels.channelName"]}</span>
+          <input name="channel" list="channel-names" required className="h-9 rounded-xl border border-ink-10 bg-surface px-2" />
+          <datalist id="channel-names">
+            {["Booking.com", "Expedia", "Airbnb", "HRS", "Agoda", "Trip.com", "Google"].map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+        </label>
+      )}
       {(
         [
           ["vat", m["channels.includesVat"], x?.pricesIncludeVat ?? true],
@@ -53,7 +68,7 @@ export default async function ChannelsPage() {
         </h1>
         <p className="text-sm text-ink-60">{m["channels.help"]}</p>
       </div>
-      {connection?.externalId ? (
+      {!manages ? null : connection?.externalId ? (
         <section className="grid gap-2 rounded-2xl bg-surface-2 p-5 text-sm" data-connection>
           <p>
             {m["channels.connectedSince"]} {when(connection.connectedAt)} · Channex {connection.externalId}
@@ -90,17 +105,19 @@ export default async function ChannelsPage() {
                 <span>{p.message}</span>
                 <div className="flex gap-2">
                   {p.reservationId ? <Link href={`/reservations/${p.reservationId}`} className="text-accent underline">{m["channels.openBooking"]}</Link> : null}
-                  <ActionForm action={resolveProblemAction} submitLabel={m["channels.resolved"]} pendingLabel={m["action.saving"]} className="contents">
-                    {hidden}
-                    <input type="hidden" name="revisionId" value={p.revisionId} />
-                  </ActionForm>
+                  {resolves ? (
+                    <ActionForm action={resolveProblemAction} submitLabel={m["channels.resolved"]} pendingLabel={m["action.saving"]} className="contents">
+                      {hidden}
+                      <input type="hidden" name="revisionId" value={p.revisionId} />
+                    </ActionForm>
+                  ) : null}
                 </div>
               </li>
             ))}
           </ul>
         </section>
       ) : null}
-      {connection?.externalId ? (
+      {!manages ? null : connection?.externalId ? (
         <section className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm" data-channel-settings>
           <h2 className="font-medium">{m["channels.perChannel"]}</h2>
           <p className="text-ink-60">{m["channels.perChannelHelp"]}</p>

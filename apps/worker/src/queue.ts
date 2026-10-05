@@ -66,6 +66,8 @@ export interface QueueOptions {
   messaging?: { mail: MailProvider; sms: SmsProvider; platformDomain: string };
   /** The channel manager (Channex or the fake). */
   channelManager?: ChannelManager;
+  /** Where the channel manager announces booking revisions (registered for each connected property). */
+  channelWebhook?: { url: string; secret: string } | undefined;
 }
 
 export async function startQueue(pool: Pool, connectionString: string, options: QueueOptions = {}): Promise<PgBoss> {
@@ -258,7 +260,7 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
       for (const job of jobs) {
         const tenant = await findTenantById(pool, job.data.tenantId);
         if (!tenant) continue;
-        const r = await pullChannelBookings(pool, tenant, manager);
+        const r = await pullChannelBookings(pool, tenant, manager, undefined, options.channelWebhook);
         if (r.applied || r.problems) console.log(`[channels] ${tenant.slug}: ${r.applied} booking revision(s) applied, ${r.problems} for staff`);
       }
     });

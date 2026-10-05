@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { acceptsOnlineReservations, can, todayIn } from "@hoteloftware/domain";
-import { connectedProperties, listTenantUsers, nonPaymentStatus, processChannelFeed, pushChannels, tenantEnd, type Tenant } from "@hoteloftware/db";
+import { connectedProperties, ensureBookingWebhook, listTenantUsers, nonPaymentStatus, processChannelFeed, pushChannels, tenantEnd, type Tenant } from "@hoteloftware/db";
 import { notifyStaff } from "@hoteloftware/events";
 import type { ChannelManager } from "@hoteloftware/channels";
 import { timingSafeEqual } from "node:crypto";
@@ -47,18 +47,21 @@ async function acceptsReservationsNow(pool: Pool, tenantId: string): Promise<boo
  * revisions, apply them and acknowledge. Problems (refused, conflicting,
  * overbooked) go to the property's desk and Property Manager.
  */
-export async function pullChannelBookings(pool: Pool, tenant: Tenant, manager: ChannelManager, propertyIds?: string[]): Promise<{ applied: number; problems: number }> {
+export async function pullChannelBookings(pool: Pool, tenant: Tenant, manager: ChannelManager, propertyIds?: string[], webhook?: { url: string; secret: string }): Promise<{ applied: number; problems: number }> {
   const acceptsReservations = await acceptsReservationsNow(pool, tenant.id);
   let applied = 0;
   let problems = 0;
   for (const propertyId of propertyIds ?? (await connectedProperties(pool, tenant.schemaName))) {
+    // properties connected before booking webhooks existed get theirs now
+    if (webhook) await ensureBookingWebhook(pool, tenant.schemaName, propertyId, manager, webhook).catch((err) => console.error("[channels] webhook not registered", err));
     const r = await processChannelFeed(pool, tenant.schemaName, propertyId, manager, { acceptsReservations });
     applied += r.applied;
     problems += r.problems.length;
     if (r.problems.length) {
       const desk = (await listTenantUsers(pool, tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "manage_reservations", propertyId));
       for (const p of r.problems) {
-        await notifyStaff(pool, tenant, desk, { kind: "channels.booking_problem", title: p.outcome === "refused" ? "Channel booking refused" : "Channel booking needs attention", body: p.message, href: "/settings/channels", propertyId });
+        // to the reservation where there is one; the list of channel problems otherwise (open to the desk)
+        await notifyStaff(pool, tenant, desk, { kind: "channels.booking_problem", title: p.outcome === "refused" ? "Channel booking refused" : "Channel booking needs attention", body: p.message, href: p.reservationId ? `/reservations/${p.reservationId}` : "/settings/channels", propertyId });
       }
     }
   }
@@ -76,7 +79,9 @@ export function channelWebhookSource(manager: ChannelManager, secret: string): W
     },
     externalId: (_headers, body) => {
       const b = body as { event?: string; timestamp?: string; payload?: { booking_revision_id?: string; revision_id?: string; booking_id?: string } } | null;
-      const id = b?.payload?.booking_revision_id ?? b?.payload?.revision_id ?? b?.payload?.booking_id;
+      // a revision id is unique; a bare booking id is not (each change of the booking announces it again)
+      const revision = b?.payload?.booking_revision_id ?? b?.payload?.revision_id;
+      const id = revision ?? (b?.payload?.booking_id ? `${b.payload.booking_id}:${b.timestamp ?? Date.now()}` : null);
       return b?.event && id ? `${b.event}:${id}` : null;
     },
     externalRef: (body) => (body as { property_id?: string } | null)?.property_id ?? null,

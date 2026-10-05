@@ -50,10 +50,11 @@ describe("Channel bookings inbound", () => {
       channelCode: "4021778899",
       currency: "EUR",
       customer: { firstName: "Aiko", lastName: "Tanaka", email: "aiko@guest.booking.com", phone: "+81 3 1234 5678", country: "JP", language: "en", address: null, city: "Tokyo", postalCode: null },
-      rooms: [{ key: "r-1", roomTypeId: "x", ratePlanId: extPlan, arrival: from, departure: addDays(from, prices.length), adults: 2, childAges: [], nights: prices.map((p, i) => ({ date: addDays(from, i), price: p })), guestName: null }],
+      rooms: [{ key: "r-1", roomTypeId: "x", ratePlanId: extPlan, arrival: from, departure: addDays(from, prices.length), adults: 2, childAges: [], childrenWithoutAge: 0, includesVat: null, includesCityTax: null, nights: prices.map((p, i) => ({ date: addDays(from, i), price: p })), guestName: null }],
       notes: "Late arrival",
       collect: "channel",
-      virtualCard: { activationDate: addDays(from, 1), amount: 210 },
+      virtualCard: { activationDate: addDays(from, 1), expiryDate: null, amount: 210 },
+      cardToken: null,
       receivedAt: new Date(Date.UTC(2026, 9, 5, 10, n)).toISOString(),
       ...over,
     };
@@ -89,12 +90,12 @@ describe("Channel bookings inbound", () => {
     const r = await applyChannelRevision(pool, s(), propertyId, first);
     expect(r.outcome).toBe("applied");
     const { rows } = await pool.query(
-      `select b.source, b.channel_name, b.notes, b.channel_collect, to_char(b.virtual_card_from, 'YYYY-MM-DD') as vcc_from, b.virtual_card_amount, g.last_name, g.email, g.language, r.adults, r.created_by
+      `select b.source, b.channel_name, b.channel_notes, b.channel_collect, to_char(b.virtual_card_from, 'YYYY-MM-DD') as vcc_from, b.virtual_card_amount, g.last_name, g.email, g.language, r.adults, r.created_by
        from ${s()}.bookings b join ${s()}.guests g on g.id = b.booker_guest_id join ${s()}.reservations r on r.booking_id = b.id where b.id = $1`,
       [r.bookingId],
     );
     expect(rows[0]).toMatchObject({ source: "channel", channel_name: "Booking.com", channel_collect: "channel", vcc_from: addDays(today, 6), virtual_card_amount: "210.00", last_name: "Tanaka", email: "aiko@guest.booking.com", language: "en", adults: 2, created_by: "channel" });
-    expect(rows[0].notes).toContain("4021778899");
+    expect(rows[0].channel_notes).toContain("4021778899");
     expect(await nights("bk-1")).toEqual([100, 110]);
     expect((await applyChannelRevision(pool, s(), propertyId, first)).outcome).toBe("duplicate");
     expect((await pool.query(`select count(*)::int as n from ${s()}.bookings where source = 'channel'`)).rows[0].n).toBe(1);
@@ -145,11 +146,43 @@ describe("Channel bookings inbound", () => {
     expect((await applyChannelRevision(pool, s(), propertyId, rev({ bookingId: "bk-ct", channel: "Expedia", status: "modified", nights: [107.01, 107.01] }), { acceptsReservations: false })).outcome).toBe("applied");
   });
 
+  it("a shorter stay releases the nights it no longer needs from its room", async () => {
+    await applyChannelRevision(pool, s(), propertyId, rev({ bookingId: "bk-short", nights: [100, 100, 100, 100], from: 2 }));
+    const res = (await pool.query<{ id: string }>(`select r.id from ${s()}.reservations r join ${s()}.channel_bookings c on c.booking_id = r.booking_id where c.external_id = 'bk-short'`)).rows[0]!.id;
+    const room = (await pool.query<{ id: string }>(`select id from ${s()}.rooms where number = '101'`)).rows[0]!.id;
+    await pool.query(`insert into ${s()}.room_assignments (reservation_id, room_id, from_date, to_date) values ($1, $2, $3, $4)`, [res, room, addDays(today, 2), addDays(today, 6)]);
+    await applyChannelRevision(pool, s(), propertyId, rev({ bookingId: "bk-short", status: "modified", nights: [100, 100], from: 2 }));
+    const a = (await pool.query(`select to_char(from_date, 'YYYY-MM-DD') as f, to_char(to_date, 'YYYY-MM-DD') as t from ${s()}.room_assignments where reservation_id = $1`, [res])).rows;
+    expect(a).toEqual([{ f: addDays(today, 2), t: addDays(today, 4) }]);
+    // the change is logged like staff's
+    expect((await pool.query(`select count(*)::int as n from ${s()}.reservation_changes where reservation_id = $1 and action = 'edit' and user_id = 'channel'`, [res])).rows[0].n).toBe(1);
+  });
+
+  it("prices in another currency are refused; the website tool's whole price, City Tax included, is its payment", async () => {
+    expect((await applyChannelRevision(pool, s(), propertyId, rev({ bookingId: "bk-usd", currency: "USD" }))).outcome).toBe("refused");
+    await setChannelSetting(pool, s(), propertyId, { channel: "Tool+CT", pricesIncludeVat: true, pricesIncludeCityTax: true, sendConfirmation: false, paidViaTool: true }, pm.userId);
+    const r = await applyChannelRevision(pool, s(), propertyId, rev({ bookingId: "bk-tct", channel: "Tool+CT", collect: "property", virtualCard: null, nights: [107.01], from: 16 }));
+    const p = (await pool.query(`select p.amount from ${s()}.payments p join ${s()}.reservations r on r.id = p.reservation_id where r.booking_id = $1 and p.tender = 'website_tool'`, [r.bookingId])).rows;
+    expect(p).toEqual([{ amount: "107.01" }]);
+    // shorter now: the difference is for the tool to refund, listed for staff
+    const changed = await applyChannelRevision(pool, s(), propertyId, rev({ bookingId: "bk-tct", channel: "Tool+CT", status: "modified", collect: "property", virtualCard: null, nights: [100], from: 16 }));
+    expect(changed.outcome).toBe("conflict");
+    expect(changed.message).toMatch(/to be refunded through the tool/);
+  });
+
+  it("a revision the channel manager sent unreadable is listed and acknowledged", async () => {
+    ch.unreadable.push({ propertyId: extProperty, id: "rev-bad" });
+    const r = await processChannelFeed(pool, s(), propertyId, ch, { acceptsReservations: true });
+    expect(r.problems.map((p) => p.revisionId)).toContain("rev-bad");
+    expect(ch.acked.has("rev-bad")).toBe(true);
+  });
+
   it("the feed is applied oldest first and every revision acknowledged", async () => {
-    ch.revisions.push(rev({ bookingId: "bk-f", nights: [100], from: 18 }), rev({ bookingId: "bk-f", status: "modified", nights: [130], from: 18 }));
+    const pushed = [rev({ bookingId: "bk-f", nights: [100], from: 18 }), rev({ bookingId: "bk-f", status: "modified", nights: [130], from: 18 })];
+    ch.revisions.push(...pushed);
     const r = await processChannelFeed(pool, s(), propertyId, ch, { acceptsReservations: true });
     expect(r.applied).toBe(2);
-    expect(ch.acked.size).toBe(2);
+    expect(pushed.every((p) => ch.acked.has(p.id))).toBe(true);
     expect(await nights("bk-f")).toEqual([130]);
     expect((await processChannelFeed(pool, s(), propertyId, ch, { acceptsReservations: true })).applied).toBe(0);
   });

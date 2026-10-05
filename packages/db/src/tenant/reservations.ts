@@ -347,7 +347,11 @@ export interface ReservationDetail {
     /** A channel booking: the booking site or tool, who collects the money, the virtual card and when it can be charged (ticket 38). */
     channelName: string | null;
     channelCollect: "property" | "channel" | null;
-    virtualCard: { from: string | null; amount: number | null } | null;
+    virtualCard: { from: string | null; until: string | null; amount: number | null } | null;
+    /** A card the channel manager tokenised for us: brand and last digits. */
+    channelCard: { brand: string | null; last4: string | null } | null;
+    /** What the channel said: its booking number and remarks. */
+    channelNotes: string;
     walkIn: boolean;
     rateCode: string | null;
     /** The Company the Rate Code attaches. */
@@ -380,7 +384,8 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
       `select r.id, r.property_id, r.status, r.overbooked, r.late_arrival, r.waiting_for_room_since, r.cancelled_at, r.cancellation_fee, r.cancellation_fee_status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.adults, r.child_ages, r.created_at,
          t.id as rt_id, t.code as rt_code, t.name as rt_name, p.id as rp_id, p.code as rp_code, p.name as rp_name, p.meal_plan,
          g.id as g_id, g.first_name, g.last_name,
-         b.id as b_id, b.confirmation_number, b.booker_guest_id, b.booker_company_id, b.source, b.channel_name, b.channel_collect, to_char(b.virtual_card_from, 'YYYY-MM-DD') as virtual_card_from, b.virtual_card_amount, b.walk_in, b.rate_code, b.rate_code_company_id, rc.name as rate_code_company_name, b.notes,
+         b.id as b_id, b.confirmation_number, b.booker_guest_id, b.booker_company_id, b.source, b.channel_name, b.channel_collect, to_char(b.virtual_card_from, 'YYYY-MM-DD') as virtual_card_from, to_char(b.virtual_card_until, 'YYYY-MM-DD') as virtual_card_until, b.virtual_card_amount,
+         b.channel_card_token is not null as channel_card, b.channel_card_brand, b.channel_card_last4, b.channel_notes, b.walk_in, b.rate_code, b.rate_code_company_id, rc.name as rate_code_company_name, b.notes,
          coalesce(bc.name, trim(bg.first_name || ' ' || bg.last_name)) as booker_name,
          (select array_agg(x.id order by x.created_at, x.id) from reservations x where x.booking_id = b.id) as reservation_ids,
          (select count(*)::int from reservations x where x.booking_id = b.id and x.status = 'confirmed') as open_reservations
@@ -441,7 +446,9 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
         source: r.source,
         channelName: r.channel_name,
         channelCollect: r.channel_collect,
-        virtualCard: r.virtual_card_from || r.virtual_card_amount ? { from: r.virtual_card_from, amount: r.virtual_card_amount === null ? null : Number(r.virtual_card_amount) } : null,
+        virtualCard: r.virtual_card_from || r.virtual_card_amount ? { from: r.virtual_card_from, until: r.virtual_card_until, amount: r.virtual_card_amount === null ? null : Number(r.virtual_card_amount) } : null,
+        channelCard: r.channel_card ? { brand: r.channel_card_brand, last4: r.channel_card_last4 } : null,
+        channelNotes: r.channel_notes,
         walkIn: r.walk_in,
         rateCode: r.rate_code,
         rateCodeCompanyId: r.rate_code_company_id,

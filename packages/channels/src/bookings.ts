@@ -27,6 +27,11 @@ export interface ChannelRoom {
   departure: string;
   adults: number;
   childAges: number[];
+  /** Children the channel sent without an age: counted as adults, so the City Tax assumes they are taxable. */
+  childrenWithoutAge: number;
+  /** What the channel says its prices contain; null where it says nothing (the property's setting for the channel applies). */
+  includesVat: boolean | null;
+  includesCityTax: boolean | null;
   /** Price per night as the channel sent it. */
   nights: { date: string; price: number }[];
   guestName: { firstName: string; lastName: string } | null;
@@ -47,7 +52,13 @@ export interface ChannelBookingRevision {
   notes: string;
   /** Who takes the guest's money: the hotel, or the booking site (then perhaps with a virtual card). */
   collect: "property" | "channel";
-  virtualCard: { activationDate: string | null; amount: number | null } | null;
+  /** A booking site's virtual card: from when it can be charged, until when, how much. */
+  virtualCard: { activationDate: string | null; expiryDate: string | null; amount: number | null } | null;
+  /**
+   * A card the channel manager tokenised into the hotel's payment provider
+   * (Stripe Tokenization App): its token and last digits only, never the number.
+   */
+  cardToken: { token: string; brand: string | null; last4: string | null } | null;
   /** When the channel manager received it; later revisions of a booking have later times. */
   receivedAt: string;
 }
@@ -77,6 +88,11 @@ export function parseChannexRevision(raw: unknown): ChannelBookingRevision | nul
     if (!arrival || !departure || !roomTypeId || !ratePlanId) return null;
     const ages = Array.isArray(occupancy.ages) ? occupancy.ages.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < 18) : [];
     const children = num(occupancy.children) ?? 0;
+    const taxes = Array.isArray(x.taxes) ? (x.taxes as Record<string, unknown>[]) : [];
+    const inclusive = (kind: RegExp) => {
+      const t = taxes.find((t) => kind.test(String(t.type ?? t.name ?? "")));
+      return t && typeof t.is_inclusive === "boolean" ? t.is_inclusive : null;
+    };
     const guest = Array.isArray(x.guests) && x.guests[0] ? (x.guests[0] as Record<string, unknown>) : null;
     return {
       key: str(x.booking_room_id) ?? str(x.ota_unique_id) ?? String(i + 1),
@@ -84,9 +100,11 @@ export function parseChannexRevision(raw: unknown): ChannelBookingRevision | nul
       ratePlanId,
       arrival,
       departure,
-      adults: Math.max(1, num(occupancy.adults) ?? 1),
-      // ages unknown: counted as children of unknown age (the City Tax rule decides with null age)
-      childAges: ages.length ? ages : Array.from({ length: children }, () => 8),
+      adults: Math.max(1, num(occupancy.adults) ?? 1) + Math.max(0, children - ages.length),
+      childAges: ages,
+      childrenWithoutAge: Math.max(0, children - ages.length),
+      includesVat: inclusive(/vat|mwst|ust/i),
+      includesCityTax: inclusive(/city|tourist|ortstaxe|kurtaxe|übernachtung/i),
       nights: Object.entries(days)
         .map(([date, price]) => ({ date: date.slice(0, 10), price: num(price) ?? 0 }))
         .sort((p, q) => (p.date < q.date ? -1 : 1)),
@@ -119,7 +137,13 @@ export function parseChannexRevision(raw: unknown): ChannelBookingRevision | nul
     rooms: rooms.filter((x): x is ChannelRoom => x !== null),
     notes: str(a.notes) ?? "",
     collect: a.payment_collect === "ota" ? "channel" : "property",
-    virtualCard: virtual ? { activationDate: day(meta.virtual_card_effective_date) ?? day(guarantee.effective_date), amount: num(meta.virtual_card_current_balance) ?? num(guarantee.amount) } : null,
+    virtualCard: virtual
+      ? { activationDate: day(meta.virtual_card_effective_date) ?? day(guarantee.effective_date), expiryDate: day(meta.virtual_card_expiration_date) ?? day(guarantee.expiration_date), amount: num(meta.virtual_card_current_balance) ?? num(guarantee.amount) }
+      : null,
+    // only a token and the last digits; a full card number is never read
+    cardToken: str(guarantee.token)
+      ? { token: str(guarantee.token)!, brand: str(guarantee.card_type), last4: (str(guarantee.card_number) ?? "").replace(/\D/g, "").slice(-4) || null }
+      : null,
     receivedAt: str(a.inserted_at) ?? new Date(0).toISOString(),
   };
 }

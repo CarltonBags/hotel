@@ -94,8 +94,9 @@ export class ChannexManager implements ChannelManager {
     });
   }
 
-  async bookingFeed(propertyId: string): Promise<ChannelBookingRevision[]> {
+  async bookingFeed(propertyId: string): Promise<{ revisions: ChannelBookingRevision[]; unreadable: { id: string; reason: string }[] }> {
     const out: ChannelBookingRevision[] = [];
+    const unreadable: { id: string; reason: string }[] = [];
     // the feed pages through unacknowledged revisions, oldest first
     for (let page = 1; page <= 20; page++) {
       const r = await this.call<{ data?: unknown[]; meta?: { total?: number; limit?: number } }>("GET", `/booking_revisions/feed?filter[property_id]=${encodeURIComponent(propertyId)}&pagination[page]=${page}&pagination[limit]=50`);
@@ -103,11 +104,15 @@ export class ChannexManager implements ChannelManager {
       for (const d of data) {
         const rev = parseChannexRevision(d);
         if (rev) out.push(rev);
-        else console.error("[channex] a booking revision we cannot read", JSON.stringify(d).slice(0, 500));
+        else {
+          const id = (d as { id?: unknown } | null)?.id;
+          console.error("[channex] a booking revision we cannot read", JSON.stringify(d).slice(0, 500));
+          if (typeof id === "string") unreadable.push({ id, reason: "The channel manager sent a booking we cannot read (no rooms, dates or rate plan)" });
+        }
       }
       if (data.length < 50) break;
     }
-    return out;
+    return { revisions: out, unreadable };
   }
 
   async ackRevision(revisionId: string): Promise<void> {

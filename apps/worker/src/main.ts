@@ -34,6 +34,8 @@ const provider = paymentProvider();
 const mail = mailProvider();
 const sms = smsProvider();
 const channels = channelManager();
+const channelWebhookSecret = process.env.CHANNEX_WEBHOOK_SECRET ?? (process.env.NODE_ENV === "production" ? "" : (process.env.WEBHOOK_TEST_SECRET ?? ""));
+const workerUrl = process.env.WORKER_PUBLIC_URL?.replace(/\/$/, "");
 const platformDomain = process.env.MAIL_FROM_DOMAIN ?? process.env.MAILGUN_DOMAIN ?? "mail.hoteloftware.test";
 const boss = await startQueue(pool, directUrl, {
   tenantCheckCron: process.env.TENANT_CHECK_CRON ?? null,
@@ -42,6 +44,7 @@ const boss = await startQueue(pool, directUrl, {
   messaging: { mail, sms, platformDomain },
   // Channex with CHANNEX_API_KEY (staging unless CHANNEX_URL says otherwise), else the in-memory fake
   channelManager: channels,
+  channelWebhook: workerUrl && channelWebhookSecret ? { url: `${workerUrl}/webhooks/${channels.name}`, secret: channelWebhookSecret } : undefined,
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });
 const allowOrigin = process.env.WORKER_ALLOW_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "*");
@@ -54,8 +57,8 @@ const server = await startWorkerServer({
   queue,
   allowOrigin,
   testWebhookSecret: process.env.WEBHOOK_TEST_SECRET,
-  // the channel manager's webhooks carry our secret (CHANNEX_WEBHOOK_SECRET, set when the webhook is registered)
-  sources: [paymentWebhookSource(provider), mailWebhookSource(mail), channelWebhookSource(channels, process.env.CHANNEX_WEBHOOK_SECRET ?? process.env.WEBHOOK_TEST_SECRET ?? "")],
+  // the channel manager's webhooks carry our secret (CHANNEX_WEBHOOK_SECRET, set when the webhook is registered); the test secret only outside production
+  sources: [paymentWebhookSource(provider), mailWebhookSource(mail), channelWebhookSource(channels, channelWebhookSecret)],
 });
 console.log(`worker up on :${server.port} (health /health, events /events, webhooks /webhooks/<source>)`);
 

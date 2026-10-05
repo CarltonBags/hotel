@@ -66,8 +66,8 @@ export interface ChannelManager {
   updateRatePlan(id: string, r: ChannelRatePlan): Promise<void>;
   pushAvailability(values: AvailabilityValue[]): Promise<void>;
   pushRestrictions(values: RestrictionValue[]): Promise<void>;
-  /** Booking revisions not yet acknowledged for a property (ticket 38). */
-  bookingFeed(propertyId: string): Promise<ChannelBookingRevision[]>;
+  /** Booking revisions not yet acknowledged for a property (ticket 38); those it could not read come back by id to be listed and acknowledged. */
+  bookingFeed(propertyId: string): Promise<{ revisions: ChannelBookingRevision[]; unreadable: { id: string; reason: string }[] }>;
   /** Acknowledge a revision once it is applied (or set aside for staff). */
   ackRevision(revisionId: string): Promise<void>;
   /** Ask the channel manager to tell us of new booking revisions of a property (a trigger only: we pull the feed). */

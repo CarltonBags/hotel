@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ChannelError, ChannexManager } from "../src";
+import { parseChannexRevision } from "../src/bookings";
 
 describe("Channex", () => {
   it("pushes restrictions with per-occupancy rates and the API key", async () => {
@@ -25,7 +26,6 @@ describe("Channex", () => {
   });
 });
 
-import { parseChannexRevision } from "../src/bookings";
 
 describe("Channex booking revisions", () => {
   it("reads a revision: rooms with nightly prices, the guest, who collects, the virtual card", () => {
@@ -57,9 +57,14 @@ describe("Channex booking revisions", () => {
       channelCode: "4021778899",
       customer: { firstName: "Aiko", lastName: "Tanaka", email: "aiko@guest.booking.com", country: "JP", language: "en" },
       collect: "channel",
-      virtualCard: { activationDate: "2026-11-02", amount: 210 },
-      rooms: [{ key: "r-1", roomTypeId: "rt-1", ratePlanId: "rp-1", adults: 2, childAges: [6], nights: [{ date: "2026-11-01", price: 100 }, { date: "2026-11-02", price: 110 }] }],
+      virtualCard: { activationDate: "2026-11-02", expiryDate: null, amount: 210 },
+      cardToken: null,
+      rooms: [{ key: "r-1", roomTypeId: "rt-1", ratePlanId: "rp-1", adults: 2, childAges: [6], childrenWithoutAge: 0, nights: [{ date: "2026-11-01", price: 100 }, { date: "2026-11-02", price: 110 }] }],
     });
+    // children without an age count as adults (taxable); a card comes as a token and last digits only
+    const noAges = parseChannexRevision({ id: "r3", attributes: { booking_id: "b", property_id: "p", status: "new", rooms: [{ room_type_id: "t", rate_plan_id: "r", checkin_date: "2026-11-01", checkout_date: "2026-11-02", occupancy: { adults: 2, children: 1 }, days: {}, taxes: [{ type: "city_tax", is_inclusive: true }] }], guarantee: { token: "pm_123", card_type: "visa", card_number: "411111******1111" } } });
+    expect(noAges?.rooms[0]).toMatchObject({ adults: 3, childAges: [], childrenWithoutAge: 1, includesCityTax: true, includesVat: null });
+    expect(noAges?.cardToken).toEqual({ token: "pm_123", brand: "visa", last4: "1111" });
     // a cancellation may come without rooms; something without ids is not a revision
     expect(parseChannexRevision({ id: "rev-2", attributes: { booking_id: "bk-1", property_id: "prop-1", status: "cancelled" } })?.status).toBe("cancelled");
     expect(parseChannexRevision({ id: "x", attributes: { status: "new" } })).toBeNull();

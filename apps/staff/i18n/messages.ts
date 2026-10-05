@@ -1339,6 +1339,8 @@ const catalog = {
   "res.source.channel": { en: "Channel", de: "Kanal" },
   "res.channelCollects": { en: "the booking site collects", de: "Portal kassiert" },
   "res.virtualCard": { en: "virtual card at booking site, from {from}, {amount}", de: "virtuelle Karte des Portals, ab {from}, {amount}" },
+  "res.virtualCardUntil": { en: "until {until}", de: "bis {until}" },
+  "res.channelCard": { en: "card stored at the channel manager: {card}", de: "Karte beim Channel Manager hinterlegt: {card}" },
   "res.walkIn": { en: "Walk-in", de: "Walk-in" },
   "res.notes": { en: "Notes for the booking", de: "Notizen zur Buchung" },
   "res.needGuests": { en: "Every room needs a Primary Guest.", de: "Jedes Zimmer braucht einen Hauptgast." },

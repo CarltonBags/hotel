@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { connectChannels, enqueueFullPushOf, resolveChannelProblem, setChannelSetting, setGoogleChannel } from "@hoteloftware/db";
 import { channelManager } from "@hoteloftware/channels";
 import { authorize } from "@/lib/authorize";
+import { publishNotification } from "@hoteloftware/events";
+import { env } from "@/lib/env";
 import { pool } from "@/lib/db";
 import { field, flag, formAction, type FormState } from "@/lib/form";
 
@@ -40,6 +42,7 @@ export async function channelSettingAction(_prev: FormState, formData: FormData)
   return formAction(async () => {
     const propertyId = field(formData, "propertyId");
     const { tenant, session } = await authorize("manage_property_settings", propertyId);
+    if (session.support) throw new Error("How a channel's prices are read is the customer's setting, not support's");
     await setChannelSetting(
       pool(),
       tenant.schemaName,
@@ -54,9 +57,14 @@ export async function channelSettingAction(_prev: FormState, formData: FormData)
 export async function googleAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const propertyId = field(formData, "propertyId");
-    const { tenant } = await authorize("manage_property_settings", propertyId);
-    await setGoogleChannel(pool(), tenant.schemaName, propertyId, flag(formData, "google"));
+    const { tenant, session } = await authorize("manage_property_settings", propertyId);
+    if (session.support) throw new Error("Google's links are the customer's decision, not support's");
+    const on = flag(formData, "google");
+    const changed = await setGoogleChannel(pool(), tenant.schemaName, propertyId, on);
+    // our support switches it at the channel manager
+    if (changed) await askSupportForGoogle(tenant, propertyId, on);
     revalidatePath("/settings/channels");
+    return { ok: true, message: on ? "Requested: our support switches Google on at the channel manager within a working day." : "Requested: Google is switched off at the channel manager." };
   });
 }
 
@@ -68,4 +76,11 @@ export async function resolveProblemAction(_prev: FormState, formData: FormData)
     await resolveChannelProblem(pool(), tenant.schemaName, propertyId, field(formData, "revisionId"), session.user.id);
     revalidatePath("/settings/channels");
   });
+}
+
+/** Support sees the request in their own tenant's notifications. */
+async function askSupportForGoogle(tenant: { id: string; slug: string }, propertyId: string, on: boolean): Promise<void> {
+  const platform = (await pool().query<{ id: string }>("select id from control.tenants where slug = $1", [env.platformSlug])).rows[0];
+  if (!platform) return;
+  await publishNotification(pool(), { tenantId: platform.id, userId: null, kind: "support.google_channel", title: `Google free booking links ${on ? "on" : "off"}: ${tenant.slug}`, body: `Property ${propertyId}` }).catch((err) => console.error("support not told", err));
 }
