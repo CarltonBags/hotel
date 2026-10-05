@@ -124,6 +124,17 @@ export interface StayCityTax {
  * is the room part net of VAT, plus the Services the rule marks; persons are
  * the adults and children with the exemptions set on the reservation.
  */
+/**
+ * The City Tax of one night of a stay at a gross room price, for splitting a
+ * channel price that contains it (ticket 38); null without a City Tax Rule.
+ */
+export async function cityTaxOfNight(tx: PoolClient, propertyId: string, input: { bookedOn: string; adults: number; childAges: number[] }): Promise<((date: string, roomGross: number, vatPercent: number) => number) | null> {
+  const rule = await ruleIn(tx, propertyId);
+  if (!rule) return null;
+  const persons = [...Array.from({ length: input.adults }, () => null), ...input.childAges].map((age) => ({ age, exemption: null }));
+  return (date, roomGross, vatPercent) => cityTax(rule, { bookedOn: input.bookedOn, nights: [{ date, base: splitGross(roomGross, vatPercent).net }], persons })[0]?.tax ?? 0;
+}
+
 export async function cityTaxOfStay(tx: PoolClient, reservationId: string, propertyId: string, lines: StayLine[]): Promise<StayCityTax | null> {
   const rule = await ruleIn(tx, propertyId);
   if (!rule) return null;

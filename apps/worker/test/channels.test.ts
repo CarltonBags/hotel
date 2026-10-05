@@ -3,7 +3,8 @@ import { Pool } from "pg";
 import { connectChannels, createLegalEntity, createProperty, createRoomType, createRooms, migrateControl, provisionTenant, setPropertyRoles, type Tenant } from "@hoteloftware/db";
 import { controlMigrations, tenantMigrations } from "@hoteloftware/db/migrations";
 import { ChannelError, FakeChannelManager } from "@hoteloftware/channels";
-import { pushTenantChannels } from "../src/channels";
+import { channelWebhookSource, pullChannelBookings, pushTenantChannels } from "../src/channels";
+import { receiveWebhook } from "../src/webhooks";
 
 /** Seam: a failing push tells Revenue and the Property Manager once per streak, not the desk. */
 describe("channel push", () => {
@@ -39,5 +40,26 @@ describe("channel push", () => {
     const notes = (await pool.query("select user_id from control.notifications where kind = 'channels.failing'")).rows;
     expect(notes).toEqual([{ user_id: "u_rev" }]);
     expect((await pushTenantChannels(pool, alpha, ch)).sent).toBeGreaterThan(0);
+  });
+
+  it("a booking webhook with our secret is taken and finds the tenant; a refused channel booking is told to the desk", async () => {
+    const source = channelWebhookSource(ch, "s3cret");
+    const sent: object[] = [];
+    const queue = { send: async (_n: string, d: object) => (sent.push(d), "job") };
+    const ext = [...ch.properties.keys()][0]!;
+    const body = JSON.stringify({ event: "booking_new", property_id: ext, payload: { booking_revision_id: "rev-9" } });
+    expect((await receiveWebhook(pool, queue, source, { headers: {}, rawBody: body })).status).toBe(401);
+    expect((await receiveWebhook(pool, queue, source, { headers: { "x-hoteloftware-secret": "s3cret" }, rawBody: body })).status).toBe(202);
+    expect(sent).toEqual([expect.objectContaining({ tenantId: alpha.id, source: ch.name })]);
+    ch.revisions.push({
+      id: "rev-9", bookingId: "bk-9", propertyId: ext, status: "new", channel: "Booking.com", channelCode: "99", currency: "EUR",
+      customer: { firstName: "A", lastName: "B", email: null, phone: null, country: null, language: null, address: null, city: null, postalCode: null },
+      rooms: [{ key: "1", roomTypeId: "x", ratePlanId: "not-ours", arrival: "2026-12-01", departure: "2026-12-02", adults: 1, childAges: [], nights: [{ date: "2026-12-01", price: 80 }], guestName: null }],
+      notes: "", collect: "property", virtualCard: null, receivedAt: "2026-10-05T10:00:00.000Z",
+    });
+    expect(await pullChannelBookings(pool, alpha, ch)).toEqual({ applied: 0, problems: 1 });
+    expect(ch.acked.has("rev-9")).toBe(true);
+    const notes = (await pool.query("select user_id, title from control.notifications where kind = 'channels.booking_problem'")).rows;
+    expect(notes).toEqual([{ user_id: "u_fd", title: "Channel booking refused" }]);
   });
 });

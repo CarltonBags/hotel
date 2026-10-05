@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ChannelBookingRevision } from "./bookings";
 import { ChannelError, type AvailabilityValue, type ChannelManager, type ChannelProperty, type ChannelRatePlan, type ChannelRoomType, type RestrictionValue } from "./provider";
 
 /** In-memory channel manager for tests and development without a Channex key: keeps what it was told. */
@@ -55,5 +56,19 @@ export class FakeChannelManager implements ChannelManager {
     let found: RestrictionValue | undefined;
     for (const c of this.calls) if (c.kind === "restrictions") for (const v of c.values) if (v.ratePlanId === ratePlanId && v.dateFrom <= date && v.dateTo >= date) found = v;
     return found;
+  }
+
+  /** Revisions waiting in the feed; tests and development put them here. */
+  readonly revisions: ChannelBookingRevision[] = [];
+  readonly acked = new Set<string>();
+  readonly webhooks: { propertyId: string; url: string }[] = [];
+  async bookingFeed(propertyId: string): Promise<ChannelBookingRevision[]> {
+    return this.revisions.filter((r) => r.propertyId === propertyId && !this.acked.has(r.id));
+  }
+  async ackRevision(revisionId: string): Promise<void> {
+    this.acked.add(revisionId);
+  }
+  async registerBookingWebhook(propertyId: string, url: string): Promise<void> {
+    this.webhooks.push({ propertyId, url });
   }
 }

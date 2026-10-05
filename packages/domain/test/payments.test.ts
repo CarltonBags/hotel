@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { TENDERS, captureAmount, folioBalance, holdExpiry, holdIncrementAllowed, holdWarningAt, refundCheck, refundableAmount } from "../src/index";
+import { TENDERS, DESK_TENDERS, captureAmount, folioBalance, holdExpiry, holdIncrementAllowed, holdWarningAt, refundCheck, refundableAmount } from "../src/index";
 
 /** Seams: balance after payments; what may still be refunded and who may; Card Hold validity and limits (payments research, ticket 27). */
 describe("payments", () => {
-  it("knows the v1 desk tenders", () => {
-    expect(TENDERS).toEqual(["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect", "cash"]);
+  it("knows the v1 tenders; the website tool's is recorded, not taken at the desk", () => {
+    expect(TENDERS).toEqual(["card_terminal", "card_online", "bank_transfer", "on_account", "ota_virtual_card", "ota_collect", "cash", "website_tool"]);
+    expect(DESK_TENDERS).not.toContain("website_tool");
   });
 
   it("balance is gross Charges less succeeded payments; refunds count back", () => {

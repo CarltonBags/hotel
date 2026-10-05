@@ -3,6 +3,7 @@ import { FakeChannelManager } from "./fake";
 import type { ChannelManager } from "./provider";
 
 export * from "./provider";
+export { parseChannexRevision, type ChannelBookingRevision, type ChannelGuest, type ChannelRoom } from "./bookings";
 export { ChannexManager } from "./channex";
 export { FakeChannelManager } from "./fake";
 

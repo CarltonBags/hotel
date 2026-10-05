@@ -128,6 +128,9 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         </p>
         <p>
           {m["res.source"]}: {m[`res.source.${r.booking.source}`]}
+          {r.booking.channelName ? ` · ${r.booking.channelName}` : ""}
+          {r.booking.channelCollect === "channel" ? ` · ${m["res.channelCollects"]}` : ""}
+          {r.booking.virtualCard ? ` · ${fill(m["res.virtualCard"], { from: r.booking.virtualCard.from ? date(r.booking.virtualCard.from) : "?", amount: r.booking.virtualCard.amount === null ? "?" : money(r.booking.virtualCard.amount) })}` : ""}
           {r.booking.walkIn ? ` · ${m["res.walkIn"]}` : ""}
           {r.booking.rateCode ? ` · ${m["rates.rateCode"]} ${r.booking.rateCode}${r.booking.rateCodeCompanyName ? ` (${r.booking.rateCodeCompanyName})` : ""}` : ""}
         </p>

@@ -25,6 +25,8 @@ export interface ChannelConnection {
   failingSince: Date | null;
   lastError: string | null;
   closedAt: Date | null;
+  /** Google's free booking links switched on (ticket 38). */
+  google: boolean;
 }
 
 type OutboxKind = "availability" | "restrictions";
@@ -38,9 +40,9 @@ const LEASE_MINUTES = 5;
 const CLAIM_LIMIT = 5000;
 
 async function connectionIn(tx: PoolClient, propertyId: string): Promise<ChannelConnection | null> {
-  const { rows } = await tx.query("select provider, external_id, connected_at, full_push_at, failing_since, last_error, closed_at from channel_connections where property_id = $1", [propertyId]);
+  const { rows } = await tx.query("select provider, external_id, connected_at, full_push_at, failing_since, last_error, closed_at, google from channel_connections where property_id = $1", [propertyId]);
   const r = rows[0];
-  return r ? { provider: r.provider, externalId: r.external_id, connectedAt: r.connected_at, fullPushAt: r.full_push_at, failingSince: r.failing_since, lastError: r.last_error, closedAt: r.closed_at } : null;
+  return r ? { provider: r.provider, externalId: r.external_id, connectedAt: r.connected_at, fullPushAt: r.full_push_at, failingSince: r.failing_since, lastError: r.last_error, closedAt: r.closed_at, google: r.google } : null;
 }
 
 export async function channelConnection(pool: Pool, schema: string, propertyId: string): Promise<ChannelConnection | null> {
@@ -68,7 +70,13 @@ async function releaseLease(pool: Pool, schema: string, propertyId: string): Pro
  * at the channel manager and everything is pushed once. A failed attempt is
  * cleared, so trying again starts over.
  */
-export async function connectChannels(pool: Pool, schema: string, input: { tenantId: string; propertyId: string; email: string }, manager: ChannelManager, userId: string): Promise<void> {
+export async function connectChannels(
+  pool: Pool,
+  schema: string,
+  input: { tenantId: string; propertyId: string; email: string; webhook?: { url: string; secret: string } | undefined },
+  manager: ChannelManager,
+  userId: string,
+): Promise<void> {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email)) throw new Error("An email address for the channel manager is needed");
   const property = await withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query<{ name: string; currency: string; time_zone: string }>("select name, currency, time_zone from properties where id = $1", [input.propertyId]);
@@ -87,6 +95,8 @@ export async function connectChannels(pool: Pool, schema: string, input: { tenan
     await withTenant(pool, schema, (tx) => tx.query("update channel_connections set external_id = $2 where property_id = $1", [input.propertyId, externalId]));
     // the channel manager's property id finds the tenant for its webhooks (ticket 38)
     await mapProviderAccount(pool, manager.name, externalId, input.tenantId, input.propertyId);
+    // new channel bookings are announced to our webhook (ticket 38); the five-minute pull catches any lost
+    if (input.webhook) await manager.registerBookingWebhook(externalId, input.webhook.url, { "x-hoteloftware-secret": input.webhook.secret });
     await syncMappings(pool, schema, input.propertyId, externalId, manager);
     await withTenant(pool, schema, (tx) => enqueueFullPush(tx, input.propertyId));
   } catch (err) {

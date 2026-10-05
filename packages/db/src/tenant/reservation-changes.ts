@@ -343,12 +343,13 @@ export async function previewCancellation(pool: Pool, schema: string, id: string
   return withTenant(pool, schema, async (tx) => feeFor(tx, await loadForRead(tx, id), now));
 }
 
-async function cancelIn(tx: PoolClient, r: ResRow, userId: string, now: Date): Promise<number> {
+async function cancelIn(tx: PoolClient, r: ResRow, userId: string, now: Date, options: { noFee?: boolean } = {}): Promise<number> {
   if (r.status !== "confirmed") throw new Error(r.status === "cancelled" ? "The reservation is already cancelled" : "Only a confirmed reservation can be cancelled");
   // Charges posted ahead of arrival must be voided (or moved) first, so a cancelled stay leaves none open
   const open = await tx.query("select 1 from charges where reservation_id = $1 and voided_at is null limit 1", [r.id]);
   if (open.rows.length) throw new Error("The reservation has open Charges; void them before cancelling");
-  const fee = await feeFor(tx, r, now);
+  // a booking site's cancellation: its own policy and money, no fee of ours
+  const fee = options.noFee ? { amount: 0, deadline: null } : await feeFor(tx, r, now);
   await tx.query(
     "update reservations set status = 'cancelled', cancelled_at = $2, cancelled_by = $3, cancellation_fee = $4, cancellation_fee_status = $5 where id = $1",
     [r.id, now, userId, fee.amount > 0 ? fee.amount : null, fee.amount > 0 ? "open" : null],
@@ -357,6 +358,11 @@ async function cancelIn(tx: PoolClient, r: ResRow, userId: string, now: Date): P
   await tx.query("delete from room_assignments where reservation_id = $1", [r.id]);
   await logChange(tx, r.id, userId, "cancel", { status: r.status, rooms: segs }, { status: "cancelled", fee: fee.amount, deadline: fee.deadline });
   return fee.amount;
+}
+
+/** A cancellation from a booking site (ticket 38): no fee of ours; the caller holds the property lock. */
+export async function cancelForChannelIn(tx: PoolClient, reservationId: string, userId: string, now = new Date()): Promise<void> {
+  await cancelIn(tx, await loadForChange(tx, reservationId), userId, now, { noFee: true });
 }
 
 /** Cancel one reservation; the fee (if any) waits for staff to confirm or waive. */

@@ -600,8 +600,12 @@ export const bookings = pgTable(
     notes: text("notes").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdBy: text("created_by").notNull(),
+    channelCollect: text("channel_collect"),
+    virtualCardFrom: date("virtual_card_from"),
+    virtualCardAmount: numeric("virtual_card_amount", { precision: 12, scale: 2 }),
   },
   (t) => [
+    check("bookings_channel_collect_check", sql`${t.channelCollect} in ('property', 'channel')`),
     unique("bookings_confirmation_number_key").on(t.confirmationNumber),
     index("bookings_property_idx").on(t.propertyId, t.createdAt.desc()),
     check("bookings_booker_check", sql`(${t.bookerGuestId} is null) <> (${t.bookerCompanyId} is null)`),
@@ -642,6 +646,7 @@ export const reservations = pgTable(
     statsExcludedReason: text("stats_excluded_reason"),
     statsExcludedBy: text("stats_excluded_by"),
     statsExcludedAt: timestamp("stats_excluded_at", { withTimezone: true }),
+    channelRoomKey: text("channel_room_key"),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -893,7 +898,7 @@ export const payments = pgTable(
     index("payments_folio_idx").on(t.folioId),
     index("payments_reservation_idx").on(t.reservationId),
     index("payments_intent_idx").on(t.providerIntentId).where(sql`${t.providerIntentId} is not null`),
-    check("payments_tender_check", sql`${t.tender} in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect', 'cash')`),
+    check("payments_tender_check", sql`${t.tender} in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect', 'cash', 'website_tool')`),
     check("payments_amount_check", sql`${t.amount} <> 0`),
     check("payments_status_check", sql`${t.status} in ('pending', 'succeeded', 'failed', 'refund_pending_balance')`),
     check("payments_refund_check", sql`(${t.refundOf} is null) = (${t.amount} > 0)`),
@@ -1847,7 +1852,59 @@ export const channelConnections = pgTable("channel_connections", {
   alertedAt: timestamp("alerted_at", { withTimezone: true }),
   busyUntil: timestamp("busy_until", { withTimezone: true }),
   closedAt: timestamp("closed_at", { withTimezone: true }),
+  google: boolean("google").notNull().default(false),
 });
+
+export const channelSettings = pgTable(
+  "channel_settings",
+  {
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    channel: text("channel").notNull(),
+    pricesIncludeVat: boolean("prices_include_vat").notNull().default(true),
+    pricesIncludeCityTax: boolean("prices_include_city_tax").notNull().default(false),
+    sendConfirmation: boolean("send_confirmation").notNull().default(true),
+    paidViaTool: boolean("paid_via_tool").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text("updated_by"),
+  },
+  (t) => [primaryKey({ columns: [t.propertyId, t.channel] })],
+);
+
+export const channelBookings = pgTable(
+  "channel_bookings",
+  {
+    externalId: text("external_id").primaryKey(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    bookingId: uuid("booking_id").notNull().references(() => bookings.id),
+    channel: text("channel").notNull(),
+    channelCode: text("channel_code").notNull(),
+    lastRevisionId: text("last_revision_id").notNull(),
+    lastRevisionAt: timestamp("last_revision_at", { withTimezone: true }).notNull(),
+    status: text("status").notNull(),
+  },
+  (t) => [check("channel_bookings_status_check", sql`${t.status} in ('new', 'modified', 'cancelled')`), index("channel_bookings_booking_idx").on(t.bookingId)],
+);
+
+export const channelBookingRevisions = pgTable(
+  "channel_booking_revisions",
+  {
+    id: text("id").primaryKey(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    externalBookingId: text("external_booking_id").notNull(),
+    status: text("status").notNull(),
+    channel: text("channel").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
+    outcome: text("outcome").notNull(),
+    message: text("message").notNull().default(""),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+  },
+  (t) => [
+    check("channel_booking_revisions_outcome_check", sql`${t.outcome} in ('applied', 'stale', 'refused', 'conflict')`),
+    index("channel_booking_revisions_open_idx").on(t.propertyId, t.appliedAt.desc()).where(sql`${t.outcome} in ('refused', 'conflict') and ${t.resolvedAt} is null`),
+  ],
+);
 
 export const channelMappings = pgTable(
   "channel_mappings",
@@ -1978,4 +2035,7 @@ export const tenantSchema = {
   channelConnections,
   channelMappings,
   ariOutbox,
+  channelSettings,
+  channelBookings,
+  channelBookingRevisions,
 };

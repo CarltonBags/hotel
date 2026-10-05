@@ -5,6 +5,7 @@ import { paymentProvider } from "@hoteloftware/payments";
 import { mailProvider, smsProvider } from "@hoteloftware/messaging";
 import { channelManager } from "@hoteloftware/channels";
 import { mailProcessor, mailWebhookSource, MAIL_SOURCE } from "./messaging";
+import { channelBookingProcessor, channelWebhookSource } from "./channels";
 import { paymentProcessor, paymentWebhookSource } from "./payments";
 import { queueHealthy, startQueue } from "./queue";
 import { startWorkerServer } from "./server";
@@ -32,14 +33,15 @@ const provider = paymentProvider();
 // Mailgun EU with MAILGUN_API_KEY and seven.io with SEVEN_API_KEY, else in-memory fakes (development only)
 const mail = mailProvider();
 const sms = smsProvider();
+const channels = channelManager();
 const platformDomain = process.env.MAIL_FROM_DOMAIN ?? process.env.MAILGUN_DOMAIN ?? "mail.hoteloftware.test";
 const boss = await startQueue(pool, directUrl, {
   tenantCheckCron: process.env.TENANT_CHECK_CRON ?? null,
-  providerProcessors: { [provider.name]: paymentProcessor(provider), [MAIL_SOURCE]: mailProcessor(mail) },
+  providerProcessors: { [provider.name]: paymentProcessor(provider), [MAIL_SOURCE]: mailProcessor(mail), [channels.name]: channelBookingProcessor(channels) },
   paymentProvider: provider,
   messaging: { mail, sms, platformDomain },
   // Channex with CHANNEX_API_KEY (staging unless CHANNEX_URL says otherwise), else the in-memory fake
-  channelManager: channelManager(),
+  channelManager: channels,
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });
 const allowOrigin = process.env.WORKER_ALLOW_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "*");
@@ -52,7 +54,8 @@ const server = await startWorkerServer({
   queue,
   allowOrigin,
   testWebhookSecret: process.env.WEBHOOK_TEST_SECRET,
-  sources: [paymentWebhookSource(provider), mailWebhookSource(mail)],
+  // the channel manager's webhooks carry our secret (CHANNEX_WEBHOOK_SECRET, set when the webhook is registered)
+  sources: [paymentWebhookSource(provider), mailWebhookSource(mail), channelWebhookSource(channels, process.env.CHANNEX_WEBHOOK_SECRET ?? process.env.WEBHOOK_TEST_SECRET ?? "")],
 });
 console.log(`worker up on :${server.port} (health /health, events /events, webhooks /webhooks/<source>)`);
 
