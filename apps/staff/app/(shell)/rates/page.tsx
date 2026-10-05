@@ -1,5 +1,5 @@
-import { addDays, can } from "@hoteloftware/domain";
-import { PRICE_HORIZON_DAYS, listBelowFloor, listEventMarkers, listPriceEnds, listRateChanges, listTenantUsers } from "@hoteloftware/db";
+import { addDays, can, channelStatusText } from "@hoteloftware/domain";
+import { PRICE_HORIZON_DAYS, channelStatus, listBelowFloor, listEventMarkers, listPriceEnds, listRateChanges, listTenantUsers } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
@@ -35,16 +35,25 @@ export default async function RatesPage({ searchParams }: { searchParams: Promis
   const today = property.businessDate;
   const requested = (await searchParams).from;
   const from = requested && isCalendarDate(requested) ? requested : addDays(today, -3);
-  const [grid, below, ends, changes, users, markers] = await Promise.all([
+  const [grid, below, ends, changes, users, markers, channels] = await Promise.all([
     loadGrid(schema, property, from, VISIBLE_DAYS),
     listBelowFloor(pool(), schema, property.id, today),
     listPriceEnds(pool(), schema, property.id, addDays(today, PRICE_HORIZON_DAYS)),
     listRateChanges(pool(), schema, property.id, { limit: 300 }),
     listTenantUsers(pool(), tenant.id),
     listEventMarkers(pool(), schema, property.id, { from: from < today ? from : today, to: addDays(today, PRICE_HORIZON_DAYS) }),
+    channelStatus(pool(), schema, property.id),
   ]);
+  // what waits for the channel manager (ticket 37)
+  const channelText = channelStatusText(channels, shell.language);
   const names = new Map(users.map((u) => [u.id, u.name]));
   return (
+    <>
+    {channelText ? (
+      <p className={`px-6 pt-3 text-xs ${channels.failing ? "text-red-700" : "text-ink-60"}`} data-channel-status={channels.failing ? "failing" : channels.pending ? "sending" : "up_to_date"} title={channels.lastError ?? undefined}>
+        {channelText}
+      </p>
+    ) : null}
     <RatesGrid
       property={{ id: property.id, name: property.name, currency: property.currency, country: property.country, timeZone: property.timeZone }}
       today={today}
@@ -61,5 +70,6 @@ export default async function RatesPage({ searchParams }: { searchParams: Promis
       language={shell.language}
       m={m}
     />
+    </>
   );
 }

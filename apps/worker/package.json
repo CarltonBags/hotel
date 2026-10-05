@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@hoteloftware/channels": "workspace:*",
     "@hoteloftware/db": "workspace:*",
     "@hoteloftware/domain": "workspace:*",
     "@hoteloftware/events": "workspace:*",

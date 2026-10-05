@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@hoteloftware/domain", "@hoteloftware/db", "@hoteloftware/auth", "@hoteloftware/events", "@hoteloftware/payments", "@hoteloftware/invoices", "@hoteloftware/messaging", "@hoteloftware/storage", "@hoteloftware/ui"],
+  transpilePackages: ["@hoteloftware/domain", "@hoteloftware/db", "@hoteloftware/auth", "@hoteloftware/events", "@hoteloftware/payments", "@hoteloftware/invoices", "@hoteloftware/messaging", "@hoteloftware/storage", "@hoteloftware/channels", "@hoteloftware/ui"],
   serverExternalPackages: ["pg", "stripe"],
   agentRules: false,
   // City Tax evidence (up to 5 MB) and Maintenance photos (up to 10 MB) are uploaded through server actions

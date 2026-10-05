@@ -487,3 +487,4 @@ export {
 } from "./tenant/messages";
 export { FileRefused, MAX_FILE_BYTES, deleteExpiredFiles, findFile, storeFile, type FileKind, type StoredFile } from "./tenant/files";
 export { fixIssue, listIssues, reportIssue, seesIssues, takeIssue, visibleFile, type FixedIssue, type IssueFix, type IssueReport, type IssueRow } from "./tenant/maintenance";
+export { channelConnection, channelMappings, channelStatus, connectChannels, connectedProperties, enqueueFullPushOf, enqueueFullPushes, pushChannels, syncChannelMappings, type ChannelConnection, type PushResult } from "./tenant/channels";

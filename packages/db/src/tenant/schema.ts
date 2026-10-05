@@ -1835,6 +1835,53 @@ export const smsOutbox = pgTable(
   (t) => [index("sms_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
 );
 
+export const channelConnections = pgTable("channel_connections", {
+  propertyId: uuid("property_id").primaryKey().references(() => properties.id),
+  provider: text("provider").notNull(),
+  externalId: text("external_id").notNull(),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  connectedBy: text("connected_by").notNull(),
+  fullPushAt: timestamp("full_push_at", { withTimezone: true }),
+  failingSince: timestamp("failing_since", { withTimezone: true }),
+  lastError: text("last_error"),
+  alertedAt: timestamp("alerted_at", { withTimezone: true }),
+});
+
+export const channelMappings = pgTable(
+  "channel_mappings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    roomTypeId: uuid("room_type_id").notNull().references(() => roomTypes.id),
+    ratePlanId: uuid("rate_plan_id").references(() => ratePlans.id),
+    externalId: text("external_id").notNull(),
+    rooms: integer("rooms"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("channel_mappings_key").on(t.roomTypeId, sql`coalesce(${t.ratePlanId}, '00000000-0000-0000-0000-000000000000'::uuid)`)],
+);
+
+export const ariOutbox = pgTable(
+  "ari_outbox",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    kind: text("kind").notNull(),
+    roomTypeId: uuid("room_type_id").notNull().references(() => roomTypes.id),
+    ratePlanId: uuid("rate_plan_id").references(() => ratePlans.id, { onDelete: "cascade" }),
+    dateFrom: date("date_from").notNull(),
+    dateTo: date("date_to").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("ari_outbox_kind_check", sql`${t.kind} in ('availability', 'restrictions')`),
+    check("ari_outbox_dates_check", sql`${t.dateTo} >= ${t.dateFrom}`),
+    index("ari_outbox_unsent_idx").on(t.propertyId, t.id).where(sql`${t.sentAt} is null`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1923,4 +1970,7 @@ export const tenantSchema = {
   guestMessages,
   messageEvents,
   smsOutbox,
+  channelConnections,
+  channelMappings,
+  ariOutbox,
 };
