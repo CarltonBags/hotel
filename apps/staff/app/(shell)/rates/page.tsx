@@ -1,10 +1,11 @@
 import { addDays, can, channelStatusText } from "@hoteloftware/domain";
-import { PRICE_HORIZON_DAYS, channelStatus, listBelowFloor, listEventMarkers, listPriceEnds, listRateChanges, listTenantUsers } from "@hoteloftware/db";
+import { PRICE_HORIZON_DAYS, channelOverview, listBelowFloor, listEventMarkers, listPriceEnds, listRateChanges, listTenantUsers } from "@hoteloftware/db";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { loadGrid } from "./grid-data";
 import { RatesGrid } from "./rates-grid";
+import { ChannelStatusLine } from "./channel-status";
 
 function isCalendarDate(s: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
@@ -42,17 +43,16 @@ export default async function RatesPage({ searchParams }: { searchParams: Promis
     listRateChanges(pool(), schema, property.id, { limit: 300 }),
     listTenantUsers(pool(), tenant.id),
     listEventMarkers(pool(), schema, property.id, { from: from < today ? from : today, to: addDays(today, PRICE_HORIZON_DAYS) }),
-    channelStatus(pool(), schema, property.id),
+    channelOverview(pool(), schema, property.id),
   ]);
   // what waits for the channel manager (ticket 37)
-  const channelText = channelStatusText(channels, shell.language);
+  const lastSent = channels.status.lastSentAt ? new Intl.DateTimeFormat(shell.language === "de" ? "de-DE" : "en-GB", { timeStyle: "short", timeZone: property.timeZone }).format(channels.status.lastSentAt) : null;
+  const channelText = channelStatusText(channels.status, shell.language, lastSent);
   const names = new Map(users.map((u) => [u.id, u.name]));
   return (
     <>
     {channelText ? (
-      <p className={`px-6 pt-3 text-xs ${channels.failing ? "text-red-700" : "text-ink-60"}`} data-channel-status={channels.failing ? "failing" : channels.pending ? "sending" : "up_to_date"} title={channels.lastError ?? undefined}>
-        {channelText}
-      </p>
+      <ChannelStatusLine propertyId={property.id} language={shell.language} timeZone={property.timeZone} initial={{ text: channelText, failing: channels.status.failing, pending: channels.status.pending, error: channels.status.lastError }} />
     ) : null}
     <RatesGrid
       property={{ id: property.id, name: property.name, currency: property.currency, country: property.country, timeZone: property.timeZone }}

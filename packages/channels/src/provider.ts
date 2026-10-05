@@ -60,6 +60,8 @@ export interface ChannelManager {
   createRoomType(r: ChannelRoomType): Promise<string>;
   updateRoomType(id: string, r: ChannelRoomType): Promise<void>;
   createRatePlan(r: ChannelRatePlan): Promise<string>;
+  /** The occupancy options follow the room type's adult count. */
+  updateRatePlan(id: string, r: ChannelRatePlan): Promise<void>;
   pushAvailability(values: AvailabilityValue[]): Promise<void>;
   pushRestrictions(values: RestrictionValue[]): Promise<void>;
 }
@@ -75,5 +77,5 @@ export class ChannelError extends Error {
   }
 }
 
-/** Channex's limit: 10 availability and 10 restriction calls per minute per property; we send one of each per run. */
-export const CALLS_PER_MINUTE = 10;
+/** Values per call: a full push of a large property stays well under Channex's 10 MB request limit. */
+export const VALUES_PER_CALL = 2000;

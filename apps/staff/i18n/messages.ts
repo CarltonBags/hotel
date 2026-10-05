@@ -797,6 +797,8 @@ const catalog = {
   "channels.connectHelp": { en: "Connecting creates the property, its room types and one rate plan per rate plan and room type sold on channels at Channex, then sends everything.", de: "Beim Verbinden werden Haus, Zimmertypen und je Preisplan und Zimmertyp ein Preisplan bei Channex angelegt; danach geht alles hinüber." },
   "channels.connect": { en: "Connect to Channex", de: "Mit Channex verbinden" },
   "channels.email": { en: "Contact email for the channel manager", de: "Kontakt-E-Mail für den Channel Manager" },
+  "channels.refused": { en: "change(s) refused by the channel manager in the last day; the nightly full push sends them again.", de: "Änderung(en) am letzten Tag vom Channel Manager abgelehnt; die nächtliche Vollübertragung sendet sie erneut." },
+  "channels.closed": { en: "Sales are closed at the channels: the subscription is unpaid from day 60, or the contract ended.", de: "Verkauf über die Kanäle geschlossen: Abo ab Tag 60 unbezahlt oder Vertrag beendet." },
   "channels.notConnected": { en: "This property is not connected to a channel manager.", de: "Dieses Haus ist mit keinem Channel Manager verbunden." },
   "module.lost_found": { en: "Lost and found", de: "Fundsachen" },
   "module.reports": { en: "Reports", de: "Berichte" },

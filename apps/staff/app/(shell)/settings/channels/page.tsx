@@ -1,4 +1,4 @@
-import { channelConnection, channelMappings, channelStatus } from "@hoteloftware/db";
+import { channelOverview } from "@hoteloftware/db";
 import { can, channelStatusText } from "@hoteloftware/domain";
 import { ActionForm, Field } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
@@ -20,7 +20,7 @@ export default async function ChannelsPage() {
     );
   }
   const { tenant, actor } = await requireAllowed("manage_rates", property.id);
-  const [connection, status, mappings] = await Promise.all([channelConnection(pool(), tenant.schemaName, property.id), channelStatus(pool(), tenant.schemaName, property.id), channelMappings(pool(), tenant.schemaName, property.id)]);
+  const { connection, status, mappings } = await channelOverview(pool(), tenant.schemaName, property.id);
   const when = (d: Date) => new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: property.timeZone }).format(d);
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
   return (
@@ -31,7 +31,7 @@ export default async function ChannelsPage() {
         </h1>
         <p className="text-sm text-ink-60">{m["channels.help"]}</p>
       </div>
-      {connection ? (
+      {connection?.externalId ? (
         <section className="grid gap-2 rounded-2xl bg-surface-2 p-5 text-sm" data-connection>
           <p>
             {m["channels.connectedSince"]} {when(connection.connectedAt)} · Channex {connection.externalId}
@@ -40,6 +40,8 @@ export default async function ChannelsPage() {
             {channelStatusText(status, language)}
             {status.failing && status.lastError ? ` · ${status.lastError}` : ""}
           </p>
+          {status.refused ? <p className="text-red-700" data-refused>{status.refused} {m["channels.refused"]}</p> : null}
+          {connection.closedAt ? <p className="text-red-700" data-closed>{m["channels.closed"]}</p> : null}
           {connection.fullPushAt ? <p className="text-ink-60">{m["channels.fullPush"]} {when(connection.fullPushAt)}</p> : null}
           <h2 className="mt-2 font-medium">{m["channels.mapped"]}</h2>
           <ul className="grid gap-1" data-mappings>

@@ -59,12 +59,13 @@ export interface ChannelStatus {
   failing: boolean;
 }
 
-/** The rates grid header: what is waiting for the channels; null when the property has no channel connection. */
-export function channelStatusText(s: ChannelStatus, language: "de" | "en"): string | null {
+/** The rates grid header: what is waiting for the channels (with the time of the last send when up to date); null when the property has no channel connection. */
+export function channelStatusText(s: ChannelStatus, language: "de" | "en", lastSent: string | null = null): string | null {
   if (!s.connected) return null;
   const de = language === "de";
   const changes = (n: number) => (de ? `${n} ${n === 1 ? "Änderung" : "Änderungen"}` : `${n} ${n === 1 ? "change" : "changes"}`);
   if (s.failing) return de ? `Kanäle: Übertragung gestört, ${changes(s.pending)} warten` : `Channels: sending fails, ${changes(s.pending)} waiting`;
   if (s.pending) return de ? `Sende ${changes(s.pending)}` : `Sending ${changes(s.pending)}`;
-  return de ? "Kanäle aktuell" : "Channels up to date";
+  const at = lastSent ? ` · ${lastSent}` : "";
+  return de ? `Kanäle aktuell${at}` : `Channels up to date${at}`;
 }

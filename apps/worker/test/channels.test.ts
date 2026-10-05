@@ -24,7 +24,7 @@ describe("channel push", () => {
     await pool.query(`insert into control."user" (id, tenant_id, name, email) values ('u_rev', $1, 'Rita Revenue', 'rita@alpha.example'), ('u_fd', $1, 'Fred Desk', 'fred@alpha.example')`, [alpha.id]);
     await setPropertyRoles(pool, { tenantId: alpha.id, userId: "u_rev", propertyId: berlin, roles: ["revenue"] });
     await setPropertyRoles(pool, { tenantId: alpha.id, userId: "u_fd", propertyId: berlin, roles: ["front_desk"] });
-    await connectChannels(pool, alpha.schemaName, berlin, ch, { email: "pm@alpha.example" }, "u_rev");
+    await connectChannels(pool, alpha.schemaName, { tenantId: alpha.id, propertyId: berlin, email: "pm@alpha.example" }, ch, "u_rev");
   });
 
   afterAll(async () => {

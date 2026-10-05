@@ -29,6 +29,9 @@ export class FakeChannelManager implements ChannelManager {
     this.ratePlans.set(id, r);
     return id;
   }
+  async updateRatePlan(id: string, r: ChannelRatePlan): Promise<void> {
+    this.ratePlans.set(id, r);
+  }
   private fail() {
     const f = this.failNext;
     this.failNext = null;

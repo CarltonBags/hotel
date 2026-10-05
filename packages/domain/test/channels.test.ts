@@ -32,6 +32,7 @@ describe("channel pushes", () => {
     expect(channelStatusText({ connected: true, pending: 3, failing: false }, "en")).toBe("Sending 3 changes");
     expect(channelStatusText({ connected: true, pending: 1, failing: false }, "en")).toBe("Sending 1 change");
     expect(channelStatusText({ connected: true, pending: 0, failing: false }, "en")).toBe("Channels up to date");
+    expect(channelStatusText({ connected: true, pending: 0, failing: false }, "en", "14:32")).toBe("Channels up to date · 14:32");
     expect(channelStatusText({ connected: true, pending: 2, failing: true }, "de")).toBe("Kanäle: Übertragung gestört, 2 Änderungen warten");
     expect(channelStatusText({ connected: false, pending: 0, failing: false }, "en")).toBeNull();
   });

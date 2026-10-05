@@ -1,4 +1,4 @@
-import { ChannelError, type AvailabilityValue, type ChannelManager, type ChannelProperty, type ChannelRatePlan, type ChannelRoomType, type RestrictionValue } from "./provider";
+import { ChannelError, VALUES_PER_CALL, type AvailabilityValue, type ChannelManager, type ChannelProperty, type ChannelRatePlan, type ChannelRoomType, type RestrictionValue } from "./provider";
 
 /** Channex.io over its REST API (staging or production), authenticated with the platform's API key. */
 export class ChannexManager implements ChannelManager {
@@ -48,26 +48,41 @@ export class ChannexManager implements ChannelManager {
     await this.call("PUT", `/room_types/${encodeURIComponent(id)}`, { room_type: this.roomType(r) });
   }
 
-  createRatePlan(r: ChannelRatePlan): Promise<string> {
+  private ratePlan(r: ChannelRatePlan) {
     // priced per person: one option per adult count, the primary one at the plan's base occupancy
     const options = Array.from({ length: r.maxAdults }, (_, i) => ({ occupancy: i + 1, is_primary: i + 1 === Math.min(r.primaryOccupancy, r.maxAdults), rate: 0 }));
-    return this.create("/rate_plans", "rate_plan", { property_id: r.propertyId, room_type_id: r.roomTypeId, title: r.title, currency: r.currency, sell_mode: "per_person", rate_mode: "manual", options });
+    return { property_id: r.propertyId, room_type_id: r.roomTypeId, title: r.title, currency: r.currency, sell_mode: "per_person", rate_mode: "manual", options };
+  }
+
+  createRatePlan(r: ChannelRatePlan): Promise<string> {
+    return this.create("/rate_plans", "rate_plan", this.ratePlan(r));
+  }
+
+  async updateRatePlan(id: string, r: ChannelRatePlan): Promise<void> {
+    await this.call("PUT", `/rate_plans/${encodeURIComponent(id)}`, { rate_plan: this.ratePlan(r) });
   }
 
   async pushAvailability(values: AvailabilityValue[]): Promise<void> {
-    if (!values.length) return;
+    for (let i = 0; i < values.length; i += VALUES_PER_CALL) await this.sendAvailability(values.slice(i, i + VALUES_PER_CALL));
+  }
+
+  private async sendAvailability(values: AvailabilityValue[]): Promise<void> {
     await this.call("POST", "/availability", { values: values.map((v) => ({ property_id: v.propertyId, room_type_id: v.roomTypeId, date_from: v.dateFrom, date_to: v.dateTo, availability: v.availability })) });
   }
 
   async pushRestrictions(values: RestrictionValue[]): Promise<void> {
-    if (!values.length) return;
+    for (let i = 0; i < values.length; i += VALUES_PER_CALL) await this.sendRestrictions(values.slice(i, i + VALUES_PER_CALL));
+  }
+
+  private async sendRestrictions(values: RestrictionValue[]): Promise<void> {
     await this.call("POST", "/restrictions", {
       values: values.map((v) => ({
         property_id: v.propertyId,
         rate_plan_id: v.ratePlanId,
         date_from: v.dateFrom,
         date_to: v.dateTo,
-        rates: v.rates.map((r) => ({ occupancy: r.occupancy, rate: r.rate.toFixed(2) })),
+        // a closed date carries no prices
+        ...(v.rates.length ? { rates: v.rates.map((r) => ({ occupancy: r.occupancy, rate: r.rate.toFixed(2) })) } : {}),
         stop_sell: v.stopSell,
         closed_to_arrival: v.closedToArrival,
         closed_to_departure: v.closedToDeparture,

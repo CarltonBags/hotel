@@ -5,8 +5,14 @@ form, then Channex engineers reproduce the actions live in the PMS's own screens
 scripts and one call per date are disqualifying. Source: docs.channex.io "PMS Certification Tests", summarised in
 `docs/research/channel-manager-selection.md` [C8].
 
-Status: **built and tested against the in-memory channel manager; the staging run is pending** (owner: create the
-Channex staging account and put `CHANNEX_API_KEY` in `.env`; then run the cases below and fill in the result column).
+Status: **built and tested against the in-memory channel manager; the staging run is pending.** Owner: create the
+Channex staging account and put `CHANNEX_API_KEY` (and `CHANNEX_URL=https://staging.channex.io/api/v1`) in `.env`.
+
+Run `pnpm --filter @hoteloftware/worker channex:staging <tenant slug> <property id> <contact email>`: it connects the
+property and makes each ARI change below the way the app makes it, pushes, and prints calls, values and Channex's
+answer as a table to paste here. Then match the rows to Channex's numbered test list (14 cases; the booking cases
+come with ticket 38), fill in the result column, submit the form, and repeat the changes by hand in the app during
+the live screenshare.
 
 | Requirement | How Hoteloftware meets it | Automated check | Staging result |
 |---|---|---|---|

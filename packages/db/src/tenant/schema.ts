@@ -1838,13 +1838,15 @@ export const smsOutbox = pgTable(
 export const channelConnections = pgTable("channel_connections", {
   propertyId: uuid("property_id").primaryKey().references(() => properties.id),
   provider: text("provider").notNull(),
-  externalId: text("external_id").notNull(),
+  externalId: text("external_id"),
   connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
   connectedBy: text("connected_by").notNull(),
   fullPushAt: timestamp("full_push_at", { withTimezone: true }),
   failingSince: timestamp("failing_since", { withTimezone: true }),
   lastError: text("last_error"),
   alertedAt: timestamp("alerted_at", { withTimezone: true }),
+  busyUntil: timestamp("busy_until", { withTimezone: true }),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
 });
 
 export const channelMappings = pgTable(
@@ -1856,6 +1858,7 @@ export const channelMappings = pgTable(
     ratePlanId: uuid("rate_plan_id").references(() => ratePlans.id),
     externalId: text("external_id").notNull(),
     rooms: integer("rooms"),
+    maxAdults: integer("max_adults"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("channel_mappings_key").on(t.roomTypeId, sql`coalesce(${t.ratePlanId}, '00000000-0000-0000-0000-000000000000'::uuid)`)],
@@ -1874,11 +1877,13 @@ export const ariOutbox = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    refusedAt: timestamp("refused_at", { withTimezone: true }),
+    error: text("error"),
   },
   (t) => [
     check("ari_outbox_kind_check", sql`${t.kind} in ('availability', 'restrictions')`),
     check("ari_outbox_dates_check", sql`${t.dateTo} >= ${t.dateFrom}`),
-    index("ari_outbox_unsent_idx").on(t.propertyId, t.id).where(sql`${t.sentAt} is null`),
+    index("ari_outbox_unsent_idx").on(t.propertyId, t.id).where(sql`${t.sentAt} is null and ${t.refusedAt} is null`),
   ],
 );
 

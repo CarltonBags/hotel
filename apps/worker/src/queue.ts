@@ -4,7 +4,7 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { connectedProperties, enqueueFullPushes, claimDueReminders, deleteEndedTenants, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
+import { connectedProperties, enqueueFullPushes, pruneChannelOutbox, claimDueReminders, deleteEndedTenants, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -150,6 +150,7 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     for (const t of all) {
       const n = await deleteExpiredRegistrations(pool, t.schema_name, today).catch((err) => (console.error(`[maintenance] registrations of ${t.slug}`, err), 0));
       if (n) console.log(`[maintenance] ${t.slug}: deleted ${n} registration record(s)`);
+      await pruneChannelOutbox(pool, t.schema_name).catch((err) => console.error(`[maintenance] channel outbox of ${t.slug}`, err));
       // stored files past their retention day (ticket 36)
       const f = await deleteExpiredFiles(pool, t.schema_name, fileStore(), today).catch((err) => (console.error(`[maintenance] files of ${t.slug}`, err), 0));
       if (f) console.log(`[maintenance] ${t.slug}: deleted ${f} file(s) past retention`);
@@ -237,7 +238,7 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
       // only tenants with a connected property
       const { rows } = await pool.query<{ id: string; schema_name: string }>("select id, schema_name from control.tenants order by slug");
       for (const t of rows) {
-        const connected = await connectedProperties(pool, t.schema_name).catch(() => [] as string[]);
+        const connected = await connectedProperties(pool, t.schema_name).catch((err) => (console.error(`[channels] ${t.id}`, err), [] as string[]));
         if (connected.length) await boss.send(QUEUES.channels, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `channels.push:${t.id}`, singletonSeconds: 50 });
       }
     });

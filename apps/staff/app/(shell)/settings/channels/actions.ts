@@ -13,7 +13,7 @@ export async function connectChannelsAction(_prev: FormState, formData: FormData
     const propertyId = field(formData, "propertyId");
     const { tenant, session } = await authorize("manage_property_settings", propertyId);
     if (session.support) throw new Error("Connecting channels is the customer's decision, not support's");
-    await connectChannels(pool(), tenant.schemaName, propertyId, channelManager(), { email: field(formData, "email") }, session.user.id);
+    await connectChannels(pool(), tenant.schemaName, { tenantId: tenant.id, propertyId, email: field(formData, "email") }, channelManager(), session.user.id);
     revalidatePath("/settings/channels");
     return { ok: true, message: "Connected. Rates and availability go out within a minute." };
   });
