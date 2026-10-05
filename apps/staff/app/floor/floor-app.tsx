@@ -258,7 +258,7 @@ export function FloorApp(props: {
         </div>
       ))}
 
-      {day.issues ? <Issues issues={day.issues} t={t} names={props.names} waiting={waitingIds} onStep={(issue, step) => void record({ ...newOp(), kind: "issue", issueId: issue.id, step, note: "" })} /> : null}
+      {day.issues ? <Issues issues={day.issues} t={t} names={props.names} waiting={waitingIds} onStep={(issue, step, fix) => void record({ ...newOp(), kind: "issue", issueId: issue.id, step, note: fix?.note ?? "", ...(fix?.photo ? { photo: fix.photo } : {}), endBlock: fix?.endBlock === true })} /> : null}
 
       {!day.published && !day.tasks.length && !day.issues ? <p className="text-ink-60">{t("notPublished")}</p> : null}
       {day.published && !day.tasks.length && !day.issues ? <p className="text-ink-60">{t("noRooms")}</p> : null}
@@ -330,9 +330,13 @@ export function FloorApp(props: {
 
 type T = (k: FloorKey, v?: Record<string, string | number>) => string;
 
-function Issues({ issues, t, names, waiting, onStep }: { issues: FloorIssue[]; t: T; names: Record<string, string>; waiting: Set<string>; onStep: (issue: FloorIssue, step: "take" | "fixed") => void }) {
+type Fix = { note: string; photo?: string; endBlock: boolean };
+
+function Issues({ issues, t, names, waiting, onStep }: { issues: FloorIssue[]; t: T; names: Record<string, string>; waiting: Set<string>; onStep: (issue: FloorIssue, step: "take" | "fixed", fix?: Fix) => void }) {
   const [gone, setGone] = useState<Set<string>>(new Set());
   const [taken, setTaken] = useState<Set<string>>(new Set());
+  // the issue being marked fixed: note, photo, and with a Room Block in force whether to end it
+  const [fixing, setFixing] = useState<{ id: string; note: string; photo?: string; endBlock: boolean | null } | null>(null);
   const list = issues.filter((i) => !gone.has(i.id));
   if (!list.length) return <p className="text-ink-60">{t("noProblems")}</p>;
   const badge: Record<Urgency, string> = { now: "bg-danger/15 text-danger", today: "bg-warning/20", later: "bg-ink-10" };
@@ -352,16 +356,49 @@ function Issues({ issues, t, names, waiting, onStep }: { issues: FloorIssue[]; t
           </p>
           <p className="text-xs text-ink-60">{t("reportedBy", { name: names[i.reportedBy] ?? "?" })}</p>
           {i.hasPhoto ? <img src={`/floor-photo/issue/${i.id}`} alt="" className="max-h-48 rounded-xl object-cover" /> : null}
+          {fixing?.id === i.id ? (
+            <div className="grid gap-2" data-fixing>
+              <textarea value={fixing.note} onChange={(e) => setFixing({ ...fixing, note: e.target.value })} placeholder={t("note")} rows={2} className="rounded-xl border border-ink-10 bg-canvas p-2" />
+              <label className="flex h-11 items-center justify-center gap-2 rounded-full bg-ink-10">
+                <Camera className="size-5" /> {t("photo")}
+                <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => e.target.files?.[0] && void shrink(e.target.files[0]).then((photo) => setFixing((f) => (f ? { ...f, photo } : f)))} />
+              </label>
+              {fixing.photo ? <img src={fixing.photo} alt="" className="max-h-40 rounded-xl object-cover" /> : null}
+              {i.block ? (
+                <div className="grid gap-2" data-block-choice>
+                  {([true, false] as const).map((end) => (
+                    <button key={String(end)} type="button" onClick={() => setFixing({ ...fixing, endBlock: end })} className={`h-11 rounded-full border ${fixing.endBlock === end ? "border-accent bg-accent/10" : "border-ink-10"}`}>
+                      {t(end ? "endBlock" : "keepBlock")}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setFixing(null)} className="h-12 rounded-full bg-ink-10">
+                  {t("cancel")}
+                </button>
+                <button
+                  type="button"
+                  disabled={!!i.block && fixing.endBlock === null}
+                  onClick={() => (onStep(i, "fixed", { note: fixing.note, ...(fixing.photo ? { photo: fixing.photo } : {}), endBlock: fixing.endBlock === true }), setGone((s) => new Set(s).add(i.id)), setFixing(null))}
+                  className="h-12 rounded-full bg-[#1fa971] font-medium text-white disabled:opacity-40"
+                >
+                  {t("fixed")}
+                </button>
+              </div>
+            </div>
+          ) : (
           <div className="grid grid-cols-2 gap-2">
             {i.status === "open" && !taken.has(i.id) ? (
               <button type="button" onClick={() => (onStep(i, "take"), setTaken((s) => new Set(s).add(i.id)))} className="h-12 rounded-full bg-accent font-medium text-white">
                 {t("take")}
               </button>
             ) : null}
-            <button type="button" onClick={() => (onStep(i, "fixed"), setGone((s) => new Set(s).add(i.id)))} className={`h-12 rounded-full bg-[#1fa971] font-medium text-white ${i.status === "open" && !taken.has(i.id) ? "" : "col-span-2"}`}>
+            <button type="button" onClick={() => setFixing({ id: i.id, note: "", endBlock: null })} className={`h-12 rounded-full bg-[#1fa971] font-medium text-white ${i.status === "open" && !taken.has(i.id) ? "" : "col-span-2"}`}>
               {t("fixed")}
             </button>
           </div>
+          )}
         </article>
       ))}
     </section>

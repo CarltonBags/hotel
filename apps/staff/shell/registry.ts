@@ -87,7 +87,7 @@ export const MODULES: ModuleDef[] = [
   { ...soon("guest_inbox", "guests", "module.guest_inbox", "MessageCircle", "#0aa5a5", 42), requiresModule: "guest_portal" },
   { id: "housekeeping", group: "housekeeping", label: "module.housekeeping", icon: "Sparkles", hue: "#e0900b", href: "/rooms", requiresProperty: "view_rooms" },
   { id: "housekeeping_tasks", group: "housekeeping", label: "module.housekeeping_tasks", icon: "ClipboardCheck", hue: "#e0900b", href: "/housekeeping", requiresProperty: "assign_housekeeping" },
-  soon("maintenance", "housekeeping", "module.maintenance", "Wrench", "#6b7280", 36),
+  { id: "maintenance", group: "housekeeping", label: "module.maintenance", icon: "Wrench", hue: "#6b7280", href: "/maintenance", requiresProperty: "report_maintenance_issues" },
   { id: "lost_found", group: "housekeeping", label: "module.lost_found", icon: "PackageSearch", hue: "#b98900", href: "/lost-found", requiresProperty: "view_lost_items" },
   { id: "budget", group: "reports", label: "module.budget", icon: "Landmark", hue: "#1a9d5a", href: "/budget", requiresProperty: "view_budget" },
   { id: "report_builder", group: "reports", label: "module.report_builder", icon: "Grid3x3", hue: "#4f5bd5", href: "/reports/builder", requiresProperty: "use_report_builder" },

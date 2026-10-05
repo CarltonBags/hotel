@@ -232,6 +232,7 @@ export {
   PROBLEM_PICKS,
   URGENCIES,
   floorSections,
+  ISSUE_PHOTO_DAYS,
   isFloorLanguage,
   isRtl,
   parsePhoneOp,

@@ -365,6 +365,7 @@ export {
   type FloorNote,
   type FloorTask,
   type LostItem,
+  phoneChangeSeen,
   type PhoneChangeOutcome,
 } from "./tenant/floor";
 export {
@@ -483,3 +484,5 @@ export {
   type MessagingSettings,
   type MessagingSettingsInput,
 } from "./tenant/messages";
+export { MAX_FILE_BYTES, deleteExpiredFiles, findFile, storeFile, type FileKind, type StoredFile } from "./tenant/files";
+export { fixIssue, listIssues, reportIssue, seesIssues, takeIssue, visibleFile, type FixedIssue, type IssueReport, type IssueRow } from "./tenant/maintenance";

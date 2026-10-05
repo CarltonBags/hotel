@@ -18,6 +18,11 @@ import { assignRoom } from "../src/tenant/reservation-changes";
 import { checkIn } from "../src/tenant/folios";
 import { checkOut } from "../src/tenant/invoices";
 import { listRoomStates } from "../src/tenant/room-state";
+import { storeFile } from "../src/tenant/files";
+import { FakeScanner, LocalFileStore } from "@hoteloftware/storage";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { generateHousekeepingTasks, housekeepingBoard, moveHousekeepingTask, publishHousekeeping, setHousekeepingRules, setRoomTypeHousekeeping } from "../src/tenant/housekeeping";
 import { addHousekeepingNote, applyPhoneChange, floorDay, floorPhoto, listLostItems } from "../src/tenant/floor";
@@ -176,14 +181,19 @@ describe("phone view", () => {
 
   it("a problem report reaches Maintenance's queue by urgency; a found item is kept with its photo", async () => {
     await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "problem", roomId: room("103").id, pick: "electrical", urgency: "later", note: "Lamp" }, asAnna);
-    await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "problem", roomId: room("101").id, pick: "plumbing", urgency: "now", note: "Drain", photo: PHOTO }, asAnna);
+    // the photo is stored by the caller (file storage) and arrives as a file id
+    const files = { store: new LocalFileStore(await mkdtemp(join(tmpdir(), "hs-floor-"))), scanner: new FakeScanner() };
+    const photoFileId = await storeFile(pool, s(), files, { tenantId: tenant.id, kind: "issue_photo", bytes: Buffer.from(PHOTO.split(",")[1]!, "base64"), contentType: "image/png", propertyId: berlin, userId: anna });
+    await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "problem", roomId: room("101").id, pick: "plumbing", urgency: "now", note: "Drain", photoFileId }, asAnna);
     const queue = (await floorDay(pool, s(), berlin, asMax())).issues!;
     expect(queue.map((i) => [i.roomNumber, i.urgency, i.hasPhoto])).toEqual([["101", "now", true], ["103", "later", false]]);
     expect((await floorDay(pool, s(), berlin, asAnna)).issues).toBeNull();
-    expect(await floorPhoto(pool, s(), "issue", queue[0]!.id, asMax())).toMatchObject({ type: "image/png" });
+    expect(await floorPhoto(pool, s(), "issue", queue[0]!.id, asMax())).toEqual({ fileId: photoFileId });
     expect(await floorPhoto(pool, s(), "issue", queue[0]!.id, asAnna)).toBeNull();
     await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "issue", issueId: queue[0]!.id, step: "take", note: "" }, asMax());
-    await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "issue", issueId: queue[0]!.id, step: "fixed", note: "Cleared" }, asMax());
+    const fixed = await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "issue", issueId: queue[0]!.id, step: "fixed", note: "Cleared" }, asMax());
+    // the reporter is named, to be told
+    expect(fixed.fixed).toMatchObject({ reportedBy: anna, what: "Room 101 · plumbing" });
     expect((await floorDay(pool, s(), berlin, asMax())).issues!.map((i) => i.roomNumber)).toEqual(["103"]);
     // a housekeeper cannot work the queue
     expect((await applyPhoneChange(pool, s(), berlin, { id: randomUUID(), at, kind: "issue", issueId: queue[1]!.id, step: "fixed", note: "" }, asAnna)).outcome).toBe("refused");

@@ -1300,6 +1300,26 @@ export const housekeepingNotes = pgTable(
   ],
 );
 
+export const storedFiles = pgTable(
+  "stored_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind").notNull(),
+    key: text("key").notNull().unique(),
+    contentType: text("content_type").notNull(),
+    size: integer("size").notNull(),
+    propertyId: uuid("property_id").references(() => properties.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+    deleteAfter: date("delete_after"),
+  },
+  (t) => [
+    check("stored_files_kind_check", sql`${t.kind} in ('issue_photo', 'fix_photo')`),
+    check("stored_files_size_check", sql`${t.size} > 0`),
+    index("stored_files_retention_idx").on(t.deleteAfter).where(sql`${t.deleteAfter} is not null`),
+  ],
+);
+
 export const maintenanceIssues = pgTable(
   "maintenance_issues",
   {
@@ -1320,8 +1340,13 @@ export const maintenanceIssues = pgTable(
     fixedAt: timestamp("fixed_at", { withTimezone: true }),
     fixedBy: text("fixed_by"),
     fixNote: text("fix_note").notNull().default(""),
+    photoFileId: uuid("photo_file_id").references(() => storedFiles.id, { onDelete: "set null" }),
+    fixPhotoFileId: uuid("fix_photo_file_id").references(() => storedFiles.id, { onDelete: "set null" }),
+    blockId: uuid("block_id").references(() => roomBlocks.id),
+    blockDecision: text("block_decision"),
   },
   (t) => [
+    check("maintenance_issues_block_decision_check", sql`${t.blockDecision} in ('ended', 'kept')`),
     index("maintenance_issues_open_idx").on(t.propertyId).where(sql`${t.status} <> 'done'`),
     check("maintenance_issues_place_check", sql`${t.roomId} is not null or length(trim(${t.place})) > 0`),
     check("maintenance_issues_pick_check", sql`${t.pick} in ('plumbing', 'electrical', 'heating', 'furniture', 'door', 'other')`),
@@ -1892,6 +1917,7 @@ export const tenantSchema = {
   budgetMonths,
   savedReports,
   propertyModules,
+  storedFiles,
   propertyMessaging,
   messageTemplates,
   guestMessages,

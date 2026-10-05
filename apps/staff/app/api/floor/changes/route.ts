@@ -1,9 +1,11 @@
 import { cookies } from "next/headers";
 import { DEVICE_COOKIE, changeKeyUser, deviceByToken } from "@hoteloftware/auth";
-import { applyPhoneChange, loadActor, type PhoneChangeOutcome } from "@hoteloftware/db";
+import { applyPhoneChange, loadActor, phoneChangeSeen, storeFile, type PhoneChangeOutcome } from "@hoteloftware/db";
+import { fileStore, virusScanner } from "@hoteloftware/storage";
 import { parsePhoneOp } from "@hoteloftware/domain";
 import { pool } from "@/lib/db";
 import { floorContext } from "@/lib/floor";
+import { notifyFixed } from "@/lib/maintenance";
 import { currentTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
@@ -50,7 +52,26 @@ export async function POST(request: Request): Promise<Response> {
       continue;
     }
     try {
-      results.push({ id, ...(await applyPhoneChange(pool(), tenant.schemaName, propertyId, op, { userId, actor })) });
+      // a Maintenance photo goes to file storage first (virus scan, tenant prefix); a change sent again keeps its first photo
+      if ((op.kind === "problem" || op.kind === "issue") && op.photo && !(await phoneChangeSeen(pool(), tenant.schemaName, op.id))) {
+        const [head, data = ""] = op.photo.split(",");
+        try {
+          op.photoFileId = await storeFile(pool(), tenant.schemaName, { store: fileStore(), scanner: virusScanner() }, {
+            tenantId: tenant.id,
+            kind: op.kind === "problem" ? "issue_photo" : "fix_photo",
+            bytes: Buffer.from(data, "base64"),
+            contentType: head!.slice(5, head!.indexOf(";")),
+            propertyId,
+            userId,
+          });
+        } catch (err) {
+          results.push({ id, outcome: "refused", message: err instanceof Error ? err.message : "Photo not kept" });
+          continue;
+        }
+      }
+      const outcome = await applyPhoneChange(pool(), tenant.schemaName, propertyId, op, { userId, actor });
+      if (outcome.fixed) await notifyFixed(tenant, outcome.fixed);
+      results.push({ id, outcome: outcome.outcome, message: outcome.message });
     } catch (err) {
       // a database failure on one change must not hold back the others or be retried for ever
       console.error(err);
@@ -59,3 +80,4 @@ export async function POST(request: Request): Promise<Response> {
   }
   return Response.json({ results }, { headers: { "cache-control": "no-store" } });
 }
+

@@ -214,6 +214,10 @@ export async function createRoomBlock(
   input: { roomId: string; kind: RoomBlockKind; from: string; to: string; reason: string },
   viewer: Viewer,
 ): Promise<{ id: string; conflicts: BlockConflict[] }> {
+  return withTenant(pool, schema, (tx) => createRoomBlockIn(tx, input, viewer));
+}
+
+export async function createRoomBlockIn(tx: PoolClient, input: { roomId: string; kind: RoomBlockKind; from: string; to: string; reason: string }, viewer: Viewer): Promise<{ id: string; conflicts: BlockConflict[] }> {
   if (!isUuid(input.roomId)) throw new Error("Room not found");
   if (!ROOM_BLOCK_KINDS.includes(input.kind)) throw new Error("Out of Order or Out of Service");
   checkDate(input.from);
@@ -221,7 +225,7 @@ export async function createRoomBlock(
   if (input.to <= input.from) throw new Error("A block lasts at least one night");
   const reason = input.reason.trim().slice(0, 300);
   if (!reason) throw new Error("A Room Block needs a reason");
-  return withTenant(pool, schema, async (tx) => {
+  {
     const room = (await tx.query<{ property_id: string }>("select property_id from rooms where id = $1", [input.roomId])).rows[0];
     if (!room) throw new Error("Room not found");
     // availability changes: the property lock first, as for every reservation writer
@@ -242,13 +246,17 @@ export async function createRoomBlock(
       [input.roomId, input.from, input.to],
     )).rows.map((c) => ({ reservationId: c.reservation_id, confirmationNumber: c.confirmation_number, guestName: c.guest, from: c.from_date, to: c.to_date }));
     return { id: rows[0]!.id, conflicts };
-  });
+  }
 }
 
 /** End a block early (from tonight on the room is unblocked); a block in force leaves the room Dirty. */
 export async function endRoomBlock(pool: Pool, schema: string, blockId: string, viewer: Viewer): Promise<void> {
+  await withTenant(pool, schema, (tx) => endRoomBlockIn(tx, blockId, viewer));
+}
+
+export async function endRoomBlockIn(tx: PoolClient, blockId: string, viewer: Viewer): Promise<void> {
   if (!isUuid(blockId)) throw new Error("Block not found");
-  await withTenant(pool, schema, async (tx) => {
+  {
     const owner = (await tx.query<{ property_id: string }>("select property_id from room_blocks where id = $1", [blockId])).rows[0];
     if (!owner) throw new Error("Block not found");
     await lockProperty(tx, owner.property_id);
@@ -260,7 +268,7 @@ export async function endRoomBlock(pool: Pool, schema: string, blockId: string, 
     const end = b.from_date > businessDate ? b.from_date : businessDate;
     await tx.query("update room_blocks set to_date = $2, ended_at = clock_timestamp(), ended_by = $3 where id = $1", [blockId, end, viewer.userId]);
     if (b.from_date <= businessDate) await markDirty(tx, [b.room_id], "block_end", viewer.userId);
-  });
+  }
 }
 
 /** Give a room's Housekeeping Task of the Business Date to a Housekeeper (null: unassigned); the caller checked the assignee is one at the property. */

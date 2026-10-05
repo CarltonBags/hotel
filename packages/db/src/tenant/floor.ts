@@ -3,6 +3,7 @@ import { HOUSEKEEPING_NOTE_CODES, can, cleanlinessScope, type HousekeepingNoteCo
 import { isUuid } from "./catalogue-common";
 import { postServiceChargeIn } from "./folios";
 import { TaskChangedMeanwhile, workHousekeepingTaskIn } from "./housekeeping";
+import { fixIssueIn, reportIssueIn, seesIssues, takeIssueIn, type FixedIssue } from "./maintenance";
 import type { Viewer } from "./room-state";
 import { withTenant } from "./with-tenant";
 
@@ -130,8 +131,9 @@ export async function floorDay(pool: Pool, schema: string, propertyId: string, v
 
 async function openIssues(tx: PoolClient, propertyId: string, businessDate: string): Promise<FloorIssue[]> {
   const { rows } = await tx.query<{ id: string; number: string | null; place: string; pick: ProblemPick; urgency: Urgency; note: string; status: "open" | "in_progress"; reported_by: string; reported_at: Date; taken_by: string | null; has_photo: boolean; block: FloorIssue["block"] }>(
-    `select i.id, m.number, i.place, i.pick, i.urgency, i.note, i.status, i.reported_by, i.reported_at, i.taken_by, i.photo is not null as has_photo,
-       (select b.kind from room_blocks b where b.room_id = i.room_id and b.from_date <= $2 and b.to_date > $2 order by b.kind limit 1) as block
+    `select i.id, m.number, i.place, i.pick, i.urgency, i.note, i.status, i.reported_by, i.reported_at, i.taken_by, (i.photo is not null or i.photo_file_id is not null) as has_photo,
+       -- the issue's own Room Block in force: fixing asks whether to end it
+       (select b.kind from room_blocks b where b.id = i.block_id and b.from_date <= $2 and b.to_date > $2) as block
      from maintenance_issues i left join rooms m on m.id = i.room_id
      where i.property_id = $1 and i.status <> 'done'
      order by case i.urgency when 'now' then 0 when 'today' then 1 else 2 end, i.reported_at`,
@@ -140,7 +142,7 @@ async function openIssues(tx: PoolClient, propertyId: string, businessDate: stri
   return rows.map((r) => ({ id: r.id, roomNumber: r.number, place: r.place, pick: r.pick, urgency: r.urgency, note: r.note, status: r.status, reportedBy: r.reported_by, reportedAt: r.reported_at, takenBy: r.taken_by, hasPhoto: r.has_photo, block: r.block }));
 }
 
-export type PhoneChangeOutcome = { outcome: "applied" | "conflict" | "refused"; message: string };
+export type PhoneChangeOutcome = { outcome: "applied" | "conflict" | "refused"; message: string; fixed?: FixedIssue };
 
 /**
  * Apply a change a phone sent, once: the same change sent again (a retry
@@ -148,6 +150,12 @@ export type PhoneChangeOutcome = { outcome: "applied" | "conflict" | "refused"; 
  * supervisor changed since the phone saw it is not applied (supervisor
  * wins) and the outcome says so; any other refusal says why.
  */
+/** Whether a change was received before (sent again from the phone). */
+export async function phoneChangeSeen(pool: Pool, schema: string, id: string): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  return withTenant(pool, schema, async (tx) => (await tx.query("select 1 from phone_changes where id = $1", [id])).rows.length > 0);
+}
+
 export async function applyPhoneChange(pool: Pool, schema: string, propertyId: string, op: PhoneOp, viewer: Viewer): Promise<PhoneChangeOutcome> {
   return withTenant(pool, schema, async (tx) => {
     const claimed = await tx.query(
@@ -162,8 +170,9 @@ export async function applyPhoneChange(pool: Pool, schema: string, propertyId: s
     await tx.query("select set_config('hoteloftware.phone_change', $1, true)", [viewer.userId]);
     await tx.query("savepoint phone_change");
     let result: PhoneChangeOutcome;
+    const fixed: { issue?: FixedIssue } = {};
     try {
-      result = { outcome: "applied", message: await apply(tx, propertyId, op, viewer) };
+      result = { outcome: "applied", message: await apply(tx, propertyId, op, viewer, fixed) };
       await tx.query("release savepoint phone_change");
     } catch (err) {
       await tx.query("rollback to savepoint phone_change");
@@ -173,7 +182,8 @@ export async function applyPhoneChange(pool: Pool, schema: string, propertyId: s
     }
     await tx.query("select set_config('hoteloftware.phone_change', '', true)");
     await tx.query("update phone_changes set outcome = $2, message = $3 where id = $1", [op.id, result.outcome, result.message]);
-    return result;
+    // the reporter of a fixed issue is told by the caller
+    return result.outcome === "applied" && fixed.issue ? { ...result, fixed: fixed.issue } : result;
   });
 }
 
@@ -189,7 +199,7 @@ function decodePhoto(photo: string | undefined): { bytes: Buffer | null; type: s
   return { bytes: Buffer.from(data, "base64"), type: head!.slice(5, head!.indexOf(";")) };
 }
 
-async function apply(tx: PoolClient, propertyId: string, op: PhoneOp, viewer: Viewer): Promise<string> {
+async function apply(tx: PoolClient, propertyId: string, op: PhoneOp, viewer: Viewer, fixed: { issue?: FixedIssue }): Promise<string> {
   switch (op.kind) {
     case "task": {
       const ofTask = (await tx.query<{ property_id: string }>("select property_id from housekeeping_tasks where id = $1", [op.taskId])).rows[0];
@@ -213,13 +223,8 @@ async function apply(tx: PoolClient, propertyId: string, op: PhoneOp, viewer: Vi
       return "";
     }
     case "problem": {
-      if (!can(viewer.actor, "report_maintenance_issues", propertyId)) throw new Error("Not allowed");
-      await roomAt(tx, op.roomId, propertyId);
-      const photo = decodePhoto(op.photo);
-      await tx.query(
-        "insert into maintenance_issues (property_id, room_id, pick, urgency, note, photo, photo_type, reported_at, reported_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-        [propertyId, op.roomId, op.pick, op.urgency, op.note, photo.bytes, photo.type, op.at, viewer.userId],
-      );
+      // the photo was stored by the caller (file storage, virus scan) and arrives as a file id
+      await reportIssueIn(tx, { propertyId, roomId: op.roomId, place: "", pick: op.pick, urgency: op.urgency, note: op.note, photoFileId: op.photoFileId ?? null, block: null }, viewer, new Date(op.at));
       return "";
     }
     case "lost": {
@@ -233,28 +238,26 @@ async function apply(tx: PoolClient, propertyId: string, op: PhoneOp, viewer: Vi
       return "";
     }
     case "issue": {
-      if (!can(viewer.actor, "work_maintenance", propertyId)) throw new Error("Not allowed");
-      const issue = (await tx.query<{ status: string }>("select status from maintenance_issues where id = $1 and property_id = $2 for update", [op.issueId, propertyId])).rows[0];
-      if (!issue) throw new Error("Issue not found");
-      if (issue.status === "done") throw new Error("Already fixed");
-      if (op.step === "take") await tx.query("update maintenance_issues set status = 'in_progress', taken_at = $2, taken_by = $3 where id = $1", [op.issueId, op.at, viewer.userId]);
-      else await tx.query("update maintenance_issues set status = 'done', fixed_at = $2, fixed_by = $3, fix_note = $4, taken_by = coalesce(taken_by, $3), taken_at = coalesce(taken_at, $2) where id = $1", [op.issueId, op.at, viewer.userId, op.note]);
+      if (op.step === "take") await takeIssueIn(tx, propertyId, op.issueId, viewer, new Date(op.at));
+      else fixed.issue = await fixIssueIn(tx, propertyId, op.issueId, { note: op.note, photoFileId: op.photoFileId ?? null, endBlock: op.endBlock === true }, viewer, new Date(op.at));
       return "";
     }
   }
 }
 
-/** A photo kept with an issue or a found item, for whoever may see it. */
-export async function floorPhoto(pool: Pool, schema: string, what: "issue" | "lost", id: string, viewer: Viewer): Promise<{ bytes: Buffer; type: string } | null> {
+/** A photo kept with an issue or a found item, for whoever may see it: the bytes of an old one, or the stored file of a new one. */
+export async function floorPhoto(pool: Pool, schema: string, what: "issue" | "lost", id: string, viewer: Viewer): Promise<{ bytes: Buffer; type: string } | { fileId: string } | null> {
   if (!isUuid(id)) return null;
   return withTenant(pool, schema, async (tx) => {
-    const row = (await tx.query<{ property_id: string; photo: Buffer | null; photo_type: string | null }>(
-      what === "issue" ? "select property_id, photo, photo_type from maintenance_issues where id = $1" : "select property_id, photo, photo_type from lost_items where id = $1",
+    const row = (await tx.query<{ property_id: string; photo: Buffer | null; photo_type: string | null; file_id: string | null }>(
+      what === "issue" ? "select property_id, photo, photo_type, photo_file_id as file_id from maintenance_issues where id = $1" : "select property_id, photo, photo_type, null::uuid as file_id from lost_items where id = $1",
       [id],
     )).rows[0];
-    if (!row?.photo || !row.photo_type) return null;
-    const allowed = what === "issue" ? can(viewer.actor, "work_maintenance", row.property_id) || can(viewer.actor, "assign_housekeeping", row.property_id) : can(viewer.actor, "view_lost_items", row.property_id);
-    return allowed ? { bytes: row.photo, type: row.photo_type } : null;
+    if (!row) return null;
+    const allowed = what === "issue" ? seesIssues(viewer, row.property_id) : can(viewer.actor, "view_lost_items", row.property_id);
+    if (!allowed) return null;
+    if (row.file_id) return { fileId: row.file_id };
+    return row.photo && row.photo_type ? { bytes: row.photo, type: row.photo_type } : null;
   });
 }
 

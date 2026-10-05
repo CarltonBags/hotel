@@ -4,7 +4,7 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { claimDueReminders, deleteEndedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
+import { claimDueReminders, deleteEndedTenants, deleteExpiredFiles, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -12,6 +12,7 @@ import { alertMajorIncidents } from "./outage-alert";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 import { runMessaging } from "./messaging";
 import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
+import { fileStore } from "@hoteloftware/storage";
 
 export const QUEUES = {
   webhook: WEBHOOK_QUEUE,
@@ -137,6 +138,9 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     for (const t of all) {
       const n = await deleteExpiredRegistrations(pool, t.schema_name, today).catch((err) => (console.error(`[maintenance] registrations of ${t.slug}`, err), 0));
       if (n) console.log(`[maintenance] ${t.slug}: deleted ${n} registration record(s)`);
+      // stored files past their retention day (ticket 36)
+      const f = await deleteExpiredFiles(pool, t.schema_name, fileStore(), today).catch((err) => (console.error(`[maintenance] files of ${t.slug}`, err), 0));
+      if (f) console.log(`[maintenance] ${t.slug}: deleted ${f} file(s) past retention`);
     }
   });
   await boss.schedule(QUEUES.maintenance, "15 3 * * *", {}, { tz: "Europe/Berlin" });
