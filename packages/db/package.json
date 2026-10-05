@@ -22,7 +22,7 @@
     "@hoteloftware/invoices": "workspace:*",
     "@hoteloftware/payments": "workspace:*",
     "drizzle-orm": "^0.45.3",
-    "fflate": "0.8.3",
+    "fflate": "^0.8.3",
     "pg": "^8.23.0"
   },
   "devDependencies": {

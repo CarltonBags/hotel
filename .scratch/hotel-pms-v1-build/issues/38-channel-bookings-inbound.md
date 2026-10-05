@@ -10,3 +10,5 @@
 - [ ] A channel price including City Tax is split so the guest pays exactly the channel price
 - [ ] Cancellation from the channel cancels the reservation and frees availability
 - [ ] Website tool booking appears with its Source name and its payment recorded
+
+> Added 2026-10-05 from ticket 89: from day 60 of subscription non-payment, inbound channel and booking-page reservations are refused (`acceptsOnlineReservations` in the domain); existing stays continue.

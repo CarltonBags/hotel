@@ -68,6 +68,24 @@ export async function endTenant(pool: Pool, tenantId: string, input: { reason: "
   return due;
 }
 
+/** A reminder that could not be sent is released, so the next run sends it. */
+export async function releaseReminder(pool: Pool, number: string, day: number): Promise<void> {
+  await pool.query("delete from control.subscription_reminders r using control.subscription_invoices i where i.id = r.invoice_id and i.number = $1 and r.day = $2", [number, day]);
+}
+
+/** The end of a tenant, if any: when, and the day its data goes. */
+export async function tenantEnd(pool: Pool, tenantId: string): Promise<{ endedAt: Date; deletionDue: string } | null> {
+  const r = (await pool.query<{ ended_at: Date | null; deletion_due: string | null }>("select ended_at, to_char(deletion_due, 'YYYY-MM-DD') as deletion_due from control.tenants where id = $1", [tenantId])).rows[0];
+  return r?.ended_at && r.deletion_due ? { endedAt: r.ended_at, deletionDue: r.deletion_due } : null;
+}
+
+/** Mark paid by the invoice number on the bank statement. */
+export async function markSubscriptionInvoicePaidByNumber(pool: Pool, number: string, userId: string): Promise<void> {
+  const row = (await pool.query<{ id: string }>("select id from control.subscription_invoices where number = $1", [number])).rows[0];
+  if (!row) throw new Error("No invoice with this number");
+  await markSubscriptionInvoicePaid(pool, row.id, userId);
+}
+
 /** The daily deletion: every tenant whose deletion day has come; logged. Returns their slugs. */
 export async function deleteEndedTenants(pool: Pool, today: string): Promise<string[]> {
   const { rows } = await pool.query<{ id: string; slug: string }>("select id, slug from control.tenants where deletion_due <= $1", [today]);

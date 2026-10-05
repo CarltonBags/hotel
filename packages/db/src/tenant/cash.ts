@@ -529,6 +529,11 @@ export async function receiptByToken(pool: Pool, schema: string, token: string):
   });
 }
 
+/** Every Receipt as issued, in number order per property (the exit export, ticket 89). */
+export async function allReceiptsIn(tx: PoolClient): Promise<ReceiptView[]> {
+  return (await tx.query(`${RECEIPT_SELECT} order by pr.name, rc.number`)).rows.map(toReceipt);
+}
+
 /** The Receipts of a reservation's payments, by payment. */
 export async function receiptsOfReservation(pool: Pool, schema: string, reservationId: string): Promise<Record<string, { number: number; token: string }>> {
   if (!isUuid(reservationId)) return {};

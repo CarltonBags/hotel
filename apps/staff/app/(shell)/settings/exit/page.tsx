@@ -1,4 +1,4 @@
-import { nonPaymentStatus } from "@hoteloftware/db";
+import { nonPaymentStatus, tenantEnd } from "@hoteloftware/db";
 import { todayIn } from "@hoteloftware/domain";
 import { ActionForm } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
@@ -11,7 +11,7 @@ import { deleteNowAction, endContractAction } from "./actions";
 export default async function ExitPage() {
   const { messages: m } = await loadShell();
   const { tenant } = await requireAllowed("delete_tenant");
-  const ended = (await pool().query<{ ended_at: Date | null; deletion_due: string | null }>("select ended_at, to_char(deletion_due, 'YYYY-MM-DD') as deletion_due from control.tenants where id = $1", [tenant.id])).rows[0];
+  const ended = await tenantEnd(pool(), tenant.id);
   const status = await nonPaymentStatus(pool(), tenant.id, todayIn("Europe/Berlin"));
   const input = "h-9 rounded-xl border border-ink-10 bg-surface px-2";
   return (
@@ -24,9 +24,9 @@ export default async function ExitPage() {
           {m["exit.download"]}
         </a>
       </section>
-      {ended?.ended_at ? (
+      {ended ? (
         <section className="grid gap-2 rounded-2xl bg-danger/10 p-4 text-sm" data-ended>
-          <p>{fill(m["exit.ended"], { date: ended.deletion_due ?? "" })}</p>
+          <p>{fill(m["exit.ended"], { date: ended.deletionDue })}</p>
           <ActionForm action={deleteNowAction} submitLabel={m["exit.deleteNow"]} className="flex flex-wrap items-center gap-2">
             <input name="confirm" placeholder={`delete ${tenant.slug}`} className={input} />
           </ActionForm>

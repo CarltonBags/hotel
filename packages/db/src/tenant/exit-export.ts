@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { zipSync } from "fflate";
-import { invoicePdf, invoiceXml, type InvoiceDocument } from "@hoteloftware/invoices";
+import { invoicePdf, invoiceXml, renderReceiptPdf, type InvoiceDocument } from "@hoteloftware/invoices";
+import { allReceiptsIn } from "./cash";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -31,6 +32,14 @@ const TABLES: { file: string; about: string; sql: string }[] = [
     sql: `select id as company_id, name, vat_id, address_line1, address_line2, postal_code, city, country, billing_email, phone, contact_person, payment_terms_days, on_account, buyer_reference from companies order by name`,
   },
   {
+    file: "folios.csv",
+    about: "One line per folio: number, reservation, who it is billed to (guest or Company), charges and payments so far, opened.",
+    sql: `select f.number as folio, f.reservation_id, f.bill_to_guest_id, f.bill_to_company_id, co.name as company,
+            (select coalesce(sum(c.amount), 0) from charges c where c.folio_id = f.id and c.voided_at is null) as charges,
+            (select coalesce(sum(p.amount), 0) from payments p where p.folio_id = f.id and p.status = 'succeeded') as payments, f.created_at
+          from folios f left join companies co on co.id = f.bill_to_company_id order by f.created_at`,
+  },
+  {
     file: "folio_charges.csv",
     about: "One line per Charge on a folio: folio number, reservation, Service Date, Business Date, description, quantity, amount (gross), Tax Code and rate, voided, invoice.",
     sql: `select f.number as folio, c.reservation_id, c.service_date, c.business_date, c.description, c.quantity, c.unit_price, c.amount, tc.code as tax_code, c.tax_rate, c.category,
@@ -51,13 +60,14 @@ const TABLES: { file: string; about: string; sql: string }[] = [
   {
     file: "invoices.csv",
     about: "One line per invoice as issued: number, kind, issue date, gross, open amount, the file names in invoices/.",
-    sql: `select number, kind, issue_date, gross, due, currency, cancels, issued_at from invoices order by issue_date, number`,
+    sql: `select number, kind, issue_date, gross, due, currency, cancels, issued_at from invoices where not test order by issue_date, number`,
   },
 ];
 
 function csvValue(v: unknown): string {
   const s = v === null || v === undefined ? "" : v instanceof Date ? v.toISOString() : Array.isArray(v) ? v.join(",") : String(v);
-  const safe = /^[=+\-@\t\r]/.test(s) && Number.isNaN(Number(s)) ? `'${s}` : s;
+  // a formula is neutralised; numbers and phone numbers ("+49 30 …") stay as they are
+  const safe = /^[=+\-@\t\r]/.test(s) && !/^[+-]?[\d\s()./-]+$/.test(s) ? `'${s}` : s;
   return /[;"\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
@@ -72,8 +82,8 @@ export async function exitExport(pool: Pool, schema: string, tenantName: string)
       tables.push({ file: t.file, about: t.about, fields: r.fields.map((f) => f.name), rows: r.rows });
     }
     const invoices = (await tx.query<{ number: string; document: InvoiceDocument; pdf: Buffer | null; xml: string | null }>("select number, document, pdf, xml from invoices where not test order by issue_date, number")).rows;
-    const registrations = (await tx.query<{ id: string; last_name: string; pdf: Buffer }>("select id, last_name, pdf from registration_persons where pdf is not null")).rows;
-    return { tables, invoices, registrations };
+    const registrations = (await tx.query<{ id: string; pdf: Buffer }>("select id, pdf from registration_persons where pdf is not null")).rows;
+    return { tables, invoices, registrations, receipts: await allReceiptsIn(tx) };
   });
   const readme: string[] = [`# Data export · ${tenantName}`, "", `Made ${new Date().toISOString()}. Spreadsheet files are UTF-8 with a BOM, semicolon separated, one header line.`, ""];
   for (const t of data.tables) {
@@ -88,12 +98,18 @@ export async function exitExport(pool: Pool, schema: string, tenantName: string)
     files[`invoices/${safe}.xml`] = enc.encode(i.xml ?? (await invoiceXml(i.document)));
   }
   counts.invoices = data.invoices.length;
+  for (const r of data.receipts) files[`receipts/${r.propertyName.replace(/[^\w.-]/g, "_")}-${r.number}.pdf`] = await renderReceiptPdf(r);
+  counts.receipts = data.receipts.length;
   for (const r of data.registrations) files[`registrations/${r.id}.pdf`] = new Uint8Array(r.pdf);
   counts.registrations = data.registrations.length;
   readme.push(
     "## invoices/",
     "",
     "Every invoice as issued: <number>.pdf (ZUGFeRD / Factur-X, the e-invoice embedded) and <number>.xml (XRechnung). Keep them for the statutory period.",
+    "",
+    "## receipts/",
+    "",
+    "Every Receipt as issued at the desk: <property>-<number>.pdf.",
     "",
     "## registrations/",
     "",

@@ -20,7 +20,7 @@ export const tenants = control.table("tenants", {
   endedAt: timestamp("ended_at", { withTimezone: true }),
   endedReason: text("ended_reason"),
   deletionDue: date("deletion_due"),
-});
+}, (t) => [check("tenants_end_check", sql`(${t.endedAt} is null) = (${t.deletionDue} is null)`)]);
 
 export const tenantMigrations = control.table(
   "tenant_migrations",
@@ -419,7 +419,7 @@ export const subscriptionInvoices = control.table(
   "subscription_invoices",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id").notNull(),
     legalEntityId: uuid("legal_entity_id").notNull(),
     month: date("month").notNull(),
     number: text("number").notNull().unique(),

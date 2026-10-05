@@ -20,3 +20,4 @@ export { renderNightAuditPdf, type NightAuditReportDocument } from "./night-audi
 export { renderTourismReportPdf, tourismReportCsv, type TourismReportDocument } from "./tourism-report";
 export { renderReportPdf, reportCsv } from "./report-table";
 export { renderMeldescheinPdf, type MeldescheinDocument } from "./meldeschein";
+export { renderReceiptPdf, type ReceiptDocument } from "./receipt";

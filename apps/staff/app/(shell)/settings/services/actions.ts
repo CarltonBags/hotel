@@ -61,11 +61,11 @@ export async function saveService(_prev: FormState, formData: FormData): Promise
       if (!current) throw new Error("Service not found");
       const patch: ServicePatch = {};
       if (input.defaultPrice !== current.defaultPrice) {
-        if (!can(actor, "manage_service_prices", p.id)) throw new ForbiddenError("manage_service_prices", p.id);
+        await authorize("manage_service_prices", p.id);
         patch.defaultPrice = input.defaultPrice;
       }
       if (input.taxCodeId !== current.taxCodeId || input.revenueAccount !== current.revenueAccount) {
-        if (!can(actor, "manage_tax_codes", p.id)) throw new ForbiddenError("manage_tax_codes", p.id);
+        await authorize("manage_tax_codes", p.id);
         patch.taxCodeId = input.taxCodeId;
         patch.revenueAccount = input.revenueAccount;
       }
@@ -78,7 +78,7 @@ export async function saveService(_prev: FormState, formData: FormData): Promise
         input.active !== current.active ||
         GUEST_LANGUAGES.some((l) => (input.names[l] ?? "") !== (current.names[l] ?? ""));
       if (rest) {
-        if (!can(actor, "manage_property_settings", p.id)) throw new ForbiddenError("manage_property_settings", p.id);
+        await authorize("manage_property_settings", p.id);
         Object.assign(patch, { code: input.code, name: input.name, names: input.names, postingRhythm: input.postingRhythm, bookableOnline: input.bookableOnline, minibar: input.minibar, active: input.active });
       }
       if (Object.keys(patch).length) await updateService(pool(), schema, p.id, id, patch);

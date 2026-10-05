@@ -21,7 +21,9 @@ export async function builderFrom(q: BuilderQuery): Promise<{ dataSet: DataSet; 
   const language = shell.language === "de" ? "de" : "en";
   // a saved report opens at its own property (prop), else the navbar's scope
   const requested = shell.properties.find((p) => p.id === one(q, "prop"));
-  const inScope = requested ? [requested] : shell.scope === "all" || !shell.scope ? shell.properties : shell.properties.filter((p) => p.id === shell.scope);
+  const scoped = requested ? [requested] : shell.scope === "all" || !shell.scope ? shell.properties : shell.properties.filter((p) => p.id === shell.scope);
+  // the builder's own right through the shared check (rights, front office, non-payment lock), then the data set's
+  const inScope = await allowedAmong("use_report_builder", scoped);
   // the data sets the user may open at every property in scope
   const available: DataSet[] = [];
   for (const d of DATA_SETS) if ((await allowedAmong(DATA_SET_RIGHT[d], inScope)).length === inScope.length && inScope.length) available.push(d);

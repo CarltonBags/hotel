@@ -3,7 +3,7 @@ import { acceptsOnlineReservations, lockedByNonPayment, nonPaymentStage } from "
 
 describe("the non-payment ladder on a simulated timeline", () => {
   it("each stage on its days", () => {
-    const timeline = [null, 0, 1, 29, 30, 59, 60, 90, 91].map((d) => [d, nonPaymentStage(d)]);
+    const timeline = [null, 0, 1, 29, 30, 59, 60, 89, 90].map((d) => [d, nonPaymentStage(d)]);
     expect(timeline).toEqual([
       [null, "none"],
       [0, "none"],
@@ -12,8 +12,8 @@ describe("the non-payment ladder on a simulated timeline", () => {
       [30, "restricted"],
       [59, "restricted"],
       [60, "no_new_bookings"],
-      [90, "no_new_bookings"],
-      [91, "termination"],
+      [89, "no_new_bookings"],
+      [90, "termination"],
     ]);
   });
 

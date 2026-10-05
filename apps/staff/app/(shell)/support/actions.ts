@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { endSupportAccess, endTenant, markSubscriptionInvoicePaid, reportIncident, scheduleMaintenance, setBankTransfer, setPrice, startSupportAccess, updateIncident } from "@hoteloftware/db";
+import { endSupportAccess, endTenant, markSubscriptionInvoicePaidByNumber, reportIncident, scheduleMaintenance, setBankTransfer, setPrice, startSupportAccess, updateIncident } from "@hoteloftware/db";
 import { todayIn, zonedInstant, type IncidentState } from "@hoteloftware/domain";
 import { authorize } from "@/lib/authorize";
 import { isSupportConsoleUser } from "@/lib/support";
@@ -84,9 +84,7 @@ export async function markPaidAction(_prev: FormState, formData: FormData): Prom
   return formAction(async () => {
     const userId = await supportStaffId();
     const number = field(formData, "number");
-    const row = (await pool().query<{ id: string }>("select id from control.subscription_invoices where number = $1", [number])).rows[0];
-    if (!row) throw new Error("No invoice with this number");
-    await markSubscriptionInvoicePaid(pool(), row.id, userId);
+    await markSubscriptionInvoicePaidByNumber(pool(), number, userId);
     return { ok: true, message: `${number} paid.` };
   });
 }

@@ -52,10 +52,15 @@ export const workingPropertyId = cache(async (): Promise<string | null> => {
 /** Where the tenant stands with its subscription (ticket 89), once per request. */
 export const nonPaymentStage = cache(async (tenantId: string): Promise<NonPaymentStage> => (await nonPaymentStatus(pool(), tenantId, todayIn("Europe/Berlin"))).stage);
 
+/** Whether non-payment locks this action now (settings and reports from day 30): every rights check asks. */
+export async function lockedNow(principal: Principal, action: Action): Promise<boolean> {
+  return lockedByNonPayment(await nonPaymentStage(principal.tenant.id), action);
+}
+
 /** Rights plus, for the front office, the property they work in now; settings and reports locked while the subscription is 30 days overdue. */
 async function allowed(principal: Principal, action: Action, propertyId?: string): Promise<boolean> {
   if (!can(principal.actor, action, propertyId)) return false;
-  if (lockedByNonPayment(await nonPaymentStage(principal.tenant.id), action)) return false;
+  if (await lockedNow(principal, action)) return false;
   if (isTenantAction(action) || propertyId === undefined) return true;
   const working = await workingPropertyId();
   return working === null || working === propertyId;
@@ -100,13 +105,13 @@ export const accessibleProperties = cache(async (): Promise<Property[]> => {
 /** For tenant-wide records (Guest profiles, Companies): the action must be allowed at some property. Throws for server actions. */
 export async function authorizeAnywhere(action: PropertyAction): Promise<Principal> {
   const principal = await requirePrincipal();
-  if (!canAtAnyProperty(principal.actor, action)) throw new ForbiddenError(action);
+  if (!canAtAnyProperty(principal.actor, action) || (await lockedNow(principal, action))) throw new ForbiddenError(action);
   return principal;
 }
 
 /** Page variant of authorizeAnywhere: redirects to /not-allowed. */
 export async function requireAllowedAnywhere(action: PropertyAction): Promise<Principal> {
   const principal = await requirePrincipal();
-  if (!canAtAnyProperty(principal.actor, action)) redirect("/not-allowed");
+  if (!canAtAnyProperty(principal.actor, action) || (await lockedNow(principal, action))) redirect("/not-allowed");
   return principal;
 }
