@@ -17,6 +17,9 @@ export const tenants = control.table("tenants", {
   goLiveCheckedAt: timestamp("go_live_checked_at", { withTimezone: true }),
   goLiveCheckedSetup: jsonb("go_live_checked_setup"),
   liveAt: timestamp("live_at", { withTimezone: true }),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  endedReason: text("ended_reason"),
+  deletionDue: date("deletion_due"),
 });
 
 export const tenantMigrations = control.table(
@@ -424,9 +427,32 @@ export const subscriptionInvoices = control.table(
     pdf: bytea("pdf"),
     xml: text("xml"),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    paidBy: text("paid_by"),
   },
   (t) => [unique("subscription_invoices_once").on(t.tenantId, t.legalEntityId, t.month)],
 );
+
+export const subscriptionReminders = control.table(
+  "subscription_reminders",
+  {
+    invoiceId: uuid("invoice_id").notNull().references(() => subscriptionInvoices.id, { onDelete: "cascade" }),
+    day: integer("day").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.invoiceId, t.day] })],
+);
+
+export const tenantDeletions = control.table("tenant_deletions", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  tenantId: uuid("tenant_id").notNull(),
+  slug: text("slug").notNull(),
+  name: text("name").notNull(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  endedReason: text("ended_reason"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull().defaultNow(),
+  deletedBy: text("deleted_by").notNull(),
+});
 
 export const counters = control.table("counters", {
   key: text("key").primaryKey(),
@@ -464,5 +490,7 @@ export const controlSchema = {
   roomCounts,
   subscriptionInvoices,
   counters,
+  subscriptionReminders,
+  tenantDeletions,
 };
 

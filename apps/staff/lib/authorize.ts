@@ -1,8 +1,8 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { can, canAtAnyProperty, canViewAnyProperty, isFrontOfficeOnly, isTenantAction, type Action, type Actor, type PropertyAction } from "@hoteloftware/domain";
-import { listProperties, loadActor, type Property, type Tenant } from "@hoteloftware/db";
+import { can, canAtAnyProperty, canViewAnyProperty, isFrontOfficeOnly, isTenantAction, lockedByNonPayment, todayIn, type Action, type Actor, type NonPaymentStage, type PropertyAction } from "@hoteloftware/domain";
+import { listProperties, loadActor, nonPaymentStatus, type Property, type Tenant } from "@hoteloftware/db";
 import { DEVICE_COOKIE, type TenantSession } from "@hoteloftware/auth";
 import { pool } from "./db";
 import { currentSession } from "./tenant";
@@ -49,9 +49,13 @@ export const workingPropertyId = cache(async (): Promise<string | null> => {
   return available.find((p) => p.id === requested)?.id ?? "";
 });
 
-/** Rights plus, for the front office, the property they work in now. */
+/** Where the tenant stands with its subscription (ticket 89), once per request. */
+export const nonPaymentStage = cache(async (tenantId: string): Promise<NonPaymentStage> => (await nonPaymentStatus(pool(), tenantId, todayIn("Europe/Berlin"))).stage);
+
+/** Rights plus, for the front office, the property they work in now; settings and reports locked while the subscription is 30 days overdue. */
 async function allowed(principal: Principal, action: Action, propertyId?: string): Promise<boolean> {
   if (!can(principal.actor, action, propertyId)) return false;
+  if (lockedByNonPayment(await nonPaymentStage(principal.tenant.id), action)) return false;
   if (isTenantAction(action) || propertyId === undefined) return true;
   const working = await workingPropertyId();
   return working === null || working === propertyId;

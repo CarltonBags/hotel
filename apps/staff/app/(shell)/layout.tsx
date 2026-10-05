@@ -3,8 +3,9 @@ import { dueTourismReports, findProperty, getDowntimeOptions, modulePeriods, ten
 import { OfflineDesk } from "@/shell/offline-desk";
 import { downtimeText } from "@/lib/downtime-text";
 import { isSupportConsoleUser } from "@/lib/support";
+import { nonPaymentStage } from "@/lib/authorize";
 import { endSupportAccessAction } from "./support/actions";
-import { MODULES, PROPERTY_ACTIONS, TENANT_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, moduleState, moduleVisible, todayIn, trialDaysLeft, type PropertyAction, type TenantAction } from "@hoteloftware/domain";
+import { MODULES, PROPERTY_ACTIONS, TENANT_ACTIONS, atLeast, auditOverdue, can, canAtAnyProperty, lockedByNonPayment, daysBehind, deviceIdleMinutes, moduleState, moduleVisible, todayIn, trialDaysLeft, type PropertyAction, type TenantAction } from "@hoteloftware/domain";
 import { IdleLock } from "@/app/device/idle-lock";
 import { pool } from "@/lib/db";
 import { fill } from "@/i18n/messages";
@@ -19,7 +20,9 @@ export default async function ShellLayout({ children }: { children: React.ReactN
   const { tenant, session, actor } = shell.principal;
   // signed in by PIN on an enrolled Device (ticket 14): the screen locks when idle
   const idleMinutes = session.device ? deviceIdleMinutes((await findProperty(pool(), tenant.schemaName, session.device.propertyId))?.deviceIdleMinutes) : null;
-  const propertyActions = (Object.keys(PROPERTY_ACTIONS) as PropertyAction[]).filter((a) => shell.properties.some((p) => can(actor, a, p.id)));
+  // settings and reports leave the menu while the subscription is 30 days overdue (ticket 89)
+  const stage = await nonPaymentStage(tenant.id);
+  const propertyActions = (Object.keys(PROPERTY_ACTIONS) as PropertyAction[]).filter((a) => !lockedByNonPayment(stage, a) && shell.properties.some((p) => can(actor, a, p.id)));
   // the Night Audit banner (ticket 32): for whoever runs the audit, while it is overdue or the Business Date lags
   const now = new Date();
   const late = shell.properties
@@ -90,8 +93,22 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       ) : null}
     </div>
   );
-  const banners = banner || statsBanner || supportBanner || testBanner ? (
+  // the subscription overdue: managers see it from day 30 (the Owner is reminded before)
+  const manager = can(actor, "manage_tenant_settings") || canAtAnyProperty(actor, "manage_property_settings");
+  const paymentBanner =
+    manager && atLeast(stage, "restricted") ? (
+      <div role="alert" data-non-payment={stage} className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl bg-danger/15 px-4 py-2 text-sm print:hidden">
+        <span>{m[`nonpay.banner.${stage as "restricted" | "no_new_bookings" | "termination"}`]}</span>
+        {can(actor, "manage_subscription") ? (
+          <Link href="/settings/subscription" className="font-medium underline">
+            {m["module.settings_subscription"]}
+          </Link>
+        ) : null}
+      </div>
+    ) : null;
+  const banners = banner || statsBanner || supportBanner || testBanner || paymentBanner ? (
     <>
+      {paymentBanner}
       {testBanner}
       {supportBanner}
       {banner}
@@ -113,7 +130,7 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       accent={shell.accent}
       propertyActions={propertyActions}
       supportStaff={(await isSupportConsoleUser()) !== null}
-      tenantActions={(Object.keys(TENANT_ACTIONS) as TenantAction[]).filter((a) => can(actor, a))}
+      tenantActions={(Object.keys(TENANT_ACTIONS) as TenantAction[]).filter((a) => !lockedByNonPayment(stage, a) && can(actor, a))}
       activeModules={activeModules}
     >
       {idleMinutes ? <IdleLock minutes={idleMinutes} /> : null}

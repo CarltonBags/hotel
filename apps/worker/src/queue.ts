@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices } from "@hoteloftware/db";
+import { claimDueReminders, deleteEndedTenants, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -105,9 +105,20 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     // a demo trial is deleted 30 days after it ended (ticket 87)
     const demos = await deleteExpiredDemoTenants(pool);
     if (demos.length) console.log(`[maintenance] deleted demo tenants ${demos.join(", ")}`);
+    // the subscription overdue: the Owner is reminded on days 1, 10, 20 and 30 (ticket 89); ended tenants go after 90 days
+    const today = new Date().toISOString().slice(0, 10);
+    for (const r of await claimDueReminders(pool, today)) {
+      const owners = (await listTenantUsers(pool, r.tenantId)).filter((u) => u.tenantRole === "owner");
+      const tenant = await findTenantById(pool, r.tenantId);
+      for (const o of owners) {
+        await publishNotification(pool, { tenantId: r.tenantId, userId: o.id, kind: "subscription.overdue", title: `Subscription invoice ${r.number} is ${r.day} days overdue`, href: "/settings/subscription" });
+        if (tenant) await queueMail(pool, tenant.schemaName, { tenantId: r.tenantId, toUserId: o.id, subject: `Reminder: invoice ${r.number} is overdue`, body: `Invoice ${r.number} was due on ${r.dueDate} and is ${r.day} days overdue. From day 30 settings and reports are locked; from day 60 no new online reservations; after day 90 the contract may be terminated.` });
+      }
+    }
+    const gone = await deleteEndedTenants(pool, today);
+    if (gone.length) console.log(`[maintenance] deleted ended tenants ${gone.join(", ")}`);
     // Meldeschein records go on schedule: Germany from day 365 after departure, Austria after 7 years (ticket 45)
     const { rows: all } = await pool.query<{ slug: string; schema_name: string }>("select slug, schema_name from control.tenants");
-    const today = new Date().toISOString().slice(0, 10);
     for (const t of all) {
       const n = await deleteExpiredRegistrations(pool, t.schema_name, today).catch((err) => (console.error(`[maintenance] registrations of ${t.slug}`, err), 0));
       if (n) console.log(`[maintenance] ${t.slug}: deleted ${n} registration record(s)`);
