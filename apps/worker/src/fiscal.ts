@@ -3,6 +3,7 @@ import {
   FISCAL_USER,
   atDepArchive,
   atFiscalProperties,
+  atMonthsToArchive,
   atOutagesToReport,
   closeFiscalDay,
   fiscalArchive,
@@ -18,8 +19,8 @@ import {
   type FiscalDeps,
   type Tenant,
 } from "@hoteloftware/db";
-import { addDays, todayIn } from "@hoteloftware/domain";
-import { notifyAtOutageReport, notifyFiscalOutage, notifyYearlyReceipt } from "@hoteloftware/events";
+import { todayIn } from "@hoteloftware/domain";
+import { notifyAtOutageReport, notifyFiscalOutage, notifyReceiptRefused, notifyYearlyReceipt } from "@hoteloftware/events";
 import type { FileStore } from "@hoteloftware/storage";
 
 /**
@@ -49,6 +50,7 @@ export async function runFiscal(pool: Pool, tenant: Tenant, deps: FiscalDeps): P
       out.failed++;
       if (r.outageStarted) await notifyFiscalOutage(pool, tenant, { propertyId: r.propertyId, error: r.error }).catch((err) => console.error("[fiscal] outage not told", err));
     }
+    if (r.state === "refused" && r.newly) await notifyReceiptRefused(pool, tenant, { propertyId: r.propertyId, error: r.error ?? "" }).catch((err) => console.error("[fiscal] refusal not told", err));
   }
   // Austria: outages over 48 hours, reminded once a day until reported
   for (const o of await atOutagesToReport(pool, s)) await notifyAtOutageReport(pool, tenant, o).catch((err) => console.error("[fiscal] outage report reminder", err));
@@ -67,18 +69,18 @@ export async function runFiscal(pool: Pool, tenant: Tenant, deps: FiscalDeps): P
  */
 export async function archiveFiscal(pool: Pool, tenant: Tenant, deps: FiscalDeps & { store: FileStore }): Promise<number> {
   let done = 0;
-  // Austria: the provider's monthly and yearly receipts kept; last month's DEP archived; the yearly receipt reminded until 15 February
-  const today = todayIn("Europe/Vienna");
-  for (const p of await atFiscalProperties(pool, tenant.schemaName)) {
-    await syncAtSystemReceipts(pool, tenant.schemaName, deps, p).catch((err) => console.error(`[fiscal] ${tenant.slug} system receipts`, err));
-    const first = `${today.slice(0, 7)}-01`;
-    const a = await atDepArchive(pool, tenant.schemaName, { ...deps, tenantId: tenant.id }, { propertyId: p, from: `${addDays(first, -1).slice(0, 7)}-01`, to: addDays(first, -1) }, FISCAL_USER).catch((err) => (console.error(`[fiscal] ${tenant.slug} DEP`, err), null));
-    if (a?.state === "completed") done++;
-  }
-  // once a night (the first run of the night) from 1 January to 15 February
+  // the night's first run (read before anything slow): Austria's monthly and yearly receipts kept, the yearly one reminded until 15 February
   const [hour, minute] = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Europe/Vienna" }).format(new Date()).split(":").map(Number);
-  if (hour === 2 && minute! < 20 && today.slice(5) <= "02-15") {
-    for (const y of await yearlyReceiptsToCheck(pool, tenant.schemaName)) if (today <= y.checkBy) await notifyYearlyReceipt(pool, tenant, y).catch(() => undefined);
+  const first = hour === 2 && minute! < 20;
+  const today = todayIn("Europe/Vienna");
+  if (first) {
+    for (const p of await atFiscalProperties(pool, tenant.schemaName)) await syncAtSystemReceipts(pool, tenant.schemaName, deps, p).catch((err) => console.error(`[fiscal] ${tenant.slug} system receipts`, err));
+    if (today.slice(5) <= "02-15") for (const y of await yearlyReceiptsToCheck(pool, tenant.schemaName)) if (today <= y.checkBy) await notifyYearlyReceipt(pool, tenant, y).catch(() => undefined);
+  }
+  // Austria's DEP per month not archived yet (a failed one again after a day)
+  for (const m of await atMonthsToArchive(pool, tenant.schemaName, today)) {
+    const a = await atDepArchive(pool, tenant.schemaName, { ...deps, tenantId: tenant.id }, m, FISCAL_USER).catch((err) => (console.error(`[fiscal] ${tenant.slug} DEP`, err), null));
+    if (a?.state === "completed") done++;
   }
   for (const m of await fiscalMonthsToArchive(pool, tenant.schemaName, todayIn("Europe/Berlin"))) {
     const a = await fiscalArchive(pool, tenant.schemaName, { ...deps, tenantId: tenant.id }, { propertyId: m.propertyId, kind: m.kind, from: m.from, to: m.to }, FISCAL_USER);

@@ -77,3 +77,11 @@ export class FiscalUnavailable extends Error {
     this.name = "FiscalUnavailable";
   }
 }
+
+/** The signing service answered but refused this receipt (a request it cannot sign): never retried, the desk is told. */
+export class FiscalRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FiscalRefused";
+  }
+}

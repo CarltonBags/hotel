@@ -30,6 +30,8 @@ export interface GoLiveFacts {
     country: string;
     /** A desk printer for Receipts is configured (Austria requires one, ticket 52). */
     receiptPrinter: boolean;
+    /** Austria: the Legal Entity's signature unit is set up (every on-site payment is signed from the first day). */
+    signatureUnit: boolean;
     /** The property's own calendar date: its first Business Date at go-live, from which the price horizon counts. */
     today: string;
   }[];
@@ -71,6 +73,7 @@ export function goLiveChecklist(f: GoLiveFacts): ChecklistItem[] {
     item("invoice_numbering", "required", les((le) => le.hasInvoiceNumbering)),
     // Austria: Receipts are electronic by default but printed on request, so every desk has a printer
     item("receipt_printer", "required", f.properties.filter((p) => p.country === "AT" && !p.receiptPrinter).map((p) => p.name)),
+    item("signature_unit", "required", f.properties.filter((p) => p.country === "AT" && !p.signatureUnit).map((p) => p.name)),
     item("card_provider", "if_used", card.filter((le) => !le.card!.chargesEnabled).map((le) => le.name), card.length > 0),
     item("devices", "optional", f.devices > 0 ? [] : ["—"]),
   ];

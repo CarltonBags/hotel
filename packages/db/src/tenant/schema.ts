@@ -2336,7 +2336,7 @@ export const fiscalTransactions = pgTable(
     check("fiscal_transactions_receipt_type_check", sql`${t.receiptType} in ('normal', 'cancellation')`),
     check("fiscal_transactions_state_check", sql`${t.state} in ('open', 'signing', 'signed', 'failed')`),
     check("fiscal_transactions_case_check", sql`${t.businessCase} in ('Umsatz', 'Anzahlungseinstellung')`),
-    check("fiscal_transactions_signed_check", sql`${t.state} <> 'signed' or ${t.qrCodeData} is not null`),
+    check("fiscal_transactions_signed_check", sql`${t.state} <> 'signed' or (${t.qrCodeData} is not null and ((${t.signature} is not null and ${t.number} is not null) or ${t.receiptNumber} is not null))`),
     check("fiscal_transactions_failed_check", sql`${t.state} <> 'failed' or ${t.error} is not null`),
     check("fiscal_transactions_claim_check", sql`(${t.state} = 'signing') = (${t.claim} is not null)`),
     index("fiscal_transactions_day_idx").on(t.clientId, t.businessDate),

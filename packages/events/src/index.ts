@@ -178,4 +178,4 @@ export function verifyEventsToken(token: string, secret: string): VerifiedEvents
     return null;
   }
 }
-export { notifyAtOutageReport, notifyFiscalOutage, notifyPortalDecline, notifyYearlyReceipt, notifySelfCheckin, notifyStaff, notifyWithRight, type StaffNotification } from "./staff";
+export { notifyAtOutageReport, notifyFiscalOutage, notifyPortalDecline, notifyReceiptRefused, notifySelfCheckin, notifyYearlyReceipt, notifyStaff, notifyWithRight, type StaffNotification } from "./staff";

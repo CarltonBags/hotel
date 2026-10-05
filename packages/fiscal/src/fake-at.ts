@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { FiscalUnavailable } from "./provider";
+import { FiscalRefused, FiscalUnavailable } from "./provider";
 import type { AtAccount, AtFiscalProvider, AtSignInput, AtSignedReceipt, AtSystemReceipt, FonCredentials } from "./at";
 
 /**
@@ -12,6 +12,8 @@ export class FakeAtFiscalProvider implements AtFiscalProvider {
   readonly name = "fake";
   down = false;
   scuDown = false;
+  /** Plays a receipt the provider will not sign. */
+  refuse = false;
   readonly fon = new Map<string, FonCredentials>();
   readonly registers = new Map<string, { serial: string; counter: number; outage: boolean; system: AtSystemReceipt[]; created: Date }>();
   readonly signed = new Map<string, AtSignedReceipt & { input: AtSignInput }>();
@@ -46,6 +48,7 @@ export class FakeAtFiscalProvider implements AtFiscalProvider {
 
   async sign(_a: AtAccount, input: AtSignInput): Promise<AtSignedReceipt> {
     if (this.down) throw new FiscalUnavailable("Signature service not available");
+    if (this.refuse) throw new FiscalRefused("fiskaly 400 E_VALIDATION: invalid amounts");
     const done = this.signed.get(input.receiptId);
     if (done) return done;
     const r = this.register(input.registerId);

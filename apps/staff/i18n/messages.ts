@@ -1760,6 +1760,7 @@ const catalog = {
   "golive.item.rates_500_days": { en: "A Rate Plan with prices 500 days ahead", de: "Eine Rate mit Preisen 500 Tage im Voraus" },
   "golive.item.tax_codes": { en: "Tax Codes", de: "Steuerschlüssel" },
   "golive.item.city_tax": { en: "City Tax Rule", de: "City-Tax-Regel" },
+  "golive.item.signature_unit": { en: "Signature unit registered with FinanzOnline (Austria)", de: "Signaturerstellungseinheit bei FinanzOnline registriert (Österreich)" },
   "golive.item.receipt_printer": { en: "Receipt printer at the desk (Austria)", de: "Belegdrucker an der Rezeption (Österreich)" },
   "golive.item.users": { en: "Users", de: "Benutzer" },
   "golive.item.invoice_numbering": { en: "Invoice numbering", de: "Rechnungsnummernkreis" },

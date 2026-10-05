@@ -28,6 +28,8 @@ export interface AtSignInput {
   /** Our id: the same id again never signs twice. */
   receiptId: string;
   type: AtReceiptType;
+  /** A second attempt for the same receipt: the provider is asked what it already has. */
+  retry?: boolean;
   amountsPerVatRate: { vatRate: AtVatRate; amount: string }[];
   amountsPerPaymentType: { paymentType: "CASH" | "NON_CASH"; amount: string; currency: string }[];
   lineItems: { quantity: string; text: string; pricePerUnit: string }[];
@@ -62,7 +64,7 @@ export interface AtFiscalProvider {
   createScu(account: AtAccount, scuId: string, taxId: { vatId: string } | { taxNumber: string }, name: string): Promise<{ certificateSerial: string }>;
   /** A register, registered with FinanzOnline and initialised (its start receipt signed and checked). */
   createRegister(account: AtAccount, registerId: string, description: string): Promise<{ serial: string; initializationReceiptId: string | null }>;
-  /** Sign a receipt; throws FiscalUnavailable when the provider cannot be reached (the receipt is signed later). */
+  /** Sign a receipt; FiscalUnavailable when the provider cannot be reached (signed later), FiscalRefused when it will not sign it. */
   sign(account: AtAccount, input: AtSignInput): Promise<AtSignedReceipt>;
   /** A register out of order, or back (reported to FinanzOnline by the provider). */
   setRegisterOutage(account: AtAccount, registerId: string, outage: boolean): Promise<void>;

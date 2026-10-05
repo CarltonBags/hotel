@@ -1,4 +1,4 @@
-import { FiscalUnavailable } from "./provider";
+import { FiscalRefused, FiscalUnavailable } from "./provider";
 import type { AtAccount, AtFiscalProvider, AtSignInput, AtSignedReceipt, AtSystemReceipt, AtSystemReceiptType, FonCredentials } from "./at";
 
 const BASE = "https://rksv.fiskaly.com/api/v1";
@@ -95,31 +95,37 @@ export class FiskalyAtProvider implements AtFiscalProvider {
 
   async sign(a: AtAccount, input: AtSignInput): Promise<AtSignedReceipt> {
     const budget = AbortSignal.timeout(SIGN_BUDGET_MS);
+    const path = `/cash-register/${input.registerId}/receipt/${input.receiptId}`;
     try {
-      const r = await this.json(a, "PUT", `/cash-register/${input.registerId}/receipt/${input.receiptId}`, {
-        body: {
-          receipt_type: input.type,
-          schema: {
-            standard_v1: {
-              amounts_per_vat_rate: input.amountsPerVatRate.map((x) => ({ vat_rate: x.vatRate, amount: x.amount })),
-              amounts_per_payment_type: input.amountsPerPaymentType.map((x) => ({ payment_type: x.paymentType, amount: x.amount, currency_code: x.currency })),
-              line_items: input.lineItems.map((l) => ({ quantity: l.quantity, text: l.text, price_per_unit: l.pricePerUnit })),
+      // a retry asks first: the receipt may have been signed after the last attempt gave up
+      const had = input.retry ? await this.json(a, "GET", path, { ms: SIGN_BUDGET_MS, signal: budget }).catch((err: unknown) => (err instanceof FiskalyAtError && err.status === 404 ? null : Promise.reject(err))) : null;
+      if (had) return receiptOf(had);
+      try {
+        return receiptOf(
+          await this.json(a, "PUT", path, {
+            body: {
+              receipt_type: input.type,
+              schema: {
+                standard_v1: {
+                  amounts_per_vat_rate: input.amountsPerVatRate.map((x) => ({ vat_rate: x.vatRate, amount: x.amount })),
+                  amounts_per_payment_type: input.amountsPerPaymentType.map((x) => ({ payment_type: x.paymentType, amount: x.amount, currency_code: x.currency })),
+                  line_items: input.lineItems.map((l) => ({ quantity: l.quantity, text: l.text, price_per_unit: l.pricePerUnit })),
+                },
+              },
+              ...(input.metadata ? { metadata: input.metadata } : {}),
             },
-          },
-          ...(input.metadata ? { metadata: input.metadata } : {}),
-        },
-        ms: SIGN_BUDGET_MS,
-        signal: budget,
-      });
-      return {
-        receiptNumber: String(r.receipt_number),
-        timeSignature: new Date(Number(r.time_signature) * 1000),
-        registerSerial: String(r.cash_register_serial_number),
-        qrCodeData: String(r.qr_code_data),
-        signed: r.signed !== false,
-        hints: Array.isArray(r.hints) ? r.hints.map(String) : [],
-      };
+            ms: SIGN_BUDGET_MS,
+            signal: budget,
+          }),
+        );
+      } catch (err) {
+        // signed already under this id: what the provider has stands
+        if (err instanceof FiskalyAtError && err.status === 409) return receiptOf(await this.json(a, "GET", path, { ms: SIGN_BUDGET_MS }));
+        throw err;
+      }
     } catch (err) {
+      // a request it will not sign is refused for good; anything else (no answer, 5xx, 429) is an outage
+      if (err instanceof FiskalyAtError && err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 408 && err.status !== 429) throw new FiscalRefused(err.message.slice(0, 200));
       throw new FiscalUnavailable(err instanceof Error ? err.message.slice(0, 200) : "Signature service not available");
     }
   }
@@ -149,6 +155,17 @@ export class FiskalyAtProvider implements AtFiscalProvider {
     const s = (d: Date) => Math.floor(d.getTime() / 1000);
     return (await this.call(a, "GET", `/cash-register/${registerId}/export?start_time_signature=${s(from)}&end_time_signature=${s(to)}`, { ms: EXPORT_MS, raw: true })) as Uint8Array;
   }
+}
+
+function receiptOf(r: Json): AtSignedReceipt {
+  return {
+    receiptNumber: String(r.receipt_number),
+    timeSignature: new Date(Number(r.time_signature) * 1000),
+    registerSerial: String(r.cash_register_serial_number),
+    qrCodeData: String(r.qr_code_data),
+    signed: r.signed !== false,
+    hints: Array.isArray(r.hints) ? r.hints.map(String) : [],
+  };
 }
 
 async function errorOf(r: Response): Promise<FiskalyAtError> {

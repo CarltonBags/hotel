@@ -117,6 +117,9 @@ describe("Fiscal module Austria", () => {
     const rc = await receiptOf((await takePayment(pool, s(), payments, { reservationId: res, tender: "cash", amount: 10 }, fd)).id);
     expect(await signReceipt(pool, s(), deps, rc.id)).toMatchObject({ state: "failed", outageStarted: true });
     expect((await receiptByToken(pool, s(), rc.token))?.fiscal).toMatchObject({ state: "at_unsigned", notice: AT_OUTAGE_NOTICE });
+    // tried again after a minute's back-off
+    expect(await receiptsToSign(pool, s())).not.toContain(rc.id);
+    await pool.query(`update ${s()}.fiscal_transactions set claimed_at = now() - interval '2 minutes' where receipt_id = $1`, [rc.id]);
     expect(await receiptsToSign(pool, s())).toContain(rc.id);
     expect(await atOutagesToReport(pool, s())).toEqual([]);
     // two days and an hour later, still out
@@ -133,12 +136,22 @@ describe("Fiscal module Austria", () => {
     at.down = false;
     expect(await signReceipt(pool, s(), deps, rc.id)).toMatchObject({ state: "signed" });
     expect((await atFiscalStatus(pool, s(), wien))!.outages[0]!.endedAt).not.toBeNull();
-    // the signature unit itself out: the receipt comes back marked
+    // the signature unit itself out: the receipt comes back marked; the outage is logged, reported by the provider
     at.scuDown = true;
     const scu = await receiptOf((await takePayment(pool, s(), payments, { reservationId: res, tender: "cash", amount: 5 }, fd)).id);
-    await signReceipt(pool, s(), deps, scu.id);
+    expect(await signReceipt(pool, s(), deps, scu.id)).toMatchObject({ state: "failed", outageStarted: true });
     expect((await receiptByToken(pool, s(), scu.token))?.fiscal).toMatchObject({ state: "at_signed", unitFailed: true });
+    expect((await atFiscalStatus(pool, s(), wien))!.outages[0]).toMatchObject({ endedAt: null, reportedAt: expect.any(Date) });
     at.scuDown = false;
+    await signReceipt(pool, s(), deps, (await receiptOf((await takePayment(pool, s(), payments, { reservationId: res, tender: "cash", amount: 1 }, fd)).id)).id);
+    expect((await atFiscalStatus(pool, s(), wien))!.outages[0]!.endedAt).not.toBeNull();
+    // a receipt the provider will not sign: refused for good, never retried, no outage
+    at.refuse = true;
+    const bad = await receiptOf((await takePayment(pool, s(), payments, { reservationId: res, tender: "cash", amount: 2 }, fd)).id);
+    expect(await signReceipt(pool, s(), deps, bad.id)).toMatchObject({ state: "refused", newly: true });
+    at.refuse = false;
+    expect(await receiptsToSign(pool, s())).not.toContain(bad.id);
+    expect((await receiptByToken(pool, s(), bad.token))?.fiscal).toMatchObject({ state: "at_unsigned", notice: expect.stringMatching(/nicht signiert/) });
   });
 
   it("the monthly and yearly receipts are kept; the yearly one is reminded until printed and checked", async () => {
@@ -159,7 +172,7 @@ describe("Fiscal module Austria", () => {
     const store = new LocalFileStore(await mkdtemp(join(tmpdir(), "dep-")));
     const a = await atDepArchive(pool, s(), { ...deps, store, tenantId: tenant.id }, { propertyId: wien, from: addDays(today, -1), to: addDays(today, 1) }, "user_pm");
     expect(a.state).toBe("completed");
-    const file = JSON.parse(new TextDecoder().decode((await fiscalArchiveFile(pool, s(), store, a.id))!.bytes));
-    expect(file.kassen.some((k: { dep: { "Belege-Gruppe": { "Belege-kompakt": string[] }[] } }) => k.dep["Belege-Gruppe"][0]!["Belege-kompakt"].length > 0)).toBe(true);
+    const file = JSON.parse(new TextDecoder().decode((await fiscalArchiveFile(pool, s(), store, a.id!))!.bytes));
+    expect(Object.values(file).some((dep) => (dep as { "Belege-Gruppe": { "Belege-kompakt": string[] }[] })["Belege-Gruppe"][0]!["Belege-kompakt"].length > 0)).toBe(true);
   });
 });

@@ -175,6 +175,9 @@ export function atVatKey(rate: number | null): (typeof AT_VAT)[number]["key"] {
 /** Printed on an Austrian Receipt the signature unit did not sign (RKSV). */
 export const AT_OUTAGE_NOTICE = "Sicherheitseinrichtung ausgefallen";
 
+/** Printed on an Austrian Receipt the provider refused to sign: the desk corrects it. */
+export const AT_NOT_SIGNED_NOTICE = "Beleg nicht signiert: wird von der Rezeption berichtigt";
+
 /** An outage longer than 48 hours is reported to FinanzOnline within a week (RKSV § 17). */
 export const AT_OUTAGE_REPORT_HOURS = 48;
 export const AT_OUTAGE_REPORT_DAYS = 7;

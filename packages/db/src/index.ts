@@ -609,6 +609,7 @@ export {
   atDepArchive,
   atFiscalProperties,
   atFiscalStatus,
+  atMonthsToArchive,
   atOutagesToReport,
   atSystemReceipt,
   atSystemReceipts,

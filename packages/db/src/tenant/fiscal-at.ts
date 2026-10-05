@@ -1,11 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { FiscalUnavailable, seal, unseal, type AtAccount, type AtSignedReceipt } from "@hoteloftware/fiscal";
+import { FiscalRefused, seal, unseal, type AtAccount, type AtSignInput, type AtSignedReceipt } from "@hoteloftware/fiscal";
 import { atOutageReport, atVatKey, fiscalAmount, fiscalPayment, yearlyReceiptCheckBy, type VatAmount } from "@hoteloftware/domain";
 import { tenantKey, type FileStore } from "@hoteloftware/storage";
 import { isUuid } from "./catalogue-common";
 import { clientIn, type FiscalDeps, type FiscalSignResult } from "./fiscal";
-import { inTestMode } from "./go-live";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -28,7 +27,8 @@ const STALE_CLAIM_SECONDS = 90;
 interface AtUnit {
   legalEntityId: string;
   scuId: string;
-  account: AtAccount;
+  /** The Legal Entity's provider account; null without the platform's fiscal secret (its API secret stays sealed). */
+  account: AtAccount | null;
   certificateSerial: string;
   initializedAt: Date | null;
 }
@@ -40,7 +40,7 @@ export async function atUnitOfPropertyIn(tx: PoolClient, propertyId: string, sec
     [propertyId],
   )).rows[0];
   if (!u) return null;
-  return { legalEntityId: u.legal_entity_id, scuId: u.scu_id, account: { apiKey: u.api_key, apiSecret: secret ? unseal(secret, u.api_secret_sealed) : "" }, certificateSerial: u.certificate_serial, initializedAt: u.initialized_at };
+  return { legalEntityId: u.legal_entity_id, scuId: u.scu_id, account: secret ? { apiKey: u.api_key, apiSecret: unseal(secret, u.api_secret_sealed) } : null, certificateSerial: u.certificate_serial, initializedAt: u.initialized_at };
 }
 
 function provider(deps: FiscalDeps) {
@@ -60,10 +60,19 @@ export interface AtSetUpInput {
   fon: { participantId: string; userId: string; pin: string };
 }
 
+/** The signature unit's id at the provider, the same on every attempt: a retry continues the unit made before (one per organisation). */
+const scuIdOf = (legalEntityId: string) => {
+  const h = createHash("sha256").update(`hoteloftware-scu:${legalEntityId}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16]!, 16) & 3) | 8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+};
+
 /**
  * Set up the Legal Entity's signature unit: the FinanzOnline credentials
- * handed to the provider, the SCU created and registered with FinanzOnline,
- * then every register of its Austrian properties. Not in Test Mode.
+ * handed to the provider, the SCU created and registered with FinanzOnline
+ * (under an id fixed per Legal Entity, so a retry continues it), then every
+ * register of its Austrian properties. The provider's slow calls run
+ * outside any transaction. In Test Mode too (the account's key decides
+ * whether the provider's test or live side is used).
  */
 export async function setUpFiscalAt(pool: Pool, schema: string, deps: FiscalDeps, legalEntityId: string, input: AtSetUpInput, userId: string): Promise<void> {
   if (!isUuid(legalEntityId)) throw new Error("Legal Entity not found");
@@ -73,25 +82,29 @@ export async function setUpFiscalAt(pool: Pool, schema: string, deps: FiscalDeps
   const fon = { participantId: input.fon.participantId.trim(), userId: input.fon.userId.trim(), pin: input.fon.pin };
   if (!apiKey || !input.apiSecret) throw new Error("Give the fiskaly API key and secret of the Legal Entity's organisation");
   if (!/^[0-9A-Za-z]{8,12}$/.test(fon.participantId) || fon.userId.length < 5 || fon.userId.length > 12 || fon.pin.length < 5) throw new Error("Give the FinanzOnline participant id, web-service user and PIN");
-  await withTenant(pool, schema, async (tx) => {
-    await tx.query("select pg_advisory_xact_lock(hashtext('fiscal-at-setup:' || $1))", [legalEntityId]);
-    if ((await tx.query("select 1 from fiscal_at_units where legal_entity_id = $1", [legalEntityId])).rowCount) return;
-    const le = (await tx.query<{ name: string; country: string; vat_id: string | null; tax_number: string | null }>("select name, country, vat_id, tax_number from legal_entities where id = $1", [legalEntityId])).rows[0];
-    if (!le) throw new Error("Legal Entity not found");
-    if (le.country !== "AT") throw new Error("The signature unit is for Legal Entities in Austria");
-    if (await inTestMode(tx)) throw new Error("Set up the signature unit after go-live: in Test Mode nothing is signed");
-    const taxId = le.vat_id && /^ATU\d{8}$/.test(le.vat_id.replace(/\s/g, "")) ? { vatId: le.vat_id.replace(/\s/g, "") } : le.tax_number ? { taxNumber: le.tax_number } : null;
+  const le = await withTenant(pool, schema, async (tx) => {
+    if ((await tx.query("select 1 from fiscal_at_units where legal_entity_id = $1", [legalEntityId])).rowCount) return null;
+    const r = (await tx.query<{ name: string; country: string; vat_id: string | null; tax_number: string | null }>("select name, country, vat_id, tax_number from legal_entities where id = $1", [legalEntityId])).rows[0];
+    if (!r) throw new Error("Legal Entity not found");
+    if (r.country !== "AT") throw new Error("The signature unit is for Legal Entities in Austria");
+    return r;
+  });
+  if (le) {
+    const vat = le.vat_id?.replace(/\s/g, "") ?? "";
+    const taxId = /^ATU\d{8}$/.test(vat) ? { vatId: vat } : le.tax_number ? { taxNumber: le.tax_number } : null;
     if (!taxId) throw new Error("The Legal Entity needs its UID (ATU…) or tax number");
     const account = { apiKey, apiSecret: input.apiSecret };
     await at.fonAuth(account, fon);
-    const scuId = randomUUID();
+    const scuId = scuIdOf(legalEntityId);
     const scu = await at.createScu(account, scuId, taxId, le.name);
-    await tx.query(
-      `insert into fiscal_at_units (legal_entity_id, provider, scu_id, certificate_serial, api_key, api_secret_sealed, fon_participant_id, fon_user_id, fon_pin_sealed, initialized_at, created_by)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp(), $10)`,
-      [legalEntityId, at.name, scuId, scu.certificateSerial, apiKey, seal(secret, input.apiSecret), fon.participantId, fon.userId, seal(secret, fon.pin), userId],
+    await withTenant(pool, schema, (tx) =>
+      tx.query(
+        `insert into fiscal_at_units (legal_entity_id, provider, scu_id, certificate_serial, api_key, api_secret_sealed, fon_participant_id, fon_user_id, fon_pin_sealed, initialized_at, created_by)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp(), $10) on conflict (legal_entity_id) do nothing`,
+        [legalEntityId, at.name, scuId, scu.certificateSerial, apiKey, seal(secret, input.apiSecret), fon.participantId, fon.userId, seal(secret, fon.pin), userId],
+      ),
     );
-  });
+  }
   const properties = await withTenant(pool, schema, async (tx) => (await tx.query<{ id: string }>("select id from properties where legal_entity_id = $1 and country = 'AT'", [legalEntityId])).rows);
   for (const p of properties) await registerAtClients(pool, schema, deps, p.id);
 }
@@ -111,10 +124,11 @@ export async function registerAtClients(pool: Pool, schema: string, deps: Fiscal
     return { unit, open };
   });
   if (!todo || !todo.open.length) return out;
-  if (!deps.secret || !deps.at) return { registered: 0, failed: todo.open.map((c) => `${c.serial}: the fiscal module is not configured`) };
+  const account = todo.unit.account;
+  if (!account || !deps.at) return { registered: 0, failed: todo.open.map((c) => `${c.serial}: the fiscal module is not configured`) };
   for (const c of todo.open) {
     try {
-      const r = await deps.at.createRegister(todo.unit.account, c.id, c.name ?? "Rezeption");
+      const r = await deps.at.createRegister(account, c.id, c.name ?? "Rezeption");
       await withTenant(pool, schema, (tx) =>
         tx.query("update fiscal_clients set registered_at = clock_timestamp(), provider_serial = $2, initialization_receipt_id = $3 where id = $1 and registered_at is null", [c.id, r.serial, r.initializationReceiptId]),
       );
@@ -127,51 +141,66 @@ export async function registerAtClients(pool: Pool, schema: string, deps: Fiscal
 }
 
 /**
- * Sign an Austrian Receipt: the claim as in Germany; a provider out of
- * reach leaves it open (it is signed later) and opens an outage; a receipt
- * the SCU could not sign comes back marked so and is kept as it is.
+ * Sign an Austrian Receipt: the claim as in Germany. A provider out of
+ * reach leaves it open, to be signed later, and opens an outage; a receipt
+ * it refuses is failed for good and the desk corrects it; a receipt the SCU
+ * could not sign comes back marked so and is kept as it is (the provider
+ * reports the SCU's outage to FinanzOnline itself). A cancellation waits for
+ * the receipt it cancels, whose number it names.
  */
 export async function signAtReceipt(pool: Pool, schema: string, deps: FiscalDeps, receiptId: string): Promise<FiscalSignResult> {
   const claim = randomUUID();
   const held = await withTenant(pool, schema, async (tx) => {
-    const f = (await tx.query<{ state: string; stale: boolean; property_id: string; client_id: string; amounts: VatAmount[]; tender: string; currency: string; amount: string; receipt_type: string; refund_of: string | null }>(
-      `select f.state, coalesce(f.claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}), true) as stale, f.property_id, f.client_id, f.amounts, f.tender, trim(f.currency) as currency, f.amount, f.receipt_type, p.refund_of
+    const f = (await tx.query<{ state: string; stale: boolean; attempts: number; property_id: string; client_id: string; amounts: VatAmount[]; tender: string; currency: string; amount: string; receipt_type: string; refund_of: string | null }>(
+      `select f.state, coalesce(f.claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}), true) as stale, f.attempts, f.property_id, f.client_id, f.amounts, f.tender, trim(f.currency) as currency, f.amount, f.receipt_type, p.refund_of
        from fiscal_transactions f join receipts rc on rc.id = f.receipt_id join payments p on p.id = rc.payment_id where f.receipt_id = $1 for update of f`,
       [receiptId],
     )).rows[0];
     if (!f) return { kind: "none" as const };
-    if (f.state === "signed" || f.state === "failed") return { kind: "done" as const, propertyId: f.property_id };
+    if (f.state === "signed") return { kind: "done" as const, propertyId: f.property_id };
+    if (f.state === "failed") return { kind: "refused" as const, propertyId: f.property_id, newly: false };
     if (f.state === "signing" && !f.stale) return { kind: "busy" as const };
     const client = (await tx.query<{ registered: boolean }>("select registered_at is not null as registered from fiscal_clients where id = $1", [f.client_id])).rows[0]!;
     const unit = await atUnitOfPropertyIn(tx, f.property_id, deps.secret);
-    if (!client.registered || !unit || !deps.secret) return { kind: "busy" as const };
-    // a cancellation names the receipt it cancels
-    const original = f.refund_of ? (await tx.query<{ receipt_number: string | null }>("select f.receipt_number from fiscal_transactions f join receipts rc on rc.id = f.receipt_id where rc.payment_id = $1", [f.refund_of])).rows[0]?.receipt_number : null;
+    if (!client.registered || !unit?.account) return { kind: "busy" as const };
+    const original = f.refund_of ? (await tx.query<{ receipt_number: string | null }>("select f.receipt_number from fiscal_transactions f join receipts rc on rc.id = f.receipt_id where rc.payment_id = $1", [f.refund_of])).rows[0] : undefined;
+    if (original && !original.receipt_number) return { kind: "busy" as const };
+    const amount = Number(f.amount);
+    let input: AtSignInput;
+    try {
+      input = {
+        registerId: f.client_id,
+        receiptId,
+        type: f.receipt_type === "cancellation" ? "CANCELLATION" : "NORMAL",
+        retry: f.attempts > 0,
+        amountsPerVatRate: f.amounts.map((a) => ({ vatRate: atVatKey(a.rate), amount: fiscalAmount(a.amount) })),
+        amountsPerPaymentType: [{ paymentType: fiscalPayment(f.tender).tse, amount: fiscalAmount(amount), currency: f.currency }],
+        lineItems: [{ quantity: "1", text: amount < 0 ? "Rückzahlung Beherbergung" : "Zahlung Beherbergung", pricePerUnit: fiscalAmount(amount) }],
+        ...(original?.receipt_number ? { metadata: { cancels_receipt_number: original.receipt_number } } : {}),
+      };
+    } catch (err) {
+      // a rate the RKSV has no key for: refused here, the desk corrects it
+      await tx.query("update fiscal_transactions set state = 'failed', error = $2, finished_at = clock_timestamp() where receipt_id = $1", [receiptId, err instanceof Error ? err.message.slice(0, 200) : "cannot be signed"]);
+      return { kind: "refused" as const, propertyId: f.property_id, newly: true };
+    }
     await tx.query("update fiscal_transactions set state = 'signing', claim = $2, claimed_at = clock_timestamp(), attempts = attempts + 1 where receipt_id = $1", [receiptId, claim]);
-    return { kind: "claimed" as const, row: f, unit, original: original ?? null };
+    return { kind: "claimed" as const, propertyId: f.property_id, clientId: f.client_id, account: unit.account, input };
   });
   if (held.kind === "none") return { state: "none" };
   if (held.kind === "busy") return { state: "signing" };
   if (held.kind === "done") return { state: "signed", propertyId: held.propertyId };
-  const { row, unit } = held;
+  if (held.kind === "refused") return { state: "refused", propertyId: held.propertyId, newly: held.newly };
   let signed: AtSignedReceipt | null = null;
+  let refused = false;
   let error = "";
   try {
-    const amount = Number(row.amount);
-    signed = await provider(deps).sign(unit.account, {
-      registerId: row.client_id,
-      receiptId,
-      type: row.receipt_type === "cancellation" ? "CANCELLATION" : "NORMAL",
-      amountsPerVatRate: row.amounts.map((a) => ({ vatRate: atVatKey(a.rate), amount: fiscalAmount(a.amount) })),
-      amountsPerPaymentType: [{ paymentType: fiscalPayment(row.tender).tse, amount: fiscalAmount(amount), currency: row.currency }],
-      lineItems: [{ quantity: "1", text: amount < 0 ? "Rückzahlung Beherbergung" : "Zahlung Beherbergung", pricePerUnit: fiscalAmount(amount) }],
-      ...(held.original ? { metadata: { cancels_receipt_number: held.original } } : {}),
-    });
+    signed = await provider(deps).sign(held.account, held.input);
   } catch (err) {
-    error = (err instanceof FiscalUnavailable || err instanceof Error ? err.message : "").slice(0, 200) || "Signature service not available";
+    refused = err instanceof FiscalRefused;
+    error = (err instanceof Error ? err.message : "").slice(0, 200) || "Signature service not available";
   }
   return withTenant(pool, schema, async (tx) => {
-    const propertyId = row.property_id;
+    const { propertyId, clientId } = held;
     if (signed) {
       const n = (await tx.query(
         `update fiscal_transactions set state = 'signed', claim = null, receipt_number = $2, time_start = $3, time_end = $3, client_serial = $4, qr_code_data = $5,
@@ -179,13 +208,26 @@ export async function signAtReceipt(pool: Pool, schema: string, deps: FiscalDeps
         [receiptId, signed.receiptNumber, signed.timeSignature, signed.registerSerial, signed.qrCodeData, !signed.signed, JSON.stringify(signed.hints), claim],
       )).rowCount;
       if (!n) return { state: "signing" };
-      await tx.query("update fiscal_outages set ended_at = clock_timestamp() where property_id = $1 and ended_at is null", [propertyId]);
-      return { state: "signed", propertyId };
+      if (signed.signed) {
+        // the provider and its unit answer again: the outages end
+        await tx.query("update fiscal_outages set ended_at = clock_timestamp() where property_id = $1 and ended_at is null", [propertyId]);
+        return { state: "signed", propertyId };
+      }
+      // the SCU is out: logged, already reported to FinanzOnline by the provider
+      const started = (await tx.query(
+        "insert into fiscal_outages (property_id, client_id, error, reported_at, reported_by) values ($1, $2, $3, clock_timestamp(), 'provider') on conflict (client_id) where ended_at is null do nothing returning id",
+        [propertyId, clientId, "Signaturerstellungseinheit ausgefallen"],
+      )).rowCount;
+      return { state: "failed", propertyId, error: "Sicherheitseinrichtung ausgefallen", outageStarted: !!started };
     }
-    // Austria: not signed now, signed once the provider answers
-    const n = (await tx.query("update fiscal_transactions set state = 'open', claim = null, claimed_at = null, error = $2 where receipt_id = $1 and claim = $3", [receiptId, error, claim])).rowCount;
+    if (refused) {
+      const n = (await tx.query("update fiscal_transactions set state = 'failed', claim = null, error = $2, finished_at = clock_timestamp() where receipt_id = $1 and claim = $3", [receiptId, error, claim])).rowCount;
+      return n ? { state: "refused", propertyId, newly: true, error } : { state: "signing" };
+    }
+    // out of reach: open again (with the time of this attempt for the back-off), signed once the provider answers
+    const n = (await tx.query("update fiscal_transactions set state = 'open', claim = null, error = $2 where receipt_id = $1 and claim = $3", [receiptId, error, claim])).rowCount;
     if (!n) return { state: "signing" };
-    const started = (await tx.query("insert into fiscal_outages (property_id, client_id, error) values ($1, $2, $3) on conflict (client_id) where ended_at is null do nothing returning id", [propertyId, row.client_id, error])).rowCount;
+    const started = (await tx.query("insert into fiscal_outages (property_id, client_id, error) values ($1, $2, $3) on conflict (client_id) where ended_at is null do nothing returning id", [propertyId, clientId, error])).rowCount;
     return { state: "failed", propertyId, error, outageStarted: !!started };
   });
 }
@@ -233,12 +275,12 @@ export async function syncAtSystemReceipts(pool: Pool, schema: string, deps: Fis
   const work = await withTenant(pool, schema, async (tx) => {
     const unit = await atUnitOfPropertyIn(tx, propertyId, deps.secret);
     const clients = (await tx.query<{ id: string }>("select id from fiscal_clients where property_id = $1 and registered_at is not null", [propertyId])).rows;
-    return unit && deps.secret ? { unit, clients } : null;
+    return unit?.account ? { account: unit.account, clients } : null;
   });
   if (!work) return 0;
   let added = 0;
   for (const c of work.clients) {
-    const list = await provider(deps).systemReceipts(work.unit.account, c.id);
+    const list = await provider(deps).systemReceipts(work.account, c.id);
     await withTenant(pool, schema, async (tx) => {
       for (const r of list) {
         const n = (await tx.query(
@@ -317,32 +359,53 @@ export async function yearlyReceiptsToCheck(pool: Pool, schema: string): Promise
   );
 }
 
-/** The data collection log (DEP7) of an Austrian property's registers for a period, kept in the file store. */
-export async function atDepArchive(pool: Pool, schema: string, deps: FiscalDeps & { store: FileStore; tenantId: string }, input: { propertyId: string; from: string; to: string }, userId: string): Promise<{ id: string; state: string; error: string | null }> {
+/**
+ * The data collection log (DEP7) of an Austrian property's registers for a
+ * period, kept in the file store: each register's log as the provider gives
+ * it, keyed by its Kassen-ID. Nothing to export without a registered
+ * register; a failed export is asked again.
+ */
+export async function atDepArchive(pool: Pool, schema: string, deps: FiscalDeps & { store: FileStore; tenantId: string }, input: { propertyId: string; from: string; to: string }, userId: string): Promise<{ id: string | null; state: string; error: string | null }> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.from) || !/^\d{4}-\d{2}-\d{2}$/.test(input.to) || input.from > input.to) throw new Error("Choose a period");
   const work = await withTenant(pool, schema, async (tx) => {
     const unit = await atUnitOfPropertyIn(tx, input.propertyId, deps.secret);
-    if (!unit || !deps.secret) throw new Error("Set up the signature unit first");
-    await tx.query("insert into fiscal_archives (property_id, kind, period_from, period_to, requested_by) values ($1, 'dep', $2, $3, $4) on conflict do nothing", [input.propertyId, input.from, input.to, userId]);
-    const row = (await tx.query<{ id: string }>("update fiscal_archives set state = 'pending', error = null where property_id = $1 and kind = 'dep' and period_from = $2 and period_to = $3 and state <> 'completed' returning id", [input.propertyId, input.from, input.to])).rows[0];
-    const span = (await tx.query<{ f: Date; t: Date }>("select ($1::date)::timestamp at time zone p.time_zone as f, ($2::date + 1)::timestamp at time zone p.time_zone as t from properties p where p.id = $3", [input.from, input.to, input.propertyId])).rows[0]!;
+    if (!unit?.account) throw new Error("Set up the signature unit first");
     const clients = (await tx.query<{ id: string; serial: string }>("select id, coalesce(provider_serial, serial) as serial from fiscal_clients where property_id = $1 and registered_at is not null order by serial", [input.propertyId])).rows;
-    const done = (await tx.query<{ id: string }>("select id from fiscal_archives where property_id = $1 and kind = 'dep' and period_from = $2 and period_to = $3", [input.propertyId, input.from, input.to])).rows[0]!;
-    return { unit, id: row?.id ?? done.id, pending: !!row, span, clients };
+    if (!clients.length) return null;
+    await tx.query("insert into fiscal_archives (property_id, kind, period_from, period_to, requested_by) values ($1, 'dep', $2, $3, $4) on conflict do nothing", [input.propertyId, input.from, input.to, userId]);
+    const row = (await tx.query<{ id: string; state: string }>("select id, state from fiscal_archives where property_id = $1 and kind = 'dep' and period_from = $2 and period_to = $3 for update", [input.propertyId, input.from, input.to])).rows[0]!;
+    const span = (await tx.query<{ f: Date; t: Date }>("select ($1::date)::timestamp at time zone p.time_zone as f, ($2::date + 1)::timestamp at time zone p.time_zone as t from properties p where p.id = $3", [input.from, input.to, input.propertyId])).rows[0]!;
+    return { account: unit.account, row, span, clients };
   });
-  if (work.pending) {
+  if (!work) return { id: null, state: "none", error: "No register is registered yet" };
+  if (work.row.state !== "completed") {
     try {
-      const parts: { kasse: string; dep: unknown }[] = [];
-      for (const c of work.clients) parts.push({ kasse: c.serial, dep: JSON.parse(new TextDecoder().decode(await provider(deps).dep(work.unit.account, c.id, work.span.f, new Date(work.span.t.getTime() - 1000)))) });
-      const bytes = new TextEncoder().encode(JSON.stringify({ zeitraum: { von: input.from, bis: input.to }, kassen: parts }, null, 1));
-      const key = tenantKey(deps.tenantId, "fiscal_archive", work.id);
+      const kassen: Record<string, unknown> = {};
+      for (const c of work.clients) kassen[c.serial] = JSON.parse(new TextDecoder().decode(await provider(deps).dep(work.account, c.id, work.span.f, new Date(work.span.t.getTime() - 1000))));
+      const bytes = new TextEncoder().encode(JSON.stringify(kassen, null, 1));
+      const key = tenantKey(deps.tenantId, "fiscal_archive", work.row.id);
       await deps.store.put(key, bytes, "application/json");
-      await withTenant(pool, schema, (tx) => tx.query("update fiscal_archives set state = 'completed', file_key = $2, bytes = $3, finished_at = clock_timestamp() where id = $1", [work.id, key, bytes.length]));
+      await withTenant(pool, schema, (tx) => tx.query("update fiscal_archives set state = 'completed', error = null, file_key = $2, bytes = $3, finished_at = clock_timestamp() where id = $1", [work.row.id, key, bytes.length]));
     } catch (err) {
-      await withTenant(pool, schema, (tx) => tx.query("update fiscal_archives set state = 'failed', error = $2, finished_at = clock_timestamp() where id = $1", [work.id, err instanceof Error ? err.message.slice(0, 300) : "error"]));
+      await withTenant(pool, schema, (tx) => tx.query("update fiscal_archives set state = 'failed', error = $2, finished_at = clock_timestamp() where id = $1", [work.row.id, err instanceof Error ? err.message.slice(0, 300) : "error"]));
     }
   }
-  return withTenant(pool, schema, async (tx) => (await tx.query<{ id: string; state: string; error: string | null }>("select id, state, error from fiscal_archives where id = $1", [work.id])).rows[0]!);
+  return withTenant(pool, schema, async (tx) => (await tx.query<{ id: string; state: string; error: string | null }>("select id, state, error from fiscal_archives where id = $1", [work.row.id])).rows[0]!);
+}
+
+/** Months of an Austrian property whose DEP is not archived yet, from its unit's first month to last month (a failed one again after a day). */
+export async function atMonthsToArchive(pool: Pool, schema: string, today: string): Promise<{ propertyId: string; from: string; to: string }[]> {
+  return withTenant(pool, schema, async (tx) =>
+    (await tx.query<{ property_id: string; f: string; t: string }>(
+      `select p.id as property_id, to_char(m, 'YYYY-MM-DD') as f, to_char(m + interval '1 month' - interval '1 day', 'YYYY-MM-DD') as t
+       from properties p join fiscal_at_units u on u.legal_entity_id = p.legal_entity_id
+       cross join lateral generate_series(date_trunc('month', u.initialized_at)::date, date_trunc('month', $1::date)::date - interval '1 month', interval '1 month') m
+       where p.country = 'AT' and not exists (select 1 from fiscal_archives a where a.property_id = p.id and a.kind = 'dep' and a.period_from = m::date
+                         and (a.state = 'completed' or (a.state = 'failed' and a.finished_at > now() - interval '20 hours')))
+       order by 2 limit 24`,
+      [today],
+    )).rows.map((r) => ({ propertyId: r.property_id, from: r.f, to: r.t })),
+  );
 }
 
 /** Austrian properties whose Legal Entity's unit is set up (the worker's work). */

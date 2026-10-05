@@ -473,10 +473,10 @@ _Avoid_: TSS, signature device, fiscal printer
 
 **Signature Unit**:
 Austria's certified signing unit (Signaturerstellungseinheit), one per Legal Entity at a cloud fiscal provider and registered with FinanzOnline; each Cash Register is a registered register of it, and the provider makes the start, monthly and yearly receipts.
-_Avoid_: SCU, TSE (in Austria), signature card
+_Avoid_: TSE (in Austria), signature card
 
 **Fiscal Outage**:
-A period in which the TSE cannot sign: the desk goes on, the Receipts carry a notice instead of the signature and are never signed later, and the outage is logged from start to end.
+A period in which the fiscal signing cannot sign: the desk goes on, the Receipts carry a notice instead of the signature, and the outage is logged from start to end. In Germany such a Receipt is never signed later; in Austria it is signed once the provider answers again, and an outage over 48 hours is reported to FinanzOnline within a week.
 _Avoid_: TSE failure, offline mode
 
 **Voucher**:

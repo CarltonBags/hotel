@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from "pg";
 import { FiscalUnavailable, adminPinFor, seal, type AtFiscalProvider, type FiscalProvider, type SignedTx } from "@hoteloftware/fiscal";
 import { tenantKey, type FileStore } from "@hoteloftware/storage";
 import {
+  AT_NOT_SIGNED_NOTICE,
   AT_OUTAGE_NOTICE,
   FISCAL_OUTAGE_NOTICE,
   FISCAL_SCOPES,
@@ -22,7 +23,7 @@ import {
 import { isUuid } from "./catalogue-common";
 import { inTestMode } from "./go-live";
 import { stayComposition } from "./invoices";
-import { atUnitOfPropertyIn, signAtReceipt } from "./fiscal-at";
+import { signAtReceipt } from "./fiscal-at";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -207,9 +208,9 @@ export async function recordFiscalIn(tx: PoolClient, receiptId: string): Promise
     [receiptId],
   )).rows[0];
   if (!r || (r.country !== "DE" && r.country !== "AT") || r.test || (await inTestMode(tx))) return;
-  // Austria signs every on-site payment, cards included; Germany as its scope says
-  const inUse = r.country === "AT" ? !!(await atUnitOfPropertyIn(tx, r.property_id)) : ((u) => !!u && fiscalScopeCovers(u.scope, r.tender))(await unitIn(tx, r.property_id));
-  if (!inUse) return;
+  // Austria signs every on-site payment, cards included, also one taken before its signature unit is set up (signed once it is);
+  // Germany as its scope says, once its TSE is in use
+  if (r.country === "DE" && !((u) => !!u && fiscalScopeCovers(u.scope, r.tender))(await unitIn(tx, r.property_id))) return;
   const amount = Number(r.amount);
   let amounts: VatAmount[];
   let businessCase: FiscalBusinessCase;
@@ -238,7 +239,9 @@ export type FiscalSignResult =
   | { state: "none" }
   | { state: "signing" }
   | { state: "signed"; propertyId: string }
-  | { state: "failed"; propertyId: string; error: string; outageStarted: boolean };
+  | { state: "failed"; propertyId: string; error: string; outageStarted: boolean }
+  /** Austria: the provider will not sign it; the desk is told when it happens (`newly`) and corrects it. */
+  | { state: "refused"; propertyId: string; newly: boolean; error?: string };
 
 /**
  * Sign one Receipt right after its payment (the desk's action, the worker
@@ -321,8 +324,10 @@ export async function receiptsToSign(pool: Pool, schema: string, limit = 50): Pr
   return withTenant(pool, schema, async (tx) =>
     (await tx.query<{ id: string }>(
       `select receipt_id as id from fiscal_transactions
-       where state = 'open' or (state = 'signing' and claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}))
-       order by created_at limit $1`,
+       -- one tried before waits a minute per attempt (at most half an hour), so receipts that keep failing never crowd out new ones
+       where (state = 'open' and (attempts = 0 or claimed_at < now() - least(attempts, 30) * interval '1 minute'))
+          or (state = 'signing' and claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}))
+       order by attempts, created_at limit $1`,
       [limit],
     )).rows.map((r) => r.id),
   );
@@ -342,15 +347,17 @@ export type ReceiptFiscal =
   | { state: "signing"; amounts: VatAmount[]; businessCase: FiscalBusinessCase };
 
 export async function receiptFiscalIn(tx: PoolClient, receiptId: string): Promise<ReceiptFiscal | null> {
-  const f = (await tx.query<{ state: string; number: string | null; time_start: Date | null; time_end: Date | null; signature: string | null; signature_counter: string | null; algorithm: string | null; public_key: string | null; tss_serial: string | null; client_serial: string | null; serial: string; timestamp_format: string | null; qr_code_data: string | null; amounts: VatAmount[]; business_case: FiscalBusinessCase; country: string; receipt_number: string | null; unit_failed: boolean; receipt_type: string; provider_serial: string | null }>(
+  const f = (await tx.query<{ state: string; number: string | null; time_start: Date | null; time_end: Date | null; signature: string | null; signature_counter: string | null; algorithm: string | null; public_key: string | null; tss_serial: string | null; client_serial: string | null; serial: string; timestamp_format: string | null; qr_code_data: string | null; amounts: VatAmount[]; business_case: FiscalBusinessCase; country: string; receipt_number: string | null; unit_failed: boolean; receipt_type: string; provider_serial: string | null; attempts: number }>(
     "select f.*, c.serial, c.provider_serial, p.country from fiscal_transactions f join fiscal_clients c on c.id = f.client_id join properties p on p.id = f.property_id where f.receipt_id = $1",
     [receiptId],
   )).rows[0];
   if (!f) return null;
   if (f.country === "AT") {
     if (f.state === "signed") return { state: "at_signed", receiptNumber: f.receipt_number!, timeSignature: f.time_start!, registerSerial: f.client_serial ?? f.provider_serial ?? "", qrCodeData: f.qr_code_data!, unitFailed: f.unit_failed, cancellation: f.receipt_type === "cancellation", amounts: f.amounts };
-    // not signed yet (the provider unreachable): the guest's Receipt says so; it is signed once the provider answers
-    return { state: "at_unsigned", notice: AT_OUTAGE_NOTICE, registerSerial: f.provider_serial, cancellation: f.receipt_type === "cancellation", amounts: f.amounts };
+    // refused by the provider: the desk corrects it; tried and not reached: the guest's Receipt says so and is signed once the provider answers
+    if (f.state === "failed") return { state: "at_unsigned", notice: AT_NOT_SIGNED_NOTICE, registerSerial: f.provider_serial, cancellation: f.receipt_type === "cancellation", amounts: f.amounts };
+    if (f.attempts > 0 && f.state === "open") return { state: "at_unsigned", notice: AT_OUTAGE_NOTICE, registerSerial: f.provider_serial, cancellation: f.receipt_type === "cancellation", amounts: f.amounts };
+    return { state: "signing", amounts: f.amounts, businessCase: f.business_case };
   }
   if (f.state === "open" || f.state === "signing") return { state: "signing", amounts: f.amounts, businessCase: f.business_case };
   if (f.state === "failed") return { state: "failed", notice: FISCAL_OUTAGE_NOTICE, clientSerial: f.serial, amounts: f.amounts, businessCase: f.business_case };

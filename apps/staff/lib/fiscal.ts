@@ -1,5 +1,5 @@
 import { receiptsOfPaymentToSign, signReceipt, type FiscalDeps } from "@hoteloftware/db";
-import { notifyFiscalOutage } from "@hoteloftware/events";
+import { notifyFiscalOutage, notifyReceiptRefused } from "@hoteloftware/events";
 import { atFiscalProvider, fiscalProvider, fiscalSecret } from "@hoteloftware/fiscal";
 import { pool } from "./db";
 
@@ -26,5 +26,6 @@ export async function signPaymentReceipts(tenant: { id: string; schemaName: stri
   for (const id of await receiptsOfPaymentToSign(pool(), tenant.schemaName, paymentId).catch(() => [])) {
     const r = await signReceipt(pool(), tenant.schemaName, deps, id).catch((err) => (console.error("[fiscal] sign", err), null));
     if (r?.state === "failed" && r.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: r.propertyId, error: r.error }).catch(() => undefined);
+    if (r?.state === "refused" && r.newly) await notifyReceiptRefused(pool(), tenant, { propertyId: r.propertyId, error: r.error ?? "" }).catch(() => undefined);
   }
 }

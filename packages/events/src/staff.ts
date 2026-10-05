@@ -81,8 +81,8 @@ export async function notifySelfCheckin(
 export function notifyFiscalOutage(pool: Pool, tenant: { id: string; schemaName: string }, o: { propertyId: string; error: string }): Promise<void> {
   return notifyWithRight(pool, tenant, "manage_cash_desk", o.propertyId, {
     kind: "fiscal.outage",
-    title: "TSE outage: Receipts are not signed",
-    body: `The desk goes on; Receipts carry the outage notice until the TSE answers again. Reason: ${o.error}`,
+    title: "Fiscal signing outage: Receipts are not signed now",
+    body: `The desk goes on; Receipts carry the outage notice until the signature service answers again (in Austria they are signed then). Reason: ${o.error}`,
     href: "/settings/cash-desk",
   });
 }
@@ -104,6 +104,16 @@ export function notifyYearlyReceipt(pool: Pool, tenant: { id: string; schemaName
     kind: "fiscal.yearly_receipt",
     title: `Print and check the yearly receipt by ${r.checkBy}`,
     body: `Kassen-ID ${r.registerSerial}: print the yearly receipt, check it, then mark it in Settings → Cash desk.`,
+    href: "/settings/cash-desk",
+  });
+}
+
+/** Austria: the provider refused to sign a Receipt; the desk corrects it (cancellation and a new Receipt). */
+export function notifyReceiptRefused(pool: Pool, tenant: { id: string; schemaName: string }, r: { propertyId: string; error: string }): Promise<void> {
+  return notifyWithRight(pool, tenant, "manage_cash_desk", r.propertyId, {
+    kind: "fiscal.refused",
+    title: "A Receipt could not be signed",
+    body: `The signature service refused it: ${r.error}. Correct it with a cancellation and a new payment.`,
     href: "/settings/cash-desk",
   });
 }

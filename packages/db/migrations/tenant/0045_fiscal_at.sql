@@ -28,6 +28,9 @@ alter table fiscal_transactions add column receipt_type text not null default 'n
 alter table fiscal_transactions add column receipt_number text;
 alter table fiscal_transactions add column hints jsonb not null default '[]';
 alter table fiscal_transactions add column unit_failed boolean not null default false;
+-- signed: Germany with the TSE's signature and transaction number, Austria with the provider's receipt number; both with the code
+alter table fiscal_transactions drop constraint fiscal_transactions_signed_check;
+alter table fiscal_transactions add constraint fiscal_transactions_signed_check check (state <> 'signed' or (qr_code_data is not null and ((signature is not null and number is not null) or receipt_number is not null)));
 
 -- an outage over 48 hours is reported to FinanzOnline within a week: reminded, then marked reported
 alter table fiscal_outages add column reminded_at timestamptz;

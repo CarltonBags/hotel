@@ -75,6 +75,7 @@ export default async function CashDeskSettingsPage() {
           <Field label={m["cashset.registerName"]} name="name" required />
         </ActionForm>
       </section>
+      {property.country === "AT" ? (
       <section aria-label={m["fiscal.printer"]} className={section} data-receipt-printer>
         <h2 className="font-medium">{m["fiscal.printer"]}</h2>
         <p className="text-ink-60">{m["fiscal.printerHelp"]}</p>
@@ -83,6 +84,7 @@ export default async function CashDeskSettingsPage() {
           <Field label={m["fiscal.printerName"]} name="printer" defaultValue={printer} />
         </ActionForm>
       </section>
+      ) : null}
       {at ? (
         <section aria-label={m["fiscalat.title"]} className={section} data-fiscal-at>
           <h2 className="font-medium">{m["fiscalat.title"]}</h2>
