@@ -43,8 +43,8 @@ async function factsIn(tx: PoolClient, tenantId: string): Promise<GoLiveFacts> {
        a.charges_enabled
      from legal_entities l left join payment_accounts a on a.legal_entity_id = l.id order by l.name`,
   );
-  const props = await tx.query<{ name: string; rooms: number; priced_through: string | null; city_tax: boolean; today: string }>(
-    `select p.name, (select count(*)::int from rooms r where r.property_id = p.id) as rooms,
+  const props = await tx.query<{ name: string; rooms: number; priced_through: string | null; city_tax: boolean; today: string; country: string; printer: boolean }>(
+    `select p.name, p.country, p.receipt_printer <> '' as printer, (select count(*)::int from rooms r where r.property_id = p.id) as rooms,
        (select to_char(max(x.date), 'YYYY-MM-DD') from rates x join rate_plans rp on rp.id = x.rate_plan_id where rp.property_id = p.id) as priced_through,
        exists (select 1 from city_tax_rules c where c.property_id = p.id) as city_tax,
        to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today
@@ -57,7 +57,7 @@ async function factsIn(tx: PoolClient, tenantId: string): Promise<GoLiveFacts> {
   const devices = await tx.query<{ n: number }>("select count(*)::int as n from control.devices where tenant_id = $1 and revoked_at is null", [tenantId]);
   return {
     legalEntities: legalEntities.rows.map((l) => ({ name: l.name, hasTaxData: l.tax, hasTaxCodes: l.codes, hasInvoiceNumbering: l.numbering, card: l.charges_enabled === null ? null : { chargesEnabled: l.charges_enabled } })),
-    properties: props.rows.map((p) => ({ name: p.name, rooms: p.rooms, pricedThrough: p.priced_through, cityTaxRule: p.city_tax, today: p.today })),
+    properties: props.rows.map((p) => ({ name: p.name, rooms: p.rooms, pricedThrough: p.priced_through, cityTaxRule: p.city_tax, country: p.country, receiptPrinter: p.printer, today: p.today })),
     staffUsers: users.rows[0]!.n,
     devices: devices.rows[0]!.n,
   };

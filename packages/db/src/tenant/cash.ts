@@ -57,6 +57,17 @@ export async function setCashDesk(pool: Pool, schema: string, propertyId: string
   });
 }
 
+/** The desk's Receipt printer (Austria requires one, ticket 52): a name or network address. */
+export async function setReceiptPrinter(pool: Pool, schema: string, propertyId: string, printer: string): Promise<void> {
+  if (!isUuid(propertyId)) throw new Error("Property not found");
+  await withTenant(pool, schema, (tx) => tx.query("update properties set receipt_printer = $2 where id = $1", [propertyId, printer.trim().slice(0, 120)]));
+}
+
+export async function receiptPrinterOf(pool: Pool, schema: string, propertyId: string): Promise<string> {
+  if (!isUuid(propertyId)) return "";
+  return withTenant(pool, schema, async (tx) => (await tx.query<{ p: string }>("select receipt_printer as p from properties where id = $1", [propertyId])).rows[0]?.p ?? "");
+}
+
 export interface CashRegister {
   id: string;
   name: string;

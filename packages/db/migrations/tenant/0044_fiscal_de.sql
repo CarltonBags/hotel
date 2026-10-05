@@ -72,7 +72,7 @@ create table fiscal_transactions (
   qr_code_data text,
   error text,
   finished_at timestamptz,
-  constraint fiscal_transactions_signed_check check (state <> 'signed' or (signature is not null and qr_code_data is not null and number is not null)),
+  constraint fiscal_transactions_signed_check check (state <> 'signed' or qr_code_data is not null),
   constraint fiscal_transactions_failed_check check (state <> 'failed' or error is not null),
   constraint fiscal_transactions_claim_check check ((state = 'signing') = (claim is not null))
 );

@@ -45,6 +45,7 @@ export const properties = pgTable(
     cantonProfile: jsonb("canton_profile"),
     selfCheckinToken: text("self_checkin_token").notNull().default(sql`replace(gen_random_uuid()::text, '-', '')`),
     keyHandover: text("key_handover").notNull().default("reception"),
+    receiptPrinter: text("receipt_printer").notNull().default(""),
     portalPhotoFileId: uuid("portal_photo_file_id").references((): AnyPgColumn => storedFiles.id, { onDelete: "set null" }),
     legalEntityId: uuid("legal_entity_id")
       .notNull()
@@ -2289,6 +2290,8 @@ export const fiscalClients = pgTable(
     registeredAt: timestamp("registered_at", { withTimezone: true }),
     dsfinvkRegisteredAt: timestamp("dsfinvk_registered_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    providerSerial: text("provider_serial"),
+    initializationReceiptId: text("initialization_receipt_id"),
   },
   (t) => [check("fiscal_clients_serial_check", sql`${t.serial} ~ '^[A-Za-z0-9-]{1,70}$'`), uniqueIndex("fiscal_clients_desk_idx").on(t.propertyId).where(sql`${t.registerId} is null`)],
 );
@@ -2324,11 +2327,16 @@ export const fiscalTransactions = pgTable(
     qrCodeData: text("qr_code_data"),
     error: text("error"),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    receiptType: text("receipt_type").notNull().default("normal"),
+    receiptNumber: text("receipt_number"),
+    hints: jsonb("hints").notNull().default(sql`'[]'`),
+    unitFailed: boolean("unit_failed").notNull().default(false),
   },
   (t) => [
+    check("fiscal_transactions_receipt_type_check", sql`${t.receiptType} in ('normal', 'cancellation')`),
     check("fiscal_transactions_state_check", sql`${t.state} in ('open', 'signing', 'signed', 'failed')`),
     check("fiscal_transactions_case_check", sql`${t.businessCase} in ('Umsatz', 'Anzahlungseinstellung')`),
-    check("fiscal_transactions_signed_check", sql`${t.state} <> 'signed' or (${t.signature} is not null and ${t.qrCodeData} is not null and ${t.number} is not null)`),
+    check("fiscal_transactions_signed_check", sql`${t.state} <> 'signed' or ${t.qrCodeData} is not null`),
     check("fiscal_transactions_failed_check", sql`${t.state} <> 'failed' or ${t.error} is not null`),
     check("fiscal_transactions_claim_check", sql`(${t.state} = 'signing') = (${t.claim} is not null)`),
     index("fiscal_transactions_day_idx").on(t.clientId, t.businessDate),
@@ -2345,6 +2353,9 @@ export const fiscalOutages = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     error: text("error").notNull(),
+    remindedAt: timestamp("reminded_at", { withTimezone: true }),
+    reportedAt: timestamp("reported_at", { withTimezone: true }),
+    reportedBy: text("reported_by"),
   },
   (t) => [uniqueIndex("fiscal_outages_open_idx").on(t.clientId).where(sql`${t.endedAt} is null`)],
 );
@@ -2388,9 +2399,46 @@ export const fiscalArchives = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (t) => [
-    check("fiscal_archives_kind_check", sql`${t.kind} in ('tss', 'dsfinvk')`),
+    check("fiscal_archives_kind_check", sql`${t.kind} in ('tss', 'dsfinvk', 'dep')`),
     check("fiscal_archives_state_check", sql`${t.state} in ('pending', 'completed', 'failed')`),
     unique("fiscal_archives_property_id_kind_period_from_period_to_key").on(t.propertyId, t.kind, t.periodFrom, t.periodTo),
+  ],
+);
+
+export const fiscalAtUnits = pgTable("fiscal_at_units", {
+  legalEntityId: uuid("legal_entity_id").primaryKey().references(() => legalEntities.id),
+  provider: text("provider").notNull(),
+  scuId: uuid("scu_id").notNull().unique(),
+  certificateSerial: text("certificate_serial").notNull().default(""),
+  apiKey: text("api_key").notNull(),
+  apiSecretSealed: text("api_secret_sealed").notNull(),
+  fonParticipantId: text("fon_participant_id").notNull(),
+  fonUserId: text("fon_user_id").notNull(),
+  fonPinSealed: text("fon_pin_sealed").notNull(),
+  initializedAt: timestamp("initialized_at", { withTimezone: true }),
+  createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+});
+
+export const fiscalSystemReceipts = pgTable(
+  "fiscal_system_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    clientId: uuid("client_id").notNull().references(() => fiscalClients.id),
+    providerReceiptId: text("provider_receipt_id").notNull(),
+    receiptType: text("receipt_type").notNull(),
+    receiptNumber: text("receipt_number").notNull(),
+    timeSignature: timestamp("time_signature", { withTimezone: true }).notNull(),
+    qrCodeData: text("qr_code_data").notNull(),
+    validation: text("validation"),
+    printedAt: timestamp("printed_at", { withTimezone: true }),
+    printedBy: text("printed_by"),
+  },
+  (t) => [
+    check("fiscal_system_receipts_type_check", sql`${t.receiptType} in ('INITIALIZATION', 'MONTHLY_CLOSE', 'YEARLY_CLOSE', 'DECOMMISSION', 'SIGNATURE_CREATION_UNIT_FAULT_CLEARANCE')`),
+    check("fiscal_system_receipts_validation_check", sql`${t.validation} in ('SUCCESS', 'ERROR')`),
+    unique("fiscal_system_receipts_client_id_provider_receipt_id_key").on(t.clientId, t.providerReceiptId),
   ],
 );
 
@@ -2510,4 +2558,6 @@ export const tenantSchema = {
   fiscalOutages,
   fiscalClosings,
   fiscalArchives,
+  fiscalAtUnits,
+  fiscalSystemReceipts,
 };

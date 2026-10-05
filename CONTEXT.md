@@ -471,6 +471,10 @@ _Avoid_: Beleg, bon, slip, invoice
 The certified signing unit, run by a cloud fiscal provider, that signs every Receipt of a German property; each Cash Register is one of its clients with a serial that never changes.
 _Avoid_: TSS, signature device, fiscal printer
 
+**Signature Unit**:
+Austria's certified signing unit (Signaturerstellungseinheit), one per Legal Entity at a cloud fiscal provider and registered with FinanzOnline; each Cash Register is a registered register of it, and the provider makes the start, monthly and yearly receipts.
+_Avoid_: SCU, TSE (in Austria), signature card
+
 **Fiscal Outage**:
 A period in which the TSE cannot sign: the desk goes on, the Receipts carry a notice instead of the signature and are never signed later, and the outage is logged from start to end.
 _Avoid_: TSE failure, offline mode

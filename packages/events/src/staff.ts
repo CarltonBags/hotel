@@ -86,3 +86,24 @@ export function notifyFiscalOutage(pool: Pool, tenant: { id: string; schemaName:
     href: "/settings/cash-desk",
   });
 }
+
+/** Austria (ticket 52): an outage over 48 hours, to be reported to FinanzOnline within a week, with what the report needs. */
+export function notifyAtOutageReport(pool: Pool, tenant: { id: string; schemaName: string }, o: { propertyId: string; propertyName: string; registerSerial: string; startedAt: Date; endedAt: Date | null; reportBy: Date; error: string }): Promise<void> {
+  const at = (d: Date) => d.toLocaleString("de-AT", { timeZone: "Europe/Vienna" });
+  return notifyWithRight(pool, tenant, "manage_cash_desk", o.propertyId, {
+    kind: "fiscal.outage",
+    title: `Report the outage to FinanzOnline by ${at(o.reportBy)}`,
+    body: `${o.propertyName}, Kassen-ID ${o.registerSerial}: out since ${at(o.startedAt)}${o.endedAt ? ` until ${at(o.endedAt)}` : " (ongoing)"}. Reason: ${o.error}. Report it in FinanzOnline, then mark it reported in Settings → Cash desk.`,
+    href: "/settings/cash-desk",
+  });
+}
+
+/** Austria: the yearly receipt is printed and checked by 15 February. */
+export function notifyYearlyReceipt(pool: Pool, tenant: { id: string; schemaName: string }, r: { propertyId: string; registerSerial: string; checkBy: string }): Promise<void> {
+  return notifyWithRight(pool, tenant, "manage_cash_desk", r.propertyId, {
+    kind: "fiscal.yearly_receipt",
+    title: `Print and check the yearly receipt by ${r.checkBy}`,
+    body: `Kassen-ID ${r.registerSerial}: print the yearly receipt, check it, then mark it in Settings → Cash desk.`,
+    href: "/settings/cash-desk",
+  });
+}

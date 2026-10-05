@@ -2,7 +2,7 @@ import { config } from "dotenv";
 import { resolve } from "node:path";
 import { createPool } from "@hoteloftware/db";
 import { paymentProvider } from "@hoteloftware/payments";
-import { fiscalProvider, fiscalSecret } from "@hoteloftware/fiscal";
+import { atFiscalProvider, fiscalProvider, fiscalSecret } from "@hoteloftware/fiscal";
 import { mailProvider, smsProvider, whatsAppProvider } from "@hoteloftware/messaging";
 import { channelManager } from "@hoteloftware/channels";
 import { inboundProcessor, inboundWebhookSource, INBOUND_SOURCE, mailProcessor, mailWebhookSource, MAIL_SOURCE, whatsAppProcessor, whatsAppWebhookSource } from "./messaging";
@@ -56,7 +56,7 @@ const boss = await startQueue(pool, directUrl, {
   messaging: { mail, sms, whatsapp, platformDomain },
   // Channex with CHANNEX_API_KEY (staging unless CHANNEX_URL says otherwise), else the in-memory fake
   channelManager: channels,
-  fiscal: { provider: fiscalProvider(), secret: fiscalKey },
+  fiscal: { provider: fiscalProvider(), at: atFiscalProvider(), secret: fiscalKey },
   channelWebhook: workerUrl && channelWebhookSecret ? { url: `${workerUrl}/webhooks/${channels.name}`, secret: channelWebhookSecret } : undefined,
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });
