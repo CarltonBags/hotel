@@ -267,4 +267,4 @@ export { AT_NOT_SIGNED_NOTICE, AT_OUTAGE_NOTICE, AT_OUTAGE_REPORT_DAYS, AT_OUTAG
 export { VOUCHER_SALE_TENDERS, maskVoucherCode, normalizeVoucherCode, voucherBalance, voucherCode, type VoucherSaleTender } from "./vouchers";
 export { GROUP_STATUSES, RELEASE_WARNING_DAYS, groupStatusAllowed, releaseDateFor, releaseWarningDue, seriesArrivals, tentativeShortfall, unsoldHeld, type GroupStatus } from "./groups";
 export { checkRoomingList, depositStatus, parseRoomingList, roomsTogether, tourLeaderRegisters, type DepositInstallment, type FreeRoom, type RoomingProblem, type RoomingRow } from "./group-rooming";
-export { OUTLET_KINDS, PRINTER_KINDS, billTotal, eposPrintXml, lineFor, mayManageOutlet, splitIsValid, ticketsFor, ticketText, type BillLineDraft, type Modifier, type OutletKind, type PrintTicket, type PrinterKind } from "./outlets";
+export { OUTLET_KINDS, PRINTER_KINDS, billTotal, eposPrintXml, lineFor, mayManageOutlet, splitIsValid, ticketsFor, ticketText, worksAnOutlet, type BillLineDraft, type Modifier, type OutletKind, type PrintTicket, type PrinterKind } from "./outlets";

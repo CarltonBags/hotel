@@ -188,19 +188,21 @@ export function BillScreen({ bill, menu, tables, companies, currency, rights, m 
               >
                 {m["outlet.payCash"]} · {money(bill.total)}
               </button>
-              <div className="flex gap-2">
-                <select value={company} onChange={(e) => setCompany(e.target.value)} aria-label={m["outlet.company"]} className="h-11 flex-1 rounded-full border border-ink-10 bg-surface px-3">
-                  <option value="">{m["outlet.company"]}</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                <button type="button" disabled={pending || !company || !bill.lines.length} onClick={() => run(() => invoiceBillAction(outletId, bill.id, company))} className={`${button} border border-ink-10`} data-invoice>
-                  {m["outlet.invoiceCompany"]}
-                </button>
-              </div>
+              {rights.serve ? (
+                <div className="flex gap-2">
+                  <select value={company} onChange={(e) => setCompany(e.target.value)} aria-label={m["outlet.company"]} className="h-11 flex-1 rounded-full border border-ink-10 bg-surface px-3">
+                    <option value="">{m["outlet.company"]}</option>
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" disabled={pending || !company || !bill.lines.length} onClick={() => run(() => invoiceBillAction(outletId, bill.id, company))} className={`${button} border border-ink-10`} data-invoice>
+                    {m["outlet.invoiceCompany"]}
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {bill.status === "paid" ? (

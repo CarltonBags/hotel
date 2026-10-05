@@ -24,10 +24,12 @@ export function PrintAgent({ outletId, labels }: { outletId: string; labels: { p
           let error: string | null = null;
           if (j.address) {
             try {
-              const res = await fetch(`${j.address.replace(/\/$/, "")}/cgi-bin/epos/service.cgi?devid=local_printer&timeout=10000`, {
+              // ten seconds for the printer, well inside the two minutes before another device may take the job
+              const res = await fetch(`${j.address.replace(/\/$/, "")}/cgi-bin/epos/service.cgi?devid=local_printer&timeout=8000`, {
                 method: "POST",
                 headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: '""' },
                 body: eposPrintXml(j.text),
+                signal: AbortSignal.timeout(10_000),
               });
               const body = await res.text();
               if (!res.ok || !/success="true"/.test(body)) error = /code="([^"]+)"/.exec(body)?.[1] ?? `HTTP ${res.status}`;
@@ -35,7 +37,8 @@ export function PrintAgent({ outletId, labels }: { outletId: string; labels: { p
               error = "Printer not reachable";
             }
           }
-          await reportPrintAction(outletId, j.id, error === null, error ?? "");
+          // a lost answer leaves the job taken: it comes back after two minutes
+          await reportPrintAction(outletId, j.id, error === null, error ?? "").catch(() => undefined);
           // on screen: tickets of printers without an address, and failures to print by hand
           if (!j.address || error) setShown((s) => [{ id: j.id, printer: j.printerName, text: j.text, error }, ...s.filter((x) => x.id !== j.id)].slice(0, 6));
         }

@@ -14,8 +14,14 @@ import { formAction, type FormState } from "@/lib/form";
 const PATH = "/cash";
 
 async function desk(propertyId: string, action: "handle_cash" | "paid_out" | "manage_cash" = "handle_cash") {
-  // outlet staff work their outlet's register (ticket 60); the db layer tells the registers apart
-  const { tenant, session, actor } = await authorize(action, String(propertyId)).catch((err: unknown) => (action === "handle_cash" ? authorize("outlet_cash", String(propertyId)) : Promise.reject(err)));
+  const { tenant, session, actor } = await authorize(action, String(propertyId));
+  return { schema: tenant.schemaName, tenantId: tenant.id, viewer: { userId: session.user.id, actor }, userName: session.user.name };
+}
+
+/** Opening, counting and closing a Shift: the desk, or outlet staff on their outlet's register (ticket 60; the db layer tells the registers apart). */
+async function shiftHolder(propertyId: string) {
+  const at = String(propertyId);
+  const { tenant, session, actor } = await authorize("outlet_cash", at).catch(() => authorize("handle_cash", at));
   return { schema: tenant.schemaName, tenantId: tenant.id, viewer: { userId: session.user.id, actor }, userName: session.user.name };
 }
 
@@ -31,7 +37,7 @@ async function tellManagers(tenantId: string, propertyId: string, title: string)
 export async function openShiftAction(propertyId: string, registerId: string, count: CashCount, reason: string | null): Promise<FormState & { needsReason?: boolean }> {
   let needsReason = false;
   const state = await formAction(async () => {
-    const { schema, tenantId, viewer, userName } = await desk(propertyId);
+    const { schema, tenantId, viewer, userName } = await shiftHolder(propertyId);
     try {
       const opened = await openShift(pool(), schema, { registerId: String(registerId), count, reason }, viewer);
       if (reason && opened.difference !== 0) await tellManagers(tenantId, String(propertyId), `Opening count differs by ${opened.difference.toFixed(2)} (${userName}): ${reason.trim()}`);
@@ -49,7 +55,7 @@ export async function openShiftAction(propertyId: string, registerId: string, co
 export async function closeCountAction(propertyId: string, shiftId: string, count: CashCount): Promise<FormState & { result?: CloseResult }> {
   let result: CloseResult | undefined;
   const state = await formAction(async () => {
-    const { schema, viewer } = await desk(propertyId);
+    const { schema, viewer } = await shiftHolder(propertyId);
     result = await submitCloseCount(pool(), schema, { shiftId: String(shiftId), count }, viewer);
     revalidatePath(PATH);
   });
@@ -59,7 +65,7 @@ export async function closeCountAction(propertyId: string, shiftId: string, coun
 /** Close with the reason for a difference above the tolerance; the property's Property Managers are told. */
 export async function closeWithReasonAction(propertyId: string, shiftId: string, reason: string): Promise<FormState> {
   return formAction(async () => {
-    const { schema, tenantId, viewer, userName } = await desk(propertyId);
+    const { schema, tenantId, viewer, userName } = await shiftHolder(propertyId);
     const closed = await closeShiftWithReason(pool(), schema, { shiftId: String(shiftId), reason: String(reason ?? "") }, viewer);
     await tellManagers(tenantId, closed.propertyId, `Cash difference of ${closed.difference.toFixed(2)} at ${closed.registerName} (${userName}): ${String(reason).trim()}`);
     revalidatePath(PATH);

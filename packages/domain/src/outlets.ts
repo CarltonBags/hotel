@@ -78,9 +78,14 @@ export function ticketText(t: PrintTicket): string {
   ].join("\n");
 }
 
-/** A split moves at least one of the bill's own lines. */
+/** A split moves some of the bill's own lines, never all (the bill would be left empty). */
 export function splitIsValid(lineIds: string[], moving: string[]): boolean {
-  return moving.length > 0 && moving.every((id) => lineIds.includes(id));
+  return moving.length > 0 && moving.length < lineIds.length && moving.every((id) => lineIds.includes(id));
+}
+
+/** Works at an outlet of the property: serves its tables, takes its money, or manages one. */
+export function worksAnOutlet(actor: Actor, propertyId: string): boolean {
+  return can(actor, "serve_outlet", propertyId) || can(actor, "outlet_cash", propertyId) || can(actor, "manage_own_outlets", propertyId);
 }
 
 /** Menus, prices, printers and tables of an outlet: the Property Manager, or an Outlet Manager of that outlet. */

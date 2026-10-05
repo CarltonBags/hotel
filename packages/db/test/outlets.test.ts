@@ -10,7 +10,7 @@ import { applyTaxPreset, listTaxCodes } from "../src/tenant/tax-codes";
 import { createService } from "../src/tenant/services";
 import { createCompany } from "../src/tenant/companies";
 import { createCashRegister, openShift, receiptByToken, setCashDesk } from "../src/tenant/cash";
-import { invoiceDocument, setInvoiceNumberRange } from "../src/tenant/invoices";
+import { cancelInvoice, invoiceDocument, setInvoiceNumberRange } from "../src/tenant/invoices";
 import {
   addBillItem,
   createOutlet,
@@ -141,7 +141,9 @@ describe("Outlets", () => {
     expect(a.total + b.total).toBe(before);
     expect(b.total).toBe(19);
     expect(b.tableId).toBe(t1);
-    await expect(splitOutletBill(pool, s(), bill, [], waiter)).rejects.toThrow(/Choose items/);
+    await expect(splitOutletBill(pool, s(), bill, [], waiter)).rejects.toThrow(/Choose some/);
+    // never every item: the bill would stand empty
+    await expect(splitOutletBill(pool, s(), other, (await outletBill(pool, s(), other, waiter)).lines.map((l) => l.id), waiter)).rejects.toThrow(/not all/);
     await moveOutletBill(pool, s(), other, t2, waiter);
     const floor = await outletFloor(pool, s(), bar, waiter);
     expect(floor.tables.find((t) => t.id === t2)!.bills.map((x) => [x.id, x.total])).toEqual([[other, 19]]);
@@ -180,5 +182,14 @@ describe("Outlets", () => {
     expect(doc.buyer.name).toBe("Event AG");
     expect(doc.reference).toBe(`Bar ${(await outletBill(pool, s(), bill, waiter)).number}`);
     expect(doc.totals.gross).toBe(190);
+    // Spa Staff take money but invoice no Company event
+    const spa = { userId: "user_spa", actor: { propertyRoles: [{ propertyId, role: "spa_staff" as const }] } };
+    const b2 = await openOutletBill(pool, s(), bar, { tableId: null, label: "" }, waiter);
+    await addBillItem(pool, s(), b2, { menuItemId: schnitzel, quantity: 1, modifiers: [], note: "" }, waiter);
+    await sendOrderRound(pool, s(), b2, waiter);
+    await expect(invoiceOutletBill(pool, s(), b2, { companyId: company }, spa)).rejects.toThrow(/Not allowed/);
+    // an outlet invoice is corrected like any other: a Cancellation Invoice
+    const cancellation = await cancelInvoice(pool, s(), inv.id, "Wrong company", pm.userId);
+    expect(cancellation.kind).toBe("cancellation");
   });
 });

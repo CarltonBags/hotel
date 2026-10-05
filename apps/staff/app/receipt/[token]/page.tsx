@@ -84,13 +84,16 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
               </div>
             ))}
           </>
-        ) : null}
-        <dt className={r.outletSale ? "hidden" : ""}>Leistung / Service</dt>
-        <dd className={`text-right${r.outletSale ? " hidden" : ""}`} data-receipt-service>
-          {r.voucherSale
-            ? `1 × Wertgutschein / Voucher ••••-${r.voucherSale.codeEnd}`
-            : `1 × ${f && "businessCase" in f && f.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} ${r.stay ? `${day(r.stay.arrival)}–${day(r.stay.departure)}` : ""}`}
-        </dd>
+        ) : (
+          <>
+            <dt>Leistung / Service</dt>
+            <dd className="text-right" data-receipt-service>
+              {r.voucherSale
+                ? `1 × Wertgutschein / Voucher ••••-${r.voucherSale.codeEnd}`
+                : `1 × ${f && "businessCase" in f && f.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} ${r.stay ? `${day(r.stay.arrival)}–${day(r.stay.departure)}` : ""}`}
+            </dd>
+          </>
+        )}
         <dt>Zahlungsart / Tender</dt>
         <dd className="text-right">{tender}</dd>
         <dt className="font-bold">{r.refund ? "Erstattet / Refunded" : "Bezahlt / Paid"}</dt>

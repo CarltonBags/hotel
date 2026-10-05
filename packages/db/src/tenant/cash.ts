@@ -452,7 +452,10 @@ export async function cashBook(pool: Pool, schema: string, registerId: string, v
   return withTenant(pool, schema, async (tx) => {
     const g = (await tx.query<{ id: string; name: string; property_id: string }>("select id, name, property_id from cash_registers where id = $1", [registerId])).rows[0];
     if (!g) throw new Error("Register not found");
-    const all = can(viewer.actor, "manage_cash", g.property_id);
+    // an Outlet Manager sees the Cash Books of own outlets' registers (ticket 60)
+    const all =
+      can(viewer.actor, "manage_cash", g.property_id) ||
+      (can(viewer.actor, "manage_own_outlets", g.property_id) && (await tx.query("select 1 from outlets o join outlet_managers m on m.outlet_id = o.id where o.cash_register_id = $1 and m.user_id = $2", [g.id, viewer.userId])).rows.length > 0);
     const own = !all ? (await tx.query<{ id: string; counted: boolean }>("select id, counted_at is not null as counted from cash_shifts where register_id = $1 and user_id = $2 and closed_at is null", [g.id, viewer.userId])).rows[0] : undefined;
     if (!all && !own) throw new Error("Not allowed to see this Cash Book");
     const { rows } = await tx.query<{ id: string; at: Date; kind: CashMovementKind; amount: string; reason: string; account: string; by_user: string; approved_by: string | null; shift_id: string | null; payment_id: string | null; confirmation_number: string | null; has_photo: boolean }>(

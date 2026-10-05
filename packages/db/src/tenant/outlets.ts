@@ -73,6 +73,11 @@ async function outletIn(tx: PoolClient, outletId: string): Promise<Outlet> {
   return toOutlet(o);
 }
 
+/** Sees the outlet's tables and bills: serves them or takes their money. */
+function needWork(viewer: Viewer, propertyId: string): void {
+  if (!can(viewer.actor, "serve_outlet", propertyId) && !can(viewer.actor, "outlet_cash", propertyId)) throw new Error("Not allowed at this outlet");
+}
+
 function needManage(viewer: Viewer, o: Outlet): void {
   if (!mayManageOutlet(viewer.actor, viewer.userId, o)) throw new Error("Only the Property Manager or this outlet's Outlet Manager may change it");
 }
@@ -122,7 +127,7 @@ export async function updateOutlet(pool: Pool, schema: string, outletId: string,
   });
 }
 
-/** Who manages the outlet's menu, prices, printers and tables: users holding the Outlet Manager role at its property. */
+/** Who manages the outlet's menu, prices, printers and tables; it counts for users holding the Outlet Manager role at its property (mayManageOutlet). */
 export async function setOutletManagers(pool: Pool, schema: string, outletId: string, userIds: string[], viewer: Viewer): Promise<void> {
   await withTenant(pool, schema, async (tx) => {
     const o = await outletIn(tx, outletId);
@@ -186,7 +191,7 @@ async function setupIn(tx: PoolClient, o: Outlet, viewer: Viewer): Promise<Outle
 export async function outletSetup(pool: Pool, schema: string, outletId: string, viewer: Viewer): Promise<OutletSetup> {
   return withTenant(pool, schema, async (tx) => {
     const o = await outletIn(tx, outletId);
-    if (!mayManageOutlet(viewer.actor, viewer.userId, o) && !can(viewer.actor, "serve_outlet", o.propertyId) && !can(viewer.actor, "outlet_cash", o.propertyId)) throw new Error("Not allowed at this outlet");
+    if (!mayManageOutlet(viewer.actor, viewer.userId, o)) needWork(viewer, o.propertyId);
     return setupIn(tx, o, viewer);
   });
 }
@@ -260,7 +265,8 @@ export async function saveMenuItem(pool: Pool, schema: string, outletId: string,
 /** The outlets the user works at a property: serves, takes money at, or manages. */
 export async function outletsToWork(pool: Pool, schema: string, propertyId: string, viewer: Viewer): Promise<Outlet[]> {
   const all = (await listOutlets(pool, schema, propertyId)).filter((o) => o.active);
-  return all.filter((o) => can(viewer.actor, "serve_outlet", propertyId) || can(viewer.actor, "outlet_cash", propertyId) || mayManageOutlet(viewer.actor, viewer.userId, o));
+  const works = can(viewer.actor, "serve_outlet", propertyId) || can(viewer.actor, "outlet_cash", propertyId);
+  return all.filter((o) => works || mayManageOutlet(viewer.actor, viewer.userId, o));
 }
 
 export interface OpenBill {
@@ -285,7 +291,7 @@ export interface OutletFloor {
 export async function outletFloor(pool: Pool, schema: string, outletId: string, viewer: Viewer): Promise<OutletFloor> {
   return withTenant(pool, schema, async (tx) => {
     const o = await outletIn(tx, outletId);
-    if (!can(viewer.actor, "serve_outlet", o.propertyId) && !can(viewer.actor, "outlet_cash", o.propertyId)) throw new Error("Not allowed at this outlet");
+    needWork(viewer, o.propertyId);
     const tables = (await tx.query<{ id: string; name: string; seats: number }>("select id, name, seats from outlet_tables where outlet_id = $1 and active order by sort_order, name", [o.id])).rows;
     const bills = (await tx.query<{ id: string; number: number; table_id: string | null; label: string; total: string; unsent: number; opened_at: Date }>(
       `select b.id, b.number, b.table_id, b.label, b.opened_at,
@@ -378,7 +384,7 @@ export interface OutletBillView {
 export async function outletBill(pool: Pool, schema: string, billId: string, viewer: Viewer): Promise<OutletBillView> {
   return withTenant(pool, schema, async (tx) => {
     const b = await billIn(tx, billId);
-    if (!can(viewer.actor, "serve_outlet", b.property_id) && !can(viewer.actor, "outlet_cash", b.property_id)) throw new Error("Not allowed at this outlet");
+    needWork(viewer, b.property_id);
     const head = (await tx.query<{ table: string | null; label: string; receipt: string | null; invoice: string | null }>(
       `select t.name as table, b.label,
          (select rc.token from folios f join payments p on p.folio_id = f.id join receipts rc on rc.payment_id = p.id where f.outlet_bill_id = b.id limit 1) as receipt,
@@ -403,6 +409,8 @@ async function linesOf(tx: PoolClient, billId: string): Promise<BillLine[]> {
 export async function addBillItem(pool: Pool, schema: string, billId: string, input: { menuItemId: string; quantity: number; modifiers: string[]; note: string }, viewer: Viewer): Promise<string> {
   return withTenant(pool, schema, async (tx) => {
     const b = await openBillIn(tx, billId, viewer);
+    // a closed outlet takes no more orders; its open bills are only paid
+    if (!b.outlet.active) throw new Error("The outlet is closed");
     if (!isUuid(input.menuItemId)) throw new Error("Menu item not found");
     const item = (await tx.query<{ id: string; service_id: string; name: string; price: string; printer_id: string | null; modifiers: Modifier[] }>(
       "select id, service_id, name, price, printer_id, modifiers from outlet_menu_items where id = $1 and outlet_id = $2 and active",
@@ -462,7 +470,7 @@ export async function splitOutletBill(pool: Pool, schema: string, billId: string
     const b = await openBillIn(tx, billId, viewer);
     const own = (await tx.query<{ id: string }>("select id from outlet_bill_lines where bill_id = $1", [b.id])).rows.map((l) => l.id);
     const moving = [...new Set(lineIds)];
-    if (!splitIsValid(own, moving)) throw new Error("Choose items of this bill to move");
+    if (!splitIsValid(own, moving)) throw new Error("Choose some, not all, of this bill's items to move");
     const label = (await tx.query<{ label: string }>("select label from outlet_bills where id = $1", [b.id])).rows[0]!.label;
     const id = await newBillIn(tx, b.outlet, { tableId: b.table_id, label, splitFrom: b.id }, viewer.userId);
     await tx.query("update outlet_bill_lines set bill_id = $2 where id = any($1::uuid[])", [moving, id]);
@@ -535,7 +543,8 @@ export async function invoiceOutletBill(pool: Pool, schema: string, billId: stri
   return withTenant(pool, schema, async (tx) => {
     const pre = await billIn(tx, billId);
     await lockProperty(tx, pre.property_id);
-    const b = await openBillIn(tx, billId, viewer, "outlet_cash");
+    // a Company event is the table service's (Service, Outlet Manager, Property Manager)
+    const b = await openBillIn(tx, billId, viewer, "serve_outlet");
     if (!isUuid(input.companyId)) throw new Error("Company not found");
     const c = (await tx.query<{ on_account: boolean; active: boolean }>("select on_account, active from companies where id = $1", [input.companyId])).rows[0];
     if (!c?.active) throw new Error("Company not found");
@@ -563,26 +572,28 @@ export interface PrintJob {
 
 /**
  * The outlet's device takes the jobs to print: new ones, failed ones (up to
- * five tries) and ones another device took over a minute ago without
+ * five tries) and ones another device took two minutes ago without
  * answering. Taken jobs are not handed out twice meanwhile.
  */
 export async function takePrintJobs(pool: Pool, schema: string, outletId: string, viewer: Viewer): Promise<PrintJob[]> {
   return withTenant(pool, schema, async (tx) => {
     const o = await outletIn(tx, outletId);
-    if (!can(viewer.actor, "serve_outlet", o.propertyId) && !can(viewer.actor, "outlet_cash", o.propertyId)) throw new Error("Not allowed at this outlet");
+    needWork(viewer, o.propertyId);
     const rows = (await tx.query<{ id: string; printer_id: string; name: string; address: string; ticket: PrintTicket; attempts: number }>(
       `update print_jobs j set status = 'printing', claimed_at = clock_timestamp(), attempts = j.attempts + 1
        from outlet_printers p
        where p.id = j.printer_id and j.id in (
          select id from print_jobs where outlet_id = $1
-           and (status = 'pending' or (status = 'failed' and attempts < 5) or (status = 'printing' and claimed_at < clock_timestamp() - interval '1 minute'))
+           and (status = 'pending' or (status = 'failed' and attempts < 5) or (status = 'printing' and claimed_at < clock_timestamp() - interval '2 minutes'))
          order by created_at limit 20 for update skip locked)
        returning j.id, j.printer_id, p.name, p.address, j.ticket, j.attempts`,
       [o.id],
     )).rows;
-    return rows.map((r) => ({ id: r.id, printerId: r.printer_id, printerName: r.name, address: r.address, text: ticketText(r.ticket), ticket: r.ticket, attempts: r.attempts }));
+    return rows.map(toPrintJob);
   });
 }
+
+const toPrintJob = (r: { id: string; printer_id: string; name: string; address: string; ticket: PrintTicket; attempts: number }): PrintJob => ({ id: r.id, printerId: r.printer_id, printerName: r.name, address: r.address, text: ticketText(r.ticket), ticket: r.ticket, attempts: r.attempts });
 
 /** The device's answer for a job: printed, or failed with the printer's error (tried again). */
 export async function reportPrintJob(pool: Pool, schema: string, jobId: string, result: { ok: boolean; error?: string | undefined }, viewer: Viewer): Promise<void> {
@@ -590,7 +601,7 @@ export async function reportPrintJob(pool: Pool, schema: string, jobId: string, 
   await withTenant(pool, schema, async (tx) => {
     const j = (await tx.query<{ outlet_id: string; property_id: string }>("select j.outlet_id, o.property_id from print_jobs j join outlets o on o.id = j.outlet_id where j.id = $1", [jobId])).rows[0];
     if (!j) throw new Error("Print job not found");
-    if (!can(viewer.actor, "serve_outlet", j.property_id) && !can(viewer.actor, "outlet_cash", j.property_id)) throw new Error("Not allowed at this outlet");
+    needWork(viewer, j.property_id);
     await tx.query(result.ok ? "update print_jobs set status = 'printed', printed_at = clock_timestamp(), error = null where id = $1" : "update print_jobs set status = 'failed', error = $2 where id = $1", result.ok ? [jobId] : [jobId, (result.error ?? "").slice(0, 300)]);
   });
 }
@@ -599,12 +610,12 @@ export async function reportPrintJob(pool: Pool, schema: string, jobId: string, 
 export async function failedPrintJobs(pool: Pool, schema: string, outletId: string, viewer: Viewer): Promise<PrintJob[]> {
   return withTenant(pool, schema, async (tx) => {
     const o = await outletIn(tx, outletId);
-    if (!can(viewer.actor, "serve_outlet", o.propertyId) && !can(viewer.actor, "outlet_cash", o.propertyId)) throw new Error("Not allowed at this outlet");
+    needWork(viewer, o.propertyId);
     const rows = (await tx.query<{ id: string; printer_id: string; name: string; address: string; ticket: PrintTicket; attempts: number }>(
       "select j.id, j.printer_id, p.name, p.address, j.ticket, j.attempts from print_jobs j join outlet_printers p on p.id = j.printer_id where j.outlet_id = $1 and j.status = 'failed' and j.attempts >= 5 order by j.created_at desc limit 20",
       [o.id],
     )).rows;
-    return rows.map((r) => ({ id: r.id, printerId: r.printer_id, printerName: r.name, address: r.address, text: ticketText(r.ticket), ticket: r.ticket, attempts: r.attempts }));
+    return rows.map(toPrintJob);
   });
 }
 

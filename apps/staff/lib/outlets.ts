@@ -1,6 +1,6 @@
 import { listProperties, loadActor, outletProperty, type Tenant } from "@hoteloftware/db";
 import type { TenantSession } from "@hoteloftware/auth";
-import { can, type Actor, type PropertyAction } from "@hoteloftware/domain";
+import { worksAnOutlet, type Actor, type PropertyAction } from "@hoteloftware/domain";
 import { authorize, requirePrincipal } from "./authorize";
 import { pool } from "./db";
 import { moduleOn } from "./modules";
@@ -19,11 +19,6 @@ export async function authorizeOutlet(action: PropertyAction, ref: { outletId?: 
   const principal = await authorize(action, propertyId);
   if (!(await outletsModuleOn(tenant.schemaName, propertyId))) throw new Error("The Point of Sale Module is not on for this property");
   return { ...principal, propertyId, viewer: { userId: principal.session.user.id, actor: principal.actor, name: principal.session.user.name } };
-}
-
-/** Works at an outlet of the property: serves, takes money, or manages one. */
-export function worksAnOutlet(actor: Actor, propertyId: string): boolean {
-  return can(actor, "serve_outlet", propertyId) || can(actor, "outlet_cash", propertyId) || can(actor, "manage_own_outlets", propertyId);
 }
 
 export interface OutletAppContext {

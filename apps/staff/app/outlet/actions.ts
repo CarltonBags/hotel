@@ -91,23 +91,30 @@ export async function payCashAction(outletId: string, billId: string, customerNa
 
 export async function invoiceBillAction(outletId: string, billId: string, companyId: string): Promise<FormState> {
   return formAction(async () => {
-    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { billId });
+    const { tenant, viewer } = await authorizeOutlet("serve_outlet", { billId });
     const inv = await invoiceOutletBill(pool(), tenant.schemaName, billId, { companyId }, viewer);
     refresh(outletId);
     return { ok: true, message: `Invoice ${inv.number} issued.` };
   });
 }
 
+/** Whoever works the outlet's tables or till prints its tickets. */
+const printer = (outletId: string) => authorizeOutlet("outlet_cash", { outletId }).catch(() => authorizeOutlet("serve_outlet", { outletId }));
+
 export async function takePrintJobsAction(outletId: string): Promise<PrintJob[]> {
   try {
-    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { outletId }).catch(() => authorizeOutlet("serve_outlet", { outletId }));
+    const { tenant, viewer } = await printer(outletId);
     return await takePrintJobs(pool(), tenant.schemaName, outletId, viewer);
-  } catch {
+  } catch (err) {
+    // polled every few seconds: a refusal or outage is logged, the device tries again
+    console.error("[outlet] print jobs", err);
     return [];
   }
 }
 
-export async function reportPrintAction(outletId: string, jobId: string, ok: boolean, error: string): Promise<void> {
-  const { tenant, viewer } = await authorizeOutlet("outlet_cash", { outletId }).catch(() => authorizeOutlet("serve_outlet", { outletId }));
-  await reportPrintJob(pool(), tenant.schemaName, jobId, { ok, error }, viewer);
+export async function reportPrintAction(outletId: string, jobId: string, ok: boolean, error: string): Promise<FormState> {
+  return formAction(async () => {
+    const { tenant, viewer } = await printer(outletId);
+    await reportPrintJob(pool(), tenant.schemaName, jobId, { ok, error }, viewer);
+  });
 }

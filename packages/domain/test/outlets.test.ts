@@ -32,8 +32,9 @@ describe("outlets", () => {
     expect(ticketText(tickets[1]!)).toContain("  ! well done");
   });
 
-  it("a split moves some of the lines, never none", () => {
+  it("a split moves some of the lines, never none and never all", () => {
     expect(splitIsValid(["a", "b", "c"], ["b"])).toBe(true);
+    expect(splitIsValid(["a", "b"], ["a", "b"])).toBe(false);
     expect(splitIsValid(["a", "b"], [])).toBe(false);
     expect(splitIsValid(["a", "b"], ["x"])).toBe(false);
   });

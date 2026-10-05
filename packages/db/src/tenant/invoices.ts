@@ -383,23 +383,31 @@ export async function issueInvoice(pool: Pool, schema: string, folioId: string, 
  * (ticket 59) or an Outlet Sale's bill (ticket 60). Null when nothing is open.
  */
 export async function issueFolioInvoiceIn(tx: PoolClient, folioId: string, userId: string): Promise<IssuedInvoice | null> {
+  return issueIn(tx, (await folioOwnerIn(tx, folioId, { lock: true })).ctx, folioId, userId);
+}
+
+type FolioOwner = { kind: "reservation"; id: string } | { kind: "group"; id: string } | { kind: "outlet_bill"; id: string };
+
+/**
+ * The one place a folio's owner decides its invoice context: a reservation,
+ * a group's Master Folio (ticket 59) or an Outlet Sale's bill (ticket 60).
+ * With `lock` the property and the owner are locked for an issue.
+ */
+async function folioOwnerIn(tx: PoolClient, folioId: string, options: { lock?: boolean } = {}): Promise<{ owner: FolioOwner; ctx: Context }> {
   const f = (await tx.query<{ reservation_id: string | null; group_id: string | null; outlet_bill_id: string | null; property_id: string }>(
     `select f.reservation_id, f.group_id, f.outlet_bill_id, coalesce(r.property_id, g.property_id, ob.property_id) as property_id
      from folios f left join reservations r on r.id = f.reservation_id left join groups g on g.id = f.group_id left join outlet_bills ob on ob.id = f.outlet_bill_id where f.id = $1`,
     [folioId],
   )).rows[0];
   if (!f) throw new Error("Folio not found");
-  await lockProperty(tx, f.property_id);
-  if (f.reservation_id) {
-    await tx.query("select 1 from reservations where id = $1 for update", [f.reservation_id]);
-    return issueIn(tx, await contextOf(tx, f.reservation_id), folioId, userId);
+  const owner: FolioOwner = f.reservation_id ? { kind: "reservation", id: f.reservation_id } : f.group_id ? { kind: "group", id: f.group_id } : { kind: "outlet_bill", id: f.outlet_bill_id! };
+  if (options.lock) {
+    await lockProperty(tx, f.property_id);
+    const table = { reservation: "reservations", group: "groups", outlet_bill: "outlet_bills" }[owner.kind];
+    await tx.query(`select 1 from ${table} where id = $1 for update`, [owner.id]);
   }
-  if (f.group_id) {
-    await tx.query("select 1 from groups where id = $1 for update", [f.group_id]);
-    return issueIn(tx, await groupContextOf(tx, f.group_id), folioId, userId);
-  }
-  await tx.query("select 1 from outlet_bills where id = $1 for update", [f.outlet_bill_id]);
-  return issueIn(tx, await outletContextOf(tx, f.outlet_bill_id!), folioId, userId);
+  const ctx = owner.kind === "reservation" ? await contextOf(tx, owner.id) : owner.kind === "group" ? await groupContextOf(tx, owner.id) : await outletContextOf(tx, owner.id);
+  return { owner, ctx };
 }
 
 /** An Outlet Sale's bill: the outlet and bill number as the reference, the Business Date it was served on. */
@@ -492,10 +500,11 @@ export async function depositIn(tx: PoolClient, paymentId: string, userId: strin
     [paymentId],
   )).rows[0];
   if (!p || p.status !== "succeeded" || p.refund_of || p.invoice_id || !RECEIVED.has(p.tender)) return null;
-  // a payment on a group's Master Folio (ticket 59) is a deposit before the group's first arrival, taxed like its stays
-  const groupId = p.reservation_id ? null : (await tx.query<{ group_id: string }>("select group_id from folios where id = $1", [p.folio_id])).rows[0]!.group_id;
-  const ctx = groupId ? await groupContextOf(tx, groupId) : await contextOf(tx, p.reservation_id!);
-  if (ctx.status !== "confirmed") return null;
+  // a payment on a group's Master Folio (ticket 59) is a deposit before the group's first arrival, taxed like its stays;
+  // an Outlet Sale's (ticket 60) is paid for what was served, never a deposit
+  const { owner, ctx } = await folioOwnerIn(tx, p.folio_id);
+  if (owner.kind === "outlet_bill" || ctx.status !== "confirmed") return null;
+  const groupId = owner.kind === "group" ? owner.id : null;
   const stay = groupId ? await groupComposition(tx, groupId) : await stayComposition(tx, p.reservation_id!);
   if (stay.length === 0) throw new Error(groupId ? "A deposit of the group is taxed like its stays: set the contract prices of its Held Rooms first" : "Money before check-in needs a Deposit Invoice: set the Rate Plan's Accommodation Service first (Settings → Rate Plans)");
   const amount = Number(p.amount);
@@ -592,7 +601,7 @@ export async function cancelInvoice(pool: Pool, schema: string, invoiceId: strin
     if (inv.cancelled_by) throw new Error("This invoice is already cancelled");
     if (inv.netted_by) throw new Error("This Deposit Invoice is netted on a final invoice; cancel that one first");
     if (inv.matched) throw new Error("Money is matched to this invoice; it cannot be cancelled");
-    const ctx = inv.reservation_id ? await contextOf(tx, inv.reservation_id) : await groupContextOf(tx, (await tx.query<{ group_id: string }>("select group_id from folios where id = $1", [inv.folio_id])).rows[0]!.group_id);
+    const { ctx } = await folioOwnerIn(tx, inv.folio_id);
     const original = inv.document;
     const doc: InvoiceDocument = {
       ...original,
