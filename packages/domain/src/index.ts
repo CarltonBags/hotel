@@ -251,6 +251,7 @@ export * from "./reports";
 export * from "./report-text";
 export * from "./downtime";
 export * from "./registration";
+export { CHECK_IN_CONDITIONS, checkInConditions, needsReception, selfRegistrationPath, type CheckInCondition, type CheckInFacts } from "./self-checkin";
 export * from "./budget";
 export * from "./report-builder";
 export * from "./subscription";

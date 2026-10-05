@@ -436,18 +436,20 @@ async function writeSegments(tx: PoolClient, r: ResRow, segs: AssignmentSegment[
 
 /** Assign one room for the whole stay (replacing earlier assignments). */
 export async function assignRoom(pool: Pool, schema: string, id: string, userId: string, roomId: string): Promise<void> {
+  await withTenant(pool, schema, (tx) => assignRoomIn(tx, id, userId, roomId));
+}
+
+export async function assignRoomIn(tx: PoolClient, id: string, userId: string, roomId: string): Promise<void> {
   if (!isUuid(roomId)) throw new Error("Room not found");
-  await withTenant(pool, schema, async (tx) => {
-    const r = await loadForChange(tx, id);
-    requireOpen(r);
-    // nights already slept keep their room: an in-house guest changes rooms by a move
-    if (r.status === "checked_in") throw new Error("A checked-in guest changes rooms by a move from a night on");
-    const before = await segments(tx, r.id);
-    const after = [{ roomId, from: r.arrival, to: r.departure }];
-    await writeSegments(tx, r, after);
-    await logChange(tx, r.id, userId, "assign_room", { rooms: before }, { rooms: after });
-    await syncHousekeepingTasks(tx, r.property_id, userId);
-  });
+  const r = await loadForChange(tx, id);
+  requireOpen(r);
+  // nights already slept keep their room: an in-house guest changes rooms by a move
+  if (r.status === "checked_in") throw new Error("A checked-in guest changes rooms by a move from a night on");
+  const before = await segments(tx, r.id);
+  const after = [{ roomId, from: r.arrival, to: r.departure }];
+  await writeSegments(tx, r, after);
+  await logChange(tx, r.id, userId, "assign_room", { rooms: before }, { rooms: after });
+  await syncHousekeepingTasks(tx, r.property_id, userId);
 }
 
 /** Move to another room from a night on: a mid-stay move adds a segment on the same reservation. */
@@ -633,22 +635,24 @@ export async function listRoomChoices(pool: Pool, schema: string, id: string, op
 /** Free rooms of the reservation's room type; `anyType` (a guest in house changing type) lists every type, named "number · type". */
 export async function listFreeRooms(pool: Pool, schema: string, id: string, from?: string, options: { anyType?: boolean } = {}): Promise<{ id: string; name: string }[]> {
   if (!isUuid(id)) return [];
-  return withTenant(pool, schema, async (tx) => {
-    const r = (await tx.query<{ room_type_id: string; property_id: string; arrival: string; departure: string }>("select room_type_id, property_id, to_char(arrival, 'YYYY-MM-DD') as arrival, to_char(departure, 'YYYY-MM-DD') as departure from reservations where id = $1", [id])).rows[0];
-    if (!r) return [];
-    const start = from && from > r.arrival ? from : r.arrival;
-    const { rows } = await tx.query<{ id: string; name: string }>(
-      `select m.id, case when $6 then m.number || ' · ' || t.code else m.number end as name from rooms m join room_types t on t.id = m.room_type_id
-       where (m.room_type_id = $1 or ($6 and m.property_id = $7))
-         and not exists (select 1 from room_assignments a join reservations x on x.id = a.reservation_id
-                         where a.room_id = m.id and a.from_date < $3 and a.to_date > $2 and x.status = any($5::text[]) and x.id <> $4)
-         and not exists (select 1 from room_assignments own where own.room_id = m.id and own.reservation_id = $4 and own.from_date < $3 and own.to_date > $2)
-         and not exists (select 1 from room_blocks ob where ob.room_id = m.id and ${outOfOrderOn("ob", "$2", "$3")})
-       order by m.room_type_id <> $1, m.number`,
-      [r.room_type_id, start, r.departure, id, OCCUPYING_STATUSES, options.anyType === true, r.property_id],
-    );
-    return rows;
-  });
+  return withTenant(pool, schema, (tx) => freeRoomsIn(tx, id, from, options));
+}
+
+export async function freeRoomsIn(tx: PoolClient, id: string, from?: string, options: { anyType?: boolean } = {}): Promise<{ id: string; name: string }[]> {
+  const r = (await tx.query<{ room_type_id: string; property_id: string; arrival: string; departure: string }>("select room_type_id, property_id, to_char(arrival, 'YYYY-MM-DD') as arrival, to_char(departure, 'YYYY-MM-DD') as departure from reservations where id = $1", [id])).rows[0];
+  if (!r) return [];
+  const start = from && from > r.arrival ? from : r.arrival;
+  const { rows } = await tx.query<{ id: string; name: string }>(
+    `select m.id, case when $6 then m.number || ' · ' || t.code else m.number end as name from rooms m join room_types t on t.id = m.room_type_id
+     where (m.room_type_id = $1 or ($6 and m.property_id = $7))
+       and not exists (select 1 from room_assignments a join reservations x on x.id = a.reservation_id
+                       where a.room_id = m.id and a.from_date < $3 and a.to_date > $2 and x.status = any($5::text[]) and x.id <> $4)
+       and not exists (select 1 from room_assignments own where own.room_id = m.id and own.reservation_id = $4 and own.from_date < $3 and own.to_date > $2)
+       and not exists (select 1 from room_blocks ob where ob.room_id = m.id and ${outOfOrderOn("ob", "$2", "$3")})
+     order by m.room_type_id <> $1, m.number`,
+    [r.room_type_id, start, r.departure, id, OCCUPYING_STATUSES, options.anyType === true, r.property_id],
+  );
+  return rows;
 }
 
 export interface ReservationChange {

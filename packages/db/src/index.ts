@@ -563,3 +563,21 @@ export { deleteOldUnassignedWhatsApp } from "./tenant/whatsapp";
 export { sendWhatsAppTemplate } from "./tenant/messages";
 export { claimProviderAccount } from "./control/external-ids";
 export { cantonProfileOf, setCantonProfile, tessinExport } from "./tenant/registration";
+export {
+  SELF_CHECKIN_USER,
+  findForKiosk,
+  lobbyToken,
+  propertyOfLobbyToken,
+  finishSelfCheckin,
+  selfCheckinLine,
+  selfCheckinRegister,
+  selfCheckinStep,
+  selfCheckinView,
+  startSelfCheckin,
+  type SelfCheckinChannel,
+  type SelfCheckinLine,
+  type SelfCheckinOutcome,
+  type SelfCheckinResult,
+  type SelfCheckinStep,
+  type SelfCheckinView,
+} from "./tenant/self-checkin";

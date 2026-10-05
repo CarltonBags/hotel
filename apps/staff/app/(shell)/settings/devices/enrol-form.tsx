@@ -11,7 +11,7 @@ export function EnrolForm({
 }: {
   propertyId: string;
   people: { id: string; name: string }[];
-  labels: Record<"name" | "kind" | "staff" | "guest" | "shared" | "owner" | "who" | "create" | "pending" | "scan" | "until", string>;
+  labels: Record<"name" | "kind" | "staff" | "guest" | "kiosk" | "shared" | "owner" | "who" | "create" | "pending" | "scan" | "until", string>;
 }) {
   const [state, action, pending] = useActionState<EnrolState, FormData>(enrolAction, {});
   const [kind, setKind] = useState("staff");
@@ -30,6 +30,7 @@ export function EnrolForm({
           <select name="kind" value={kind} onChange={(e) => setKind(e.target.value)} className={input}>
             <option value="staff">{labels.staff}</option>
             <option value="guest">{labels.guest}</option>
+            <option value="kiosk">{labels.kiosk}</option>
           </select>
         </label>
         {kind === "staff" ? (

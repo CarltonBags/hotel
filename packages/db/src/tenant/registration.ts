@@ -159,34 +159,7 @@ async function viewIn(tx: PoolClient, where: string, arg: string): Promise<Regis
 /** The reservation's registration, opened with the primary guest's profile on first use. */
 export async function openRegistration(pool: Pool, schema: string, reservationId: string, userId: string): Promise<RegistrationView> {
   if (!isUuid(reservationId)) throw new Error("Reservation not found");
-  return withTenant(pool, schema, async (tx) => {
-    const found = await viewIn(tx, "g.reservation_id = $1", reservationId);
-    if (found) return found;
-    const r = (await tx.query<{ property_id: string; country: string; guest_id: string; status: string; canton_profile: unknown }>(
-      "select r.property_id, p.country, r.primary_guest_id as guest_id, r.status, p.canton_profile from reservations r join properties p on p.id = r.property_id where r.id = $1",
-      [reservationId],
-    )).rows[0];
-    if (!r) throw new Error("Reservation not found");
-    if (!isRegistrationCountry(r.country)) throw new Error(`No guest registration for properties in ${r.country}`);
-    // Switzerland: the canton's rules, as the property set them
-    if (r.country === "CH" && !isCantonProfile(r.canton_profile)) throw new Error("Choose the property's Canton Profile first (Settings → Canton Profile)");
-    if (r.status === "cancelled" || r.status === "no_show") throw new Error("This stay is not arriving");
-    const { rows } = await tx.query<{ id: string }>("insert into registrations (reservation_id, property_id, country, profile, created_by) values ($1, $2, $3, $4, $5) returning id", [
-      reservationId,
-      r.property_id,
-      r.country,
-      r.country === "CH" ? JSON.stringify(r.canton_profile) : null,
-      userId,
-    ]);
-    await tx.query(
-      `insert into registration_persons (registration_id, guest_id, role, first_name, last_name, date_of_birth, nationality, address_line1, postal_code, city, country, document_number, language)
-       select $1, g.id, 'primary', g.first_name, g.last_name, g.date_of_birth, coalesce(g.nationality, ''), coalesce(g.address_line1, ''), coalesce(g.postal_code, ''), coalesce(g.city, ''),
-         coalesce(g.country_of_residence, ''), coalesce(g.document_number, ''), case when g.language in ('de', 'en') then g.language else 'de' end
-       from guests g where g.id = $2`,
-      [rows[0]!.id, r.guest_id],
-    );
-    return (await viewIn(tx, "g.id = $1", rows[0]!.id))!;
-  });
+  return withTenant(pool, schema, (tx) => openRegistrationIn(tx, reservationId, userId));
 }
 
 export async function findRegistration(pool: Pool, schema: string, reservationId: string): Promise<RegistrationView | null> {
@@ -249,7 +222,7 @@ export async function sendToTablet(pool: Pool, schema: string, input: { registra
     const reg = await viewIn(tx, "g.id = $1", input.registrationId);
     if (!reg) throw new Error("Registration not found");
     const device = (await tx.query<{ ok: boolean }>(
-      "select (d.kind = 'guest' and d.revoked_at is null and d.property_id = $2) as ok from control.devices d where d.id = $1",
+      "select (d.kind = 'guest' and d.guest_mode = 'tablet' and d.revoked_at is null and d.property_id = $2) as ok from control.devices d where d.id = $1",
       [input.deviceId, reg.propertyId],
     )).rows[0];
     if (!device?.ok) throw new Error("Choose an enrolled guest tablet of this property");
@@ -343,22 +316,27 @@ export async function tabletState(pool: Pool, schema: string, deviceId: string):
   return withTenant(pool, schema, async (tx) => {
     const reg = await viewIn(tx, "g.device_id = $1", deviceId);
     if (!reg || !reg.queue.length) return null;
-    const person = reg.persons.find((p) => p.id === reg.queue[0]);
-    if (!person) return null;
-    const name = (await tx.query<{ name: string }>("select name from properties where id = $1", [reg.propertyId])).rows[0]!.name;
-    return {
-      registrationId: reg.id,
-      country: reg.country,
-      signature: reg.signature,
-      extraFields: reg.profile?.extraFields ?? [],
-      propertyName: name,
-      arrival: reg.arrival,
-      departure: reg.departure,
-      person: tabletPerson(person),
-      companions: reg.persons.filter((p) => p.countedOn === person.id).map((p) => ({ role: p.role, firstName: p.firstName, lastName: p.lastName, nationality: p.nationality })),
-      next: reg.queue.length - 1,
-    };
+    return guestFormIn(tx, reg, reg.queue[0]!);
   });
+}
+
+/** The guest's form of one person, as the tablet and Self Check-in show it. */
+export async function guestFormIn(tx: PoolClient, reg: RegistrationView, personId: string): Promise<TabletState | null> {
+  const person = reg.persons.find((p) => p.id === personId);
+  if (!person) return null;
+  const name = (await tx.query<{ name: string }>("select name from properties where id = $1", [reg.propertyId])).rows[0]!.name;
+  return {
+    registrationId: reg.id,
+    country: reg.country,
+    signature: reg.signature,
+    extraFields: reg.profile?.extraFields ?? [],
+    propertyName: name,
+    arrival: reg.arrival,
+    departure: reg.departure,
+    person: tabletPerson(person),
+    companions: reg.persons.filter((p) => p.countedOn === person.id).map((p) => ({ role: p.role, firstName: p.firstName, lastName: p.lastName, nationality: p.nationality })),
+    next: Math.max(reg.queue.length - 1, 0),
+  };
 }
 
 /** The statutory fields the guest may edit; arrival and departure never. */
@@ -457,66 +435,115 @@ export async function tabletStep(pool: Pool, schema: string, device: { id: strin
     const locked = (await tx.query<{ id: string }>("select id from registrations where device_id = $1 for update", [device.id])).rows[0];
     const reg = locked ? await viewIn(tx, "g.id = $1", locked.id) : null;
     if (!reg || reg.queue[0] !== personId) throw new Error("Not on this tablet");
-    const person = reg.persons.find((p) => p.id === personId)!;
-    if (input.step === "draft") {
-      if (person.step !== "details") return;
-      const entries = Object.entries(input.details ?? {}).filter(([k, v]) => k in DRAFT_COLUMNS && typeof v === "string" && v.length <= 120 && (k !== "dateOfBirth" || realDate(v)) && (k !== "gender" || GENDERS.includes(v)) && (k !== "documentType" || DOCUMENT_TYPES.includes(v)));
-      if (!entries.length) return;
-      await tx.query(`update registration_persons set ${entries.map(([k], i) => `${DRAFT_COLUMNS[k as keyof GuestDetails]} = $${i + 2}`).join(", ")} where id = $1`, [personId, ...entries.map(([, v]) => (v as string).trim())]);
-      return;
-    }
-    if (input.step === "back") {
-      if (person.step !== "review") throw new Error("This step is done already");
-      await tx.query("update registration_persons set step = 'details' where id = $1", [personId]);
-      return;
-    }
-    if (person.step !== input.step) throw new Error("This step is done already");
-    if (input.step === "welcome") {
-      await tx.query("update registration_persons set language = $2 where id = $1", [personId, input.language === "en" ? "en" : "de"]);
-    } else if (input.step === "details") {
-      const d = input.details;
-      checkDetails(d, reg.country, reg.profile);
-      const v = { firstName: d.firstName.trim(), lastName: d.lastName.trim(), dateOfBirth: d.dateOfBirth, nationality: d.nationality.toUpperCase(), addressLine1: d.addressLine1.trim(), postalCode: d.postalCode.trim(), city: d.city.trim(), country: d.country.trim().toUpperCase().slice(0, 2), documentNumber: d.documentNumber.trim(), gender: d.gender };
-      const ch = { placeOfBirth: (d.placeOfBirth ?? "").trim(), documentType: d.documentType ?? "", carNumber: (d.carNumber ?? "").trim() };
-      await tx.query(
-        `update registration_persons set first_name = $2, last_name = $3, date_of_birth = $4, nationality = $5, address_line1 = $6, postal_code = $7, city = $8, country = $9, document_number = $10, gender = $11,
-           place_of_birth = $12, document_type = $13, car_number = $14 where id = $1`,
-        [personId, v.firstName, v.lastName, v.dateOfBirth, v.nationality, v.addressLine1, v.postalCode, v.city, v.country, v.documentNumber, v.gender, ch.placeOfBirth, ch.documentType, ch.carNumber],
-      );
-      // back to the guest profile, logged as changed on the tablet, with the step or not at all
-      if (person.guestId) {
-        await updateGuestIn(tx, person.guestId, { firstName: v.firstName, lastName: v.lastName, dateOfBirth: v.dateOfBirth, nationality: v.nationality, addressLine1: v.addressLine1, postalCode: v.postalCode, city: v.city, countryOfResidence: v.country, documentNumber: v.documentNumber }, { userId: `tablet:${device.name}` });
-      }
-    } else if (input.step === "companions") {
-      const add = Array.isArray(input.add) ? input.add : [];
-      if (reg.persons.length + add.length > MAX_PERSONS) throw new TabletProblem("companions");
-      for (const p of add) {
-        if (!p || typeof p !== "object" || typeof p.nationality !== "string") throw new TabletProblem("companions");
-        await insertPerson(tx, reg.id, {
-          role: p.role,
-          firstName: String(p.firstName ?? ""),
-          lastName: String(p.lastName ?? ""),
-          dateOfBirth: p.dateOfBirth && realDate(String(p.dateOfBirth)) ? String(p.dateOfBirth) : null,
-          nationality: p.nationality,
-          countryOfResidence: typeof p.countryOfResidence === "string" ? p.countryOfResidence : null,
-        }).catch((err: unknown) => {
-          throw err instanceof MissingSwissDetails ? new TabletProblem("companions") : err;
-        });
-      }
-    } else if (input.step === "review") {
-      if (reg.signature === "tablet") {
-        const png = input.signaturePng;
-        if (!png?.length || png.length > MAX_SIGNATURE_BYTES || !PNG.every((b, i) => png[i] === b)) throw new TabletProblem("signature");
-        await tx.query("update registration_persons set confirmation = 'tablet_signature', signature = $2 where id = $1", [personId, Buffer.from(png)]);
-      }
-      await tx.query("update registration_persons set guest_done_at = now() where id = $1", [personId]);
+    await guestStepIn(tx, reg, personId, input, `tablet:${device.name}`);
+    if (input.step === "review") {
       // the next person's turn; the tablet is free after the last
       const rest = reg.queue.slice(1);
       await tx.query("update registrations set queue = $2, device_id = case when cardinality($2::uuid[]) = 0 then null else device_id end where id = $1", [reg.id, rest]);
       if (rest[0]) await tx.query("update registration_persons set step = 'welcome' where id = $1", [rest[0]]);
     }
-    await tx.query("update registration_persons set step = $2 where id = $1", [personId, NEXT[input.step]]);
   });
+}
+
+/**
+ * One step of the guest's part, on the tablet or in Self Check-in (the
+ * registration locked by the caller). Details go back to the guest profile,
+ * logged as entered by `by`. Where the guest signs on screen, the review
+ * ends with the signature.
+ */
+export async function guestStepIn(tx: PoolClient, reg: RegistrationView, personId: string, input: TabletInput, by: string): Promise<void> {
+  const person = reg.persons.find((p) => p.id === personId);
+  if (!person) throw new Error("Not on this tablet");
+  if (input.step === "draft") {
+    if (person.step !== "details") return;
+    const entries = Object.entries(input.details ?? {}).filter(([k, v]) => k in DRAFT_COLUMNS && typeof v === "string" && v.length <= 120 && (k !== "dateOfBirth" || realDate(v)) && (k !== "gender" || GENDERS.includes(v)) && (k !== "documentType" || DOCUMENT_TYPES.includes(v)));
+    if (!entries.length) return;
+    await tx.query(`update registration_persons set ${entries.map(([k], i) => `${DRAFT_COLUMNS[k as keyof GuestDetails]} = $${i + 2}`).join(", ")} where id = $1`, [personId, ...entries.map(([, v]) => (v as string).trim())]);
+    return;
+  }
+  if (input.step === "back") {
+    if (person.step !== "review") throw new Error("This step is done already");
+    await tx.query("update registration_persons set step = 'details' where id = $1", [personId]);
+    return;
+  }
+  if (person.step !== input.step) throw new Error("This step is done already");
+  if (input.step === "welcome") {
+    await tx.query("update registration_persons set language = $2 where id = $1", [personId, input.language === "en" ? "en" : "de"]);
+  } else if (input.step === "details") {
+    const d = input.details;
+    checkDetails(d, reg.country, reg.profile);
+    const v = { firstName: d.firstName.trim(), lastName: d.lastName.trim(), dateOfBirth: d.dateOfBirth, nationality: d.nationality.toUpperCase(), addressLine1: d.addressLine1.trim(), postalCode: d.postalCode.trim(), city: d.city.trim(), country: d.country.trim().toUpperCase().slice(0, 2), documentNumber: d.documentNumber.trim(), gender: d.gender };
+    const ch = { placeOfBirth: (d.placeOfBirth ?? "").trim(), documentType: d.documentType ?? "", carNumber: (d.carNumber ?? "").trim() };
+    await tx.query(
+      `update registration_persons set first_name = $2, last_name = $3, date_of_birth = $4, nationality = $5, address_line1 = $6, postal_code = $7, city = $8, country = $9, document_number = $10, gender = $11,
+         place_of_birth = $12, document_type = $13, car_number = $14 where id = $1`,
+      [personId, v.firstName, v.lastName, v.dateOfBirth, v.nationality, v.addressLine1, v.postalCode, v.city, v.country, v.documentNumber, v.gender, ch.placeOfBirth, ch.documentType, ch.carNumber],
+    );
+    // back to the guest profile, logged as changed by the guest, with the step or not at all
+    if (person.guestId) {
+      await updateGuestIn(tx, person.guestId, { firstName: v.firstName, lastName: v.lastName, dateOfBirth: v.dateOfBirth, nationality: v.nationality, addressLine1: v.addressLine1, postalCode: v.postalCode, city: v.city, countryOfResidence: v.country, documentNumber: v.documentNumber }, { userId: by });
+    }
+  } else if (input.step === "companions") {
+    const add = Array.isArray(input.add) ? input.add : [];
+    if (reg.persons.length + add.length > MAX_PERSONS) throw new TabletProblem("companions");
+    for (const p of add) {
+      if (!p || typeof p !== "object" || typeof p.nationality !== "string") throw new TabletProblem("companions");
+      await insertPerson(tx, reg.id, {
+        role: p.role,
+        firstName: String(p.firstName ?? ""),
+        lastName: String(p.lastName ?? ""),
+        dateOfBirth: p.dateOfBirth && realDate(String(p.dateOfBirth)) ? String(p.dateOfBirth) : null,
+        nationality: p.nationality,
+        countryOfResidence: typeof p.countryOfResidence === "string" ? p.countryOfResidence : null,
+      }).catch((err: unknown) => {
+        throw err instanceof MissingSwissDetails ? new TabletProblem("companions") : err;
+      });
+    }
+  } else if (input.step === "review") {
+    if (reg.signature === "tablet") {
+      const png = input.signaturePng;
+      if (!png?.length || png.length > MAX_SIGNATURE_BYTES || !PNG.every((b, i) => png[i] === b)) throw new TabletProblem("signature");
+      await tx.query("update registration_persons set confirmation = 'tablet_signature', signature = $2 where id = $1", [personId, Buffer.from(png)]);
+    }
+    await tx.query("update registration_persons set guest_done_at = now() where id = $1", [personId]);
+  }
+  await tx.query("update registration_persons set step = $2 where id = $1", [personId, NEXT[input.step]]);
+}
+
+/** A registration with its persons, locked for a step (null when the reservation has none). */
+export async function lockedRegistrationIn(tx: PoolClient, reservationId: string): Promise<RegistrationView | null> {
+  const locked = (await tx.query<{ id: string }>("select id from registrations where reservation_id = $1 for update", [reservationId])).rows[0];
+  return locked ? viewIn(tx, "g.id = $1", locked.id) : null;
+}
+
+/** Open the reservation's registration inside a transaction (see openRegistration). */
+export async function openRegistrationIn(tx: PoolClient, reservationId: string, userId: string): Promise<RegistrationView> {
+  const found = await viewIn(tx, "g.reservation_id = $1", reservationId);
+  if (found) return found;
+  const r = (await tx.query<{ property_id: string; country: string; guest_id: string; status: string; canton_profile: unknown }>(
+    "select r.property_id, p.country, r.primary_guest_id as guest_id, r.status, p.canton_profile from reservations r join properties p on p.id = r.property_id where r.id = $1",
+    [reservationId],
+  )).rows[0];
+  if (!r) throw new Error("Reservation not found");
+  if (!isRegistrationCountry(r.country)) throw new Error(`No guest registration for properties in ${r.country}`);
+  // Switzerland: the canton's rules, as the property set them
+  if (r.country === "CH" && !isCantonProfile(r.canton_profile)) throw new Error("Choose the property's Canton Profile first (Settings → Canton Profile)");
+  if (r.status === "cancelled" || r.status === "no_show") throw new Error("This stay is not arriving");
+  const { rows } = await tx.query<{ id: string }>("insert into registrations (reservation_id, property_id, country, profile, created_by) values ($1, $2, $3, $4, $5) returning id", [
+    reservationId,
+    r.property_id,
+    r.country,
+    r.country === "CH" ? JSON.stringify(r.canton_profile) : null,
+    userId,
+  ]);
+  await tx.query(
+    `insert into registration_persons (registration_id, guest_id, role, first_name, last_name, date_of_birth, nationality, address_line1, postal_code, city, country, document_number, language)
+     select $1, g.id, 'primary', g.first_name, g.last_name, g.date_of_birth, coalesce(g.nationality, ''), coalesce(g.address_line1, ''), coalesce(g.postal_code, ''), coalesce(g.city, ''),
+       coalesce(g.country_of_residence, ''), coalesce(g.document_number, ''), case when g.language in ('de', 'en') then g.language else 'de' end
+     from guests g where g.id = $2`,
+    [rows[0]!.id, r.guest_id],
+  );
+  return (await viewIn(tx, "g.id = $1", rows[0]!.id))!;
 }
 
 /** The desk records the ID Check: details compared with the passport, or a note why not (a discrepancy, no valid ID shown). */

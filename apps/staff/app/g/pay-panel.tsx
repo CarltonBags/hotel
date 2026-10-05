@@ -7,14 +7,14 @@ import { portalText } from "@/i18n/portal";
 import { guestButton } from "./glass";
 import { checkoutAction, simulateAction, startCardAction, startPayAction, type PayStart } from "./pay-actions";
 
-type StripeJs = {
+export type StripeJs = {
   elements: (o: { clientSecret: string; appearance?: object }) => { create: (t: string) => { mount: (el: HTMLElement) => void } };
   confirmPayment: (o: { elements: unknown; confirmParams: { return_url: string } }) => Promise<{ error?: { type?: string; message?: string } }>;
   confirmSetup: (o: { elements: unknown; confirmParams: { return_url: string } }) => Promise<{ error?: { type?: string; message?: string } }>;
 };
 
 /** Stripe.js from Stripe, with the hotel's connected account: card data stays between the guest's browser and Stripe. */
-async function loadStripe(publishableKey: string, accountId: string): Promise<StripeJs> {
+export async function loadStripe(publishableKey: string, accountId: string): Promise<StripeJs> {
   const w = window as unknown as { Stripe?: (k: string, o: object) => StripeJs };
   if (!w.Stripe) {
     await new Promise<void>((resolve, reject) => {

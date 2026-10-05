@@ -43,6 +43,8 @@ export const properties = pgTable(
     portalDocumentImages: boolean("portal_document_images").notNull().default(false),
     expressCheckoutAuto: boolean("express_checkout_auto").notNull().default(false),
     cantonProfile: jsonb("canton_profile"),
+    selfCheckinToken: text("self_checkin_token").notNull().default(sql`replace(gen_random_uuid()::text, '-', '')`),
+    keyHandover: text("key_handover").notNull().default("reception"),
     portalPhotoFileId: uuid("portal_photo_file_id").references((): AnyPgColumn => storedFiles.id, { onDelete: "set null" }),
     legalEntityId: uuid("legal_entity_id")
       .notNull()
@@ -78,6 +80,7 @@ export const properties = pgTable(
     check("properties_city_tax_pass_on_check", sql`${t.cityTaxPassOn} in ('on_top', 'absorbed')`),
     check("properties_hk_stayover_rhythm_check", sql`${t.hkStayoverRhythm} in ('daily', 'every_2', 'every_3', 'on_request')`),
     check("properties_hk_linen_every_check", sql`${t.hkLinenEvery} > 0`),
+    check("properties_key_handover_check", sql`${t.keyHandover} in ('reception')`),
     check("properties_hk_shift_minutes_check", sql`${t.hkShiftMinutes} > 0`),
     check("properties_cash_tolerance_check", sql`${t.cashTolerance} >= 0`),
     check("properties_paid_out_limit_check", sql`${t.paidOutLimit} >= 0`),
@@ -2235,6 +2238,29 @@ export const whatsappUnassigned = pgTable(
   (t) => [unique("whatsapp_unassigned_provider_key").on(t.providerId), index("whatsapp_unassigned_open_idx").on(t.propertyId, t.receivedAt).where(sql`${t.linkedAt} is null`)],
 );
 
+export const selfCheckins = pgTable(
+  "self_checkins",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    channel: text("channel").notNull(),
+    deviceId: uuid("device_id"),
+    step: text("step").notNull().default("stay"),
+    outcome: text("outcome"),
+    reason: text("reason"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("self_checkins_channel_check", sql`${t.channel} in ('kiosk', 'phone')`),
+    check("self_checkins_step_check", sql`${t.step} in ('stay', 'register', 'pay', 'result')`),
+    check("self_checkins_outcome_check", sql`${t.outcome} in ('checked_in', 'waiting', 'help')`),
+    index("self_checkins_open_idx").on(t.propertyId, t.updatedAt).where(sql`${t.finishedAt} is null`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -2344,4 +2370,5 @@ export const tenantSchema = {
   whatsappTemplates,
   whatsappUnassigned,
   whatsappBilled,
+  selfCheckins,
 };

@@ -4,6 +4,7 @@ import { WORKSPACE_LISTS, listOverbooked, todaySummary, workspaceCounts, workspa
 import { paymentProps, reservationView } from "@/lib/reservation-view";
 import { WorkspaceList } from "./_today/workspace-list";
 import { WorkspaceReservation } from "./_today/workspace-reservation";
+import { SelfCheckinLine } from "./_today/self-checkin-line";
 import { LiveRefresh } from "@/shell/LiveRefresh";
 import { fill } from "@/i18n/messages";
 import { pool } from "@/lib/db";
@@ -137,6 +138,7 @@ async function Workspace({ property, list, selected }: { property: Awaited<Retur
     <div className="flex h-full min-h-0 gap-5 p-5">
       <LiveRefresh kind={DATA_KINDS.reservations} propertyIds={[property.id]} />
       <aside className="flex w-[400px] shrink-0 flex-col">
+        {can(principal.actor, "check_in", property.id) ? <SelfCheckinLine propertyId={property.id} m={m} /> : null}
         <WorkspaceList kind={list} counts={counts} rows={rows} selectedId={view?.r.id ?? null} currency={currency} m={m} />
       </aside>
       <section aria-label={m["ws.reservation"]} className="min-h-0 min-w-0 flex-1 overflow-auto rounded-2xl bg-surface-2 p-5">

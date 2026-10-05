@@ -42,3 +42,20 @@ export async function notifyWithRight(pool: Pool, tenant: { id: string; schemaNa
 export function notifyPortalDecline(pool: Pool, tenant: { id: string; schemaName: string }, d: { reservationId: string; propertyId: string; reason: string }): Promise<void> {
   return notifyWithRight(pool, tenant, "take_payments", d.propertyId, { kind: "payments.portal_declined", title: "Online payment declined in the Guest Portal", body: d.reason, href: `/reservations/${d.reservationId}` });
 }
+
+/**
+ * How a Self Check-in ended, told to the desk (ticket 49): a guest who needs
+ * help, or waits for a room, as any notification; a completed check-in only
+ * in the app (one per arrival would flood the mailbox).
+ */
+export async function notifySelfCheckin(
+  pool: Pool,
+  tenant: { id: string; schemaName: string },
+  r: { reservationId: string; propertyId: string; guestName: string; outcome: "checked_in" | "waiting" | "help"; roomNumber: string | null; reasons: string },
+): Promise<void> {
+  const href = `/reservations/${r.reservationId}`;
+  if (r.outcome === "help") return notifyWithRight(pool, tenant, "check_in", r.propertyId, { kind: "self_checkin.help", title: `${r.guestName} needs help at Self Check-in`, body: r.reasons, href });
+  if (r.outcome === "waiting") return notifyWithRight(pool, tenant, "check_in", r.propertyId, { kind: "self_checkin.waiting", title: `${r.guestName} is waiting for a room`, body: "Arrived, Waiting for Room: assign a room once one is ready and tell the guest.", href });
+  const users = (await listTenantUsers(pool, tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "check_in", r.propertyId));
+  for (const u of users) await publishNotification(pool, { tenantId: tenant.id, userId: u.id, kind: "self_checkin.done", title: "Self check-in complete", body: `${r.guestName} · Room ${r.roomNumber ?? "?"}`, href });
+}

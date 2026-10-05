@@ -356,38 +356,40 @@ export class RoomNotReady extends Error {
  * A room not ready for a guest needs a reason, which is logged.
  */
 export async function checkIn(pool: Pool, schema: string, id: string, userId: string, options: { notReadyReason?: string | null } = {}): Promise<void> {
-  await withTenant(pool, schema, async (tx) => {
-    const res = await loadReservationForStayChange(tx, id);
-    if (res.status !== "confirmed") throw new Error(`The reservation is ${res.status.replace("_", " ")} and cannot be checked in`);
-    if (res.arrival > res.businessDate) throw new Error(`Check-in opens on the arrival date, ${res.arrival}`);
-    if (res.departure <= res.businessDate) throw new Error("The stay has ended; it cannot be checked in");
-    const room = await tx.query<{ room_id: string; number: string }>(
-      "select a.room_id, m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = $1 and a.from_date <= $2 and a.to_date > $2",
-      [res.id, res.businessDate],
-    );
-    if (!room.rows.length) throw new Error("Assign a room for tonight before check-in");
-    // a room Out of Order tonight takes no guest: the stay moves to another room first
-    await assertNotOutOfOrder(tx, room.rows[0]!.room_id, res.businessDate, addDays(res.businessDate, 1));
-    const readiness = await roomReadiness(tx, room.rows[0]!.room_id);
-    const notReadyReason = options.notReadyReason?.trim().slice(0, 300) || null;
-    if (!readiness.ready && !notReadyReason) throw new RoomNotReady(room.rows[0]!.number, readiness.cleanliness);
-    await fixCityTaxPassOn(tx, res.id, true);
-    const { lines, cityTax } = await wantedStay(tx, res);
-    await ensureFolios(tx, res, userId);
-    await postStay(tx, res, userId, lines);
-    // every night of the stay is posted, so every night is recorded (a late check-in included)
-    await recordCityTaxNights(tx, res.id, res.property_id, res.arrival, cityTax);
-    // a Late Arrival who came is no longer flagged
-    await tx.query("update reservations set status = 'checked_in', checked_in_at = now(), checked_in_by = $2, late_arrival = false, waiting_for_room_since = null where id = $1", [res.id, userId]);
-    // the arrival preparation not done yet is no longer needed
-    await syncHousekeepingTasks(tx, res.property_id, userId);
-    await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'check_in', $3, $4)", [
-      res.id,
-      userId,
-      JSON.stringify({ status: "confirmed" }),
-      JSON.stringify({ status: "checked_in", ...(readiness.ready ? {} : { roomNotReady: readiness.cleanliness, reason: notReadyReason }) }),
-    ]);
-  });
+  await withTenant(pool, schema, (tx) => checkInIn(tx, id, userId, options));
+}
+
+export async function checkInIn(tx: PoolClient, id: string, userId: string, options: { notReadyReason?: string | null } = {}): Promise<void> {
+  const res = await loadReservationForStayChange(tx, id);
+  if (res.status !== "confirmed") throw new Error(`The reservation is ${res.status.replace("_", " ")} and cannot be checked in`);
+  if (res.arrival > res.businessDate) throw new Error(`Check-in opens on the arrival date, ${res.arrival}`);
+  if (res.departure <= res.businessDate) throw new Error("The stay has ended; it cannot be checked in");
+  const room = await tx.query<{ room_id: string; number: string }>(
+    "select a.room_id, m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = $1 and a.from_date <= $2 and a.to_date > $2",
+    [res.id, res.businessDate],
+  );
+  if (!room.rows.length) throw new Error("Assign a room for tonight before check-in");
+  // a room Out of Order tonight takes no guest: the stay moves to another room first
+  await assertNotOutOfOrder(tx, room.rows[0]!.room_id, res.businessDate, addDays(res.businessDate, 1));
+  const readiness = await roomReadiness(tx, room.rows[0]!.room_id);
+  const notReadyReason = options.notReadyReason?.trim().slice(0, 300) || null;
+  if (!readiness.ready && !notReadyReason) throw new RoomNotReady(room.rows[0]!.number, readiness.cleanliness);
+  await fixCityTaxPassOn(tx, res.id, true);
+  const { lines, cityTax } = await wantedStay(tx, res);
+  await ensureFolios(tx, res, userId);
+  await postStay(tx, res, userId, lines);
+  // every night of the stay is posted, so every night is recorded (a late check-in included)
+  await recordCityTaxNights(tx, res.id, res.property_id, res.arrival, cityTax);
+  // a Late Arrival who came is no longer flagged
+  await tx.query("update reservations set status = 'checked_in', checked_in_at = now(), checked_in_by = $2, late_arrival = false, waiting_for_room_since = null where id = $1", [res.id, userId]);
+  // the arrival preparation not done yet is no longer needed
+  await syncHousekeepingTasks(tx, res.property_id, userId);
+  await tx.query("insert into reservation_changes (reservation_id, user_id, action, before, after) values ($1, $2, 'check_in', $3, $4)", [
+    res.id,
+    userId,
+    JSON.stringify({ status: "confirmed" }),
+    JSON.stringify({ status: "checked_in", ...(readiness.ready ? {} : { roomNotReady: readiness.cleanliness, reason: notReadyReason }) }),
+  ]);
 }
 
 /**

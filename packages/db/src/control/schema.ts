@@ -195,6 +195,7 @@ export const devices = control.table(
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     propertyId: uuid("property_id").notNull(),
     kind: text("kind").notNull(),
+    guestMode: text("guest_mode").notNull().default("tablet"),
     name: text("name").notNull(),
     ownerUserId: text("owner_user_id").references(() => user.id, { onDelete: "cascade" }),
     handoffHash: text("handoff_hash").notNull().unique(),
@@ -207,7 +208,7 @@ export const devices = control.table(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     lastUserId: text("last_user_id").references(() => user.id, { onDelete: "set null" }),
   },
-  (t) => [index("devices_tenant_property_idx").on(t.tenantId, t.propertyId), check("devices_kind_check", sql`${t.kind} in ('staff', 'guest')`)],
+  (t) => [index("devices_tenant_property_idx").on(t.tenantId, t.propertyId), check("devices_kind_check", sql`${t.kind} in ('staff', 'guest')`), check("devices_guest_mode_check", sql`${t.guestMode} in ('tablet', 'kiosk')`)],
 );
 
 export const deviceUsers = control.table(
@@ -226,6 +227,7 @@ export const deviceEnrolments = control.table(
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     propertyId: uuid("property_id").notNull(),
     kind: text("kind").notNull(),
+    guestMode: text("guest_mode").notNull().default("tablet"),
     name: text("name").notNull(),
     ownerUserId: text("owner_user_id").references(() => user.id, { onDelete: "cascade" }),
     userIds: text("user_ids").array().notNull().default(sql`'{}'`),
@@ -233,7 +235,7 @@ export const deviceEnrolments = control.table(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     usedAt: timestamp("used_at", { withTimezone: true }),
   },
-  (t) => [check("device_enrolments_kind_check", sql`${t.kind} in ('staff', 'guest')`)],
+  (t) => [check("device_enrolments_kind_check", sql`${t.kind} in ('staff', 'guest')`), check("device_enrolments_guest_mode_check", sql`${t.guestMode} in ('tablet', 'kiosk')`)],
 );
 
 export const deviceSessions = control.table(
