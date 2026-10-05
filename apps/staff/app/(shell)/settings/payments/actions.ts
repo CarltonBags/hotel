@@ -51,7 +51,7 @@ export async function pairReaderAction(_prev: FormState, formData: FormData): Pr
   return formAction(async () => {
     const propertyId = field(formData, "propertyId");
     const { tenant, session } = await authorize("manage_payment_settings", propertyId);
-    await registerTerminalReader(pool(), tenant.schemaName, paymentProvider(), propertyId, { registrationCode: field(formData, "code"), label: field(formData, "label") }, session.user.id);
+    await registerTerminalReader(pool(), tenant.schemaName, paymentProvider(), propertyId, { registrationCode: field(formData, "code"), label: field(formData, "label"), kind: field(formData, "kind") === "phone" ? "phone" : "reader" }, session.user.id);
     revalidatePath("/settings/payments");
     return { ok: true, message: "Reader paired." };
   });

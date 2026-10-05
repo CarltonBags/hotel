@@ -47,6 +47,7 @@ export const properties = pgTable(
     selfCheckinToken: text("self_checkin_token").notNull().default(sql`replace(gen_random_uuid()::text, '-', '')`),
     keyHandover: text("key_handover").notNull().default("reception"),
     receiptPrinter: text("receipt_printer").notNull().default(""),
+    spendingLimit: numeric("spending_limit", { precision: 12, scale: 2 }).notNull().default("150"),
     portalPhotoFileId: uuid("portal_photo_file_id").references((): AnyPgColumn => storedFiles.id, { onDelete: "set null" }),
     legalEntityId: uuid("legal_entity_id")
       .notNull()
@@ -86,6 +87,7 @@ export const properties = pgTable(
     check("properties_hk_shift_minutes_check", sql`${t.hkShiftMinutes} > 0`),
     check("properties_cash_tolerance_check", sql`${t.cashTolerance} >= 0`),
     check("properties_paid_out_limit_check", sql`${t.paidOutLimit} >= 0`),
+    check("properties_spending_limit_check", sql`${t.spendingLimit} >= 0`),
     check("properties_stats_deadline_day_check", sql`${t.statsDeadlineDay} between 1 and 28`),
   ],
 );
@@ -672,6 +674,7 @@ export const reservations = pgTable(
     expressCheckoutAt: timestamp("express_checkout_at", { withTimezone: true }),
     groupHoldingId: uuid("group_holding_id").references((): AnyPgColumn => groupHoldings.id),
     namePending: boolean("name_pending").notNull().default(false),
+    roomChargeBlocked: boolean("room_charge_blocked").notNull().default(false),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -822,6 +825,8 @@ export const charges = pgTable(
     invoiceId: uuid("invoice_id").references((): AnyPgColumn => invoices.id),
     businessDate: date("business_date").notNull(),
     corrects: uuid("corrects").references((): AnyPgColumn => charges.id),
+    outletBillId: uuid("outlet_bill_id").references((): AnyPgColumn => outletBills.id),
+    detail: jsonb("detail"),
   },
   (t) => [
     index("charges_folio_idx").on(t.folioId),
@@ -829,6 +834,7 @@ export const charges = pgTable(
     check("charges_corrects_check", sql`(${t.origin} = 'correction') = (${t.corrects} is not null)`),
     index("charges_reservation_idx").on(t.reservationId, t.serviceDate),
     index("charges_property_date_idx").on(t.propertyId, t.serviceDate).where(sql`${t.voidedAt} is null`),
+    index("charges_outlet_bill_idx").on(t.outletBillId).where(sql`${t.outletBillId} is not null`),
     index("charges_uninvoiced_idx").on(t.folioId).where(sql`${t.invoiceId} is null and ${t.voidedAt} is null`),
     check("charges_category_check", sql`${t.category} in ('accommodation', 'package', 'extras', 'city_tax')`),
     check("charges_origin_check", sql`${t.origin} in ('stay', 'catalogue', 'free_text', 'fee', 'correction', 'outlet')`),
@@ -896,8 +902,9 @@ export const terminalReaders = pgTable(
     deviceType: text("device_type").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdBy: text("created_by").notNull(),
+    kind: text("kind").notNull().default("reader"),
   },
-  (t) => [index("terminal_readers_property_idx").on(t.propertyId)],
+  (t) => [index("terminal_readers_property_idx").on(t.propertyId), check("terminal_readers_kind_check", sql`${t.kind} in ('reader', 'phone')`)],
 );
 
 export const payments = pgTable(
@@ -931,6 +938,7 @@ export const payments = pgTable(
     saveCard: boolean("save_card").notNull().default(false),
     declineNoticedAt: timestamp("decline_noticed_at", { withTimezone: true }),
     voucherId: uuid("voucher_id").references((): AnyPgColumn => vouchers.id),
+    tip: numeric("tip", { precision: 12, scale: 2 }).notNull().default("0"),
   },
   (t) => [
     index("payments_folio_idx").on(t.folioId),
@@ -940,6 +948,7 @@ export const payments = pgTable(
     check("payments_voucher_check", sql`(${t.tender} = 'voucher') = (${t.voucherId} is not null)`),
     index("payments_voucher_idx").on(t.voucherId).where(sql`${t.voucherId} is not null`),
     check("payments_amount_check", sql`${t.amount} <> 0`),
+    check("payments_tip_check", sql`${t.tip} >= 0`),
     check("payments_status_check", sql`${t.status} in ('pending', 'succeeded', 'failed', 'refund_pending_balance')`),
     check("payments_refund_check", sql`(${t.refundOf} is null) = (${t.amount} > 0)`),
   ],
@@ -1197,7 +1206,7 @@ export const approvals = pgTable(
   (t) => [
     index("approvals_property_idx").on(t.propertyId, t.requestedAt.desc()),
     index("approvals_match_idx").on(t.kind, t.subjectKey, t.requestedBy).where(sql`${t.status} = 'approved'`),
-    check("approvals_kind_check", sql`${t.kind} in ('refund_over_limit', 'price_below_floor', 'complimentary', 'paid_out_over_limit')`),
+    check("approvals_kind_check", sql`${t.kind} in ('refund_over_limit', 'price_below_floor', 'complimentary', 'paid_out_over_limit', 'room_charge_over_limit', 'outlet_discount', 'outlet_void')`),
     check("approvals_status_check", sql`${t.status} in ('pending', 'approved', 'rejected', 'used')`),
     check("approvals_decided_check", sql`(${t.status} = 'pending') = (${t.decidedBy} is null)`),
     check("approvals_used_check", sql`(${t.status} = 'used') = (${t.usedAt} is not null)`),
@@ -2593,8 +2602,10 @@ export const outlets = pgTable(
     cashRegisterId: uuid("cash_register_id").references(() => cashRegisters.id),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).notNull().default("0"),
   },
   (t) => [
+    check("outlets_discount_percent_check", sql`${t.discountPercent} between 0 and 100`),
     check("outlets_name_check", sql`length(trim(${t.name})) between 1 and 60`),
     check("outlets_kind_check", sql`${t.kind} in ('bar', 'restaurant', 'spa', 'other')`),
     unique("outlets_property_id_name_key").on(t.propertyId, t.name),
@@ -2682,10 +2693,15 @@ export const outletBills = pgTable(
     openedAt: timestamp("opened_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     closedBy: text("closed_by"),
     closedAt: timestamp("closed_at", { withTimezone: true }),
+    discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).notNull().default("0"),
+    discountApprovedBy: text("discount_approved_by"),
+    reservationId: uuid("reservation_id").references(() => reservations.id),
+    signature: text("signature"),
   },
   (t) => [
-    check("outlet_bills_status_check", sql`${t.status} in ('open', 'paid', 'invoiced')`),
-    check("outlet_bills_closed_check", sql`(${t.status} = 'open') = (${t.closedAt} is null)`),
+    check("outlet_bills_status_check", sql`${t.status} in ('open', 'paying', 'paid', 'invoiced', 'charged')`),
+    check("outlet_bills_closed_check", sql`(${t.status} in ('open', 'paying')) = (${t.closedAt} is null)`),
+    check("outlet_bills_discount_check", sql`${t.discountPercent} between 0 and 100`),
     unique("outlet_bills_outlet_id_number_key").on(t.outletId, t.number),
     index("outlet_bills_open_idx").on(t.outletId).where(sql`${t.status} = 'open'`),
   ],
@@ -2720,8 +2736,16 @@ export const outletBillLines = pgTable(
     roundId: uuid("round_id").references(() => outletRounds.id),
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedBy: text("voided_by"),
+    voidReason: text("void_reason"),
+    voidApprovedBy: text("void_approved_by"),
   },
-  (t) => [check("outlet_bill_lines_quantity_check", sql`${t.quantity} between 1 and 999`), index("outlet_bill_lines_bill_idx").on(t.billId)],
+  (t) => [
+    check("outlet_bill_lines_quantity_check", sql`${t.quantity} between 1 and 999`),
+    index("outlet_bill_lines_bill_idx").on(t.billId),
+    check("outlet_bill_lines_void_check", sql`(${t.voidedAt} is null) = (${t.voidReason} is null)`),
+  ],
 );
 
 export const printJobs = pgTable(

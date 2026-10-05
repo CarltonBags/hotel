@@ -400,6 +400,8 @@ export interface ReservationDetail {
   overbooked: boolean;
   /** Excluded from No-show at the Night Audit: stays Confirmed and is proposed again (ticket 32). */
   lateArrival: boolean;
+  /** No Room Charge at the outlets (ticket 61). */
+  roomChargeBlocked: boolean;
   /** Arrived, Waiting for Room: since when (ticket 34). */
   waitingForRoomSince: Date | null;
   cancelledAt: Date | null;
@@ -416,7 +418,7 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
   if (!isUuid(id)) return null;
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query(
-      `select r.id, r.property_id, r.status, r.overbooked, r.late_arrival, r.waiting_for_room_since, r.cancelled_at, r.cancellation_fee, r.cancellation_fee_status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.adults, r.child_ages, r.created_at,
+      `select r.id, r.property_id, r.status, r.overbooked, r.late_arrival, r.room_charge_blocked, r.waiting_for_room_since, r.cancelled_at, r.cancellation_fee, r.cancellation_fee_status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.adults, r.child_ages, r.created_at,
          t.id as rt_id, t.code as rt_code, t.name as rt_name, p.id as rp_id, p.code as rp_code, p.name as rp_name, p.meal_plan,
          g.id as g_id, g.first_name, g.last_name,
          b.id as b_id, b.confirmation_number, b.booker_guest_id, b.booker_company_id, b.source, b.channel_name, b.channel_collect, to_char(b.virtual_card_from, 'YYYY-MM-DD') as virtual_card_from, to_char(b.virtual_card_until, 'YYYY-MM-DD') as virtual_card_until, b.virtual_card_amount,
@@ -460,6 +462,7 @@ export async function findReservation(pool: Pool, schema: string, id: string): P
       status: r.status,
       overbooked: r.overbooked,
       lateArrival: r.late_arrival,
+      roomChargeBlocked: r.room_charge_blocked,
       waitingForRoomSince: r.waiting_for_room_since,
       cancelledAt: r.cancelled_at,
       cancellationFee: r.cancellation_fee === null ? null : Number(r.cancellation_fee),

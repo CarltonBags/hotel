@@ -99,3 +99,60 @@ export function eposPrintXml(text: string): string {
   const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\n/g, "&#10;");
   return `<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print"><text lang="de">${esc}</text><cut type="feed"/></epos-print></s:Body></s:Envelope>`;
 }
+
+export interface RoomChargeCheck {
+  allowed: boolean;
+  /** Above what is left of tonight's Spending Limit: the guest pays, or an Outlet Manager approves. */
+  overLimit: boolean;
+  remaining: number;
+  reason: string | null;
+}
+
+/**
+ * A Room Charge: the stay is Checked-in, not blocked for room charge ("cash
+ * only") and covered by a Card Hold, Card Guarantee or an on-account
+ * Bill-to; within the Spending Limit per night, or with an Approval above it.
+ */
+export function roomChargeCheck(c: { status: string; blocked: boolean; covered: boolean; chargedTonight: number; limit: number; amount: number }): RoomChargeCheck {
+  const remaining = roundMoney(Math.max(0, c.limit - c.chargedTonight));
+  const no = (reason: string) => ({ allowed: false, overLimit: false, remaining, reason });
+  if (c.status !== "checked_in") return no("The guest is not checked in");
+  if (c.blocked) return no("Room charge is blocked for this stay (cash only)");
+  if (!c.covered) return no("No Card Hold, Card Guarantee or account covers a Room Charge");
+  return { allowed: true, overLimit: c.amount > remaining, remaining, reason: null };
+}
+
+export interface OutletChargeLine {
+  taxCode: string;
+  taxRate: number;
+  revenueAccount: string;
+  description: string;
+  quantity: number;
+  amount: number;
+}
+
+/** A bill as Charges: one per Tax Code (and rate), its items as detail, the bill's discount taken off each. */
+export function chargesPerTaxCode(lines: OutletChargeLine[], discountPercent: number): { taxCode: string; taxRate: number; revenueAccount: string; amount: number; items: { description: string; quantity: number; amount: number }[]; discount: number }[] {
+  const out = new Map<string, { taxCode: string; taxRate: number; revenueAccount: string; gross: number; items: { description: string; quantity: number; amount: number }[] }>();
+  for (const l of lines) {
+    const k = `${l.taxCode}|${l.taxRate}`;
+    if (!out.has(k)) out.set(k, { taxCode: l.taxCode, taxRate: l.taxRate, revenueAccount: l.revenueAccount, gross: 0, items: [] });
+    const g = out.get(k)!;
+    g.gross = roundMoney(g.gross + l.amount);
+    g.items.push({ description: l.description, quantity: l.quantity, amount: l.amount });
+  }
+  return [...out.values()].map((g) => {
+    const discount = roundMoney((g.gross * discountPercent) / 100);
+    return { taxCode: g.taxCode, taxRate: g.taxRate, revenueAccount: g.revenueAccount, amount: roundMoney(g.gross - discount), items: g.items, discount };
+  });
+}
+
+/** A discount beyond the outlet's percentage needs an Approval, unless the user approves outlet requests themselves. */
+export function discountNeedsApproval(actor: Actor, propertyId: string, percent: number, outletMax: number): boolean {
+  return percent > outletMax && !can(actor, "approve_outlet_requests", propertyId);
+}
+
+/** Tap to pay on a phone takes Visa, Mastercard, Amex and Maestro, never girocard (it needs a reader). */
+export function tapToPayAccepts(brand: string | null): boolean {
+  return (brand ?? "").toLowerCase() !== "girocard";
+}

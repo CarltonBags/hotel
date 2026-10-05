@@ -52,3 +52,43 @@ describe("outlets", () => {
     expect(xml).toContain("<text lang=\"de\">2 x Fish &amp; Chips&#10;  - &lt;no salt&gt;</text><cut type=\"feed\"/>");
   });
 });
+
+describe("outlet payments", () => {
+  it("Room Charge: only for a guest in house, not blocked, covered; above the night's remaining limit it needs an Approval", async () => {
+    const { roomChargeCheck } = await import("../src");
+    const ok = { status: "checked_in", blocked: false, covered: true, chargedTonight: 100, limit: 150 };
+    expect(roomChargeCheck({ ...ok, amount: 40 })).toEqual({ allowed: true, overLimit: false, remaining: 50, reason: null });
+    expect(roomChargeCheck({ ...ok, amount: 60 })).toMatchObject({ allowed: true, overLimit: true });
+    expect(roomChargeCheck({ ...ok, status: "checked_out", amount: 10 })).toMatchObject({ allowed: false, reason: "The guest is not checked in" });
+    expect(roomChargeCheck({ ...ok, blocked: true, amount: 10 }).allowed).toBe(false);
+    expect(roomChargeCheck({ ...ok, covered: false, amount: 10 }).reason).toMatch(/Card Hold/);
+  });
+
+  it("a bill becomes one Charge per Tax Code with its items as detail, the discount taken off per Tax Code", async () => {
+    const { chargesPerTaxCode } = await import("../src");
+    const lines = [
+      { taxCode: "FOOD", taxRate: 7, revenueAccount: "8400", description: "Schnitzel", quantity: 2, amount: 38 },
+      { taxCode: "STD", taxRate: 19, revenueAccount: "8410", description: "Pils", quantity: 3, amount: 13.5 },
+      { taxCode: "FOOD", taxRate: 7, revenueAccount: "8400", description: "Suppe", quantity: 1, amount: 7 },
+    ];
+    expect(chargesPerTaxCode(lines, 0)).toEqual([
+      { taxCode: "FOOD", taxRate: 7, revenueAccount: "8400", amount: 45, items: [{ description: "Schnitzel", quantity: 2, amount: 38 }, { description: "Suppe", quantity: 1, amount: 7 }], discount: 0 },
+      { taxCode: "STD", taxRate: 19, revenueAccount: "8410", amount: 13.5, items: [{ description: "Pils", quantity: 3, amount: 13.5 }], discount: 0 },
+    ]);
+    expect(chargesPerTaxCode(lines, 10).map((c) => [c.amount, c.discount])).toEqual([
+      [40.5, 4.5],
+      [12.15, 1.35],
+    ]);
+  });
+
+  it("a discount above the outlet's percentage needs an Approval for Service; tap to pay takes no girocard", async () => {
+    const { discountNeedsApproval, tapToPayAccepts } = await import("../src");
+    const sv = { propertyRoles: [{ propertyId: "p", role: "service" as const }] };
+    const om = { propertyRoles: [{ propertyId: "p", role: "outlet_manager" as const }] };
+    expect(discountNeedsApproval(sv, "p", 10, 10)).toBe(false);
+    expect(discountNeedsApproval(sv, "p", 15, 10)).toBe(true);
+    expect(discountNeedsApproval(om, "p", 50, 10)).toBe(false);
+    expect(tapToPayAccepts("visa")).toBe(true);
+    expect(tapToPayAccepts("girocard")).toBe(false);
+  });
+});

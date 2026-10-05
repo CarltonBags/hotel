@@ -104,6 +104,16 @@ export function FolioPanel({ reservationId, view, services, taxCodes, parties, l
                         {description(c)}
                       </span>
                       {c.voided ? <div className="text-xs">{fill(m["folio.voidedBecause"], { reason: voidReason(c) })}</div> : null}
+                      {/* a Room Charge from an outlet: its items */}
+                      {c.detail ? (
+                        <ul className="text-xs text-ink-60" data-charge-detail>
+                          {c.detail.map((d, i) => (
+                            <li key={i}>
+                              {d.quantity} × {d.description} · {money(d.amount)}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </td>
                     <td className="py-1">
                       {c.taxCode} {c.taxRate} %

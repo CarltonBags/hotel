@@ -100,6 +100,15 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
         <dd className="text-right font-bold" data-receipt-amount={Math.abs(r.amount)}>
           {money(Math.abs(r.amount))}
         </dd>
+        {/* a tip on top (ticket 61): not part of the amount paid for the service */}
+        {r.tip ? (
+          <>
+            <dt>Trinkgeld / Tip</dt>
+            <dd className="text-right" data-receipt-tip={r.tip}>
+              {money(r.tip)}
+            </dd>
+          </>
+        ) : null}
       </dl>
       {f ? (
         <table className="w-full" data-receipt-vat>

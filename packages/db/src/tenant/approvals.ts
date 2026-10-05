@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { APPROVAL_TTL_HOURS, approvalStatus, type ApprovalKind, type ApprovalStatus } from "@hoteloftware/domain";
+import { APPROVAL_TTL_HOURS, OUTLET_APPROVAL_KINDS, approvalStatus, type ApprovalKind, type ApprovalStatus } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
 import { withTenant } from "./with-tenant";
 
@@ -26,7 +26,7 @@ export interface ApprovalSubject {
 /** An action beyond the user's limit, refused until a Property Manager consents. */
 export class ApprovalRequired extends Error {
   constructor(readonly subject: ApprovalSubject) {
-    super(`${subject.summary} needs a Property Manager's Approval`);
+    super(`${subject.summary} needs ${OUTLET_APPROVAL_KINDS.includes(subject.kind) ? "an Outlet Manager's" : "a Property Manager's"} Approval`);
     this.name = "ApprovalRequired";
   }
 }

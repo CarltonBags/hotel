@@ -114,6 +114,7 @@ export const MODULES: ModuleDef[] = [
   { id: "settings_services", group: "settings", label: "module.settings_services", icon: "Tag", hue: "#e0457b", href: "/settings/services", requiresProperty: "view_property" },
   { id: "settings_rate_plans", group: "settings", label: "module.settings_rate_plans", icon: "Tag", hue: "#e0457b", href: "/settings/rate-plans", requiresProperty: "manage_rates" },
   { id: "settings_devices", group: "settings", label: "module.settings_devices", icon: "TabletSmartphone", hue: "#6b7280", href: "/settings/devices", requiresProperty: "manage_floor_users" },
+  { id: "outlet_reports", group: "reports", label: "module.outlet_reports", icon: "UtensilsCrossed", hue: "#e2552b", href: "/outlet-reports", requiresProperty: "view_outlet_reports", requiresModule: "point_of_sale" },
   { id: "settings_outlets", group: "settings", label: "module.settings_outlets", icon: "UtensilsCrossed", hue: "#e2552b", href: "/settings/outlets", requiresProperty: "manage_outlets", requiresModule: "point_of_sale" },
   { id: "settings_cash_desk", group: "settings", label: "module.settings_cash_desk", icon: "Wallet", hue: "#1fa971", href: "/settings/cash-desk", requiresProperty: "manage_cash_desk" },
   { id: "settings_payments", group: "settings", label: "module.settings_payments", icon: "CreditCard", hue: "#635bff", href: "/settings/payments", requiresProperty: "manage_payment_settings" },

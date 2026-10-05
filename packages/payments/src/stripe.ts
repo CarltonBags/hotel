@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import type { AccountStatus, IntentState, IntentStatus, OnlinePaymentInput, PaymentProvider, ProviderEvent, ReaderInfo, RefundResult, SetupState, TerminalPaymentInput } from "./provider";
+import type { AccountStatus, IntentState, IntentStatus, OnlinePaymentInput, PaymentProvider, ProviderEvent, ReaderInfo, RefundResult, SetupState, SimulatedCard, TerminalPaymentInput } from "./provider";
 import { ProviderError } from "./provider";
 
 /** Currencies without minor units at Stripe (none of the DACH ones; kept for safety). */
@@ -109,9 +109,11 @@ export class StripePaymentProvider implements PaymentProvider {
     return { intentId: intent.id };
   }
 
-  async simulateCard(accountId: string, readerId: string): Promise<void> {
+  async simulateCard(accountId: string, readerId: string, card: SimulatedCard = {}): Promise<void> {
     if (!this.testMode) throw new ProviderError("Simulated cards exist in test mode only");
-    await this.call(() => this.stripe.testHelpers.terminal.readers.presentPaymentMethod(readerId, {}, this.on(accountId)));
+    // Stripe's test reader: a tip as the amount added on the reader (a girocard test card is not offered)
+    const params = card.tip ? { amount_tip: Math.round(card.tip * 100) } : {};
+    await this.call(() => this.stripe.testHelpers.terminal.readers.presentPaymentMethod(readerId, params, this.on(accountId)));
   }
 
   async cancelTerminalPayment(accountId: string, readerId: string, intentId: string): Promise<void> {
