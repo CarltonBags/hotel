@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { floorContext } from "@/lib/floor";
+import { outletAppContext } from "@/lib/outlets";
 import { FloorRoot } from "./floor-root";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +11,7 @@ export const dynamic = "force-dynamic";
  * the app fetches its day and keeps it encrypted on the phone.
  */
 export default async function FloorPage() {
-  if (!(await floorContext())) redirect("/");
+  // a PIN Sign-in lands here: Service and Spa Staff work the outlet app (ticket 60)
+  if (!(await floorContext())) redirect((await outletAppContext()) ? "/outlet" : "/");
   return <FloorRoot />;
 }

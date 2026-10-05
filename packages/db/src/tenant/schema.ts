@@ -770,12 +770,17 @@ export const folios = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdBy: text("created_by").notNull(),
     groupId: uuid("group_id").references((): AnyPgColumn => groups.id),
+    outletBillId: uuid("outlet_bill_id").references((): AnyPgColumn => outletBills.id),
   },
   (t) => [
     unique("folios_reservation_id_number_key").on(t.reservationId, t.number),
-    check("folios_bill_to_check", sql`(${t.billToGuestId} is null) <> (${t.billToCompanyId} is null)`),
-    check("folios_owner_check", sql`(${t.reservationId} is null) <> (${t.groupId} is null)`),
+    check(
+      "folios_bill_to_check",
+      sql`(${t.billToGuestId} is null) <> (${t.billToCompanyId} is null) or (${t.outletBillId} is not null and ${t.billToGuestId} is null and ${t.billToCompanyId} is null)`,
+    ),
+    check("folios_owner_check", sql`num_nonnulls(${t.reservationId}, ${t.groupId}, ${t.outletBillId}) = 1`),
     uniqueIndex("folios_group_idx").on(t.groupId).where(sql`${t.groupId} is not null`),
+    uniqueIndex("folios_outlet_bill_idx").on(t.outletBillId).where(sql`${t.outletBillId} is not null`),
   ],
 );
 
@@ -826,7 +831,7 @@ export const charges = pgTable(
     index("charges_property_date_idx").on(t.propertyId, t.serviceDate).where(sql`${t.voidedAt} is null`),
     index("charges_uninvoiced_idx").on(t.folioId).where(sql`${t.invoiceId} is null and ${t.voidedAt} is null`),
     check("charges_category_check", sql`${t.category} in ('accommodation', 'package', 'extras', 'city_tax')`),
-    check("charges_origin_check", sql`${t.origin} in ('stay', 'catalogue', 'free_text', 'fee', 'correction')`),
+    check("charges_origin_check", sql`${t.origin} in ('stay', 'catalogue', 'free_text', 'fee', 'correction', 'outlet')`),
     check("charges_component_check", sql`(${t.origin} = 'stay') = (${t.component} is not null)`),
     check("charges_auto_void_check", sql`${t.autoVoid} in ('early_departure', 'stay_changed', 'check_in_cancelled')`),
     check("charges_void_check", sql`(${t.voidedAt} is null) = (${t.voidReason} is null) and (${t.voidedAt} is null) = (${t.voidedBy} is null) and (${t.autoVoid} is null or ${t.voidedAt} is not null)`),
@@ -2578,6 +2583,168 @@ export const groupRegistrations = pgTable("group_registrations", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
 
+export const outlets = pgTable(
+  "outlets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    cashRegisterId: uuid("cash_register_id").references(() => cashRegisters.id),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [
+    check("outlets_name_check", sql`length(trim(${t.name})) between 1 and 60`),
+    check("outlets_kind_check", sql`${t.kind} in ('bar', 'restaurant', 'spa', 'other')`),
+    unique("outlets_property_id_name_key").on(t.propertyId, t.name),
+  ],
+);
+
+export const outletManagers = pgTable(
+  "outlet_managers",
+  {
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.outletId, t.userId] })],
+);
+
+export const outletPrinters = pgTable(
+  "outlet_printers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    address: text("address").notNull().default(""),
+    active: boolean("active").notNull().default(true),
+  },
+  (t) => [
+    check("outlet_printers_name_check", sql`length(trim(${t.name})) between 1 and 60`),
+    check("outlet_printers_kind_check", sql`${t.kind} in ('kitchen', 'bar', 'other')`),
+    unique("outlet_printers_outlet_id_name_key").on(t.outletId, t.name),
+  ],
+);
+
+export const outletTables = pgTable(
+  "outlet_tables",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    seats: integer("seats").notNull().default(4),
+    sortOrder: integer("sort_order").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+  },
+  (t) => [
+    check("outlet_tables_name_check", sql`length(trim(${t.name})) between 1 and 30`),
+    check("outlet_tables_seats_check", sql`${t.seats} between 1 and 99`),
+    unique("outlet_tables_outlet_id_name_key").on(t.outletId, t.name),
+  ],
+);
+
+export const outletMenuItems = pgTable(
+  "outlet_menu_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id, { onDelete: "cascade" }),
+    serviceId: uuid("service_id").notNull().references(() => services.id),
+    name: text("name").notNull(),
+    category: text("category").notNull().default(""),
+    price: numeric("price", { precision: 12, scale: 2 }).notNull(),
+    printerId: uuid("printer_id").references(() => outletPrinters.id, { onDelete: "set null" }),
+    modifiers: jsonb("modifiers").notNull().default(sql`'[]'::jsonb`),
+    active: boolean("active").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+  },
+  (t) => [
+    check("outlet_menu_items_name_check", sql`length(trim(${t.name})) between 1 and 80`),
+    check("outlet_menu_items_price_check", sql`${t.price} >= 0`),
+    unique("outlet_menu_items_outlet_id_name_key").on(t.outletId, t.name),
+  ],
+);
+
+export const outletBills = pgTable(
+  "outlet_bills",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    number: integer("number").notNull(),
+    tableId: uuid("table_id").references(() => outletTables.id),
+    label: text("label").notNull().default(""),
+    customerName: text("customer_name").notNull().default(""),
+    companyId: uuid("company_id").references(() => companies.id),
+    status: text("status").notNull().default("open"),
+    splitFrom: uuid("split_from").references((): AnyPgColumn => outletBills.id),
+    openedBy: text("opened_by").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    closedBy: text("closed_by"),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("outlet_bills_status_check", sql`${t.status} in ('open', 'paid', 'invoiced')`),
+    check("outlet_bills_closed_check", sql`(${t.status} = 'open') = (${t.closedAt} is null)`),
+    unique("outlet_bills_outlet_id_number_key").on(t.outletId, t.number),
+    index("outlet_bills_open_idx").on(t.outletId).where(sql`${t.status} = 'open'`),
+  ],
+);
+
+export const outletRounds = pgTable(
+  "outlet_rounds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    billId: uuid("bill_id").notNull().references(() => outletBills.id),
+    number: integer("number").notNull(),
+    sentBy: text("sent_by").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [unique("outlet_rounds_bill_id_number_key").on(t.billId, t.number)],
+);
+
+export const outletBillLines = pgTable(
+  "outlet_bill_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    billId: uuid("bill_id").notNull().references(() => outletBills.id),
+    menuItemId: uuid("menu_item_id").references(() => outletMenuItems.id, { onDelete: "set null" }),
+    serviceId: uuid("service_id").notNull().references(() => services.id),
+    description: text("description").notNull(),
+    quantity: integer("quantity").notNull(),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    modifiers: jsonb("modifiers").notNull().default(sql`'[]'::jsonb`),
+    note: text("note").notNull().default(""),
+    printerId: uuid("printer_id").references(() => outletPrinters.id, { onDelete: "set null" }),
+    roundId: uuid("round_id").references(() => outletRounds.id),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [check("outlet_bill_lines_quantity_check", sql`${t.quantity} between 1 and 999`), index("outlet_bill_lines_bill_idx").on(t.billId)],
+);
+
+export const printJobs = pgTable(
+  "print_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id),
+    printerId: uuid("printer_id").notNull().references(() => outletPrinters.id),
+    roundId: uuid("round_id").notNull().references(() => outletRounds.id),
+    ticket: jsonb("ticket").notNull(),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    error: text("error"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    printedAt: timestamp("printed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [
+    check("print_jobs_status_check", sql`${t.status} in ('pending', 'printing', 'printed', 'failed')`),
+    index("print_jobs_open_idx").on(t.outletId, t.createdAt).where(sql`${t.status} in ('pending', 'printing', 'failed')`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -2703,4 +2870,13 @@ export const tenantSchema = {
   groupRouting,
   groupDeposits,
   groupRegistrations,
+  outlets,
+  outletManagers,
+  outletPrinters,
+  outletTables,
+  outletMenuItems,
+  outletBills,
+  outletRounds,
+  outletBillLines,
+  printJobs,
 };

@@ -14,7 +14,8 @@ import { formAction, type FormState } from "@/lib/form";
 const PATH = "/cash";
 
 async function desk(propertyId: string, action: "handle_cash" | "paid_out" | "manage_cash" = "handle_cash") {
-  const { tenant, session, actor } = await authorize(action, String(propertyId));
+  // outlet staff work their outlet's register (ticket 60); the db layer tells the registers apart
+  const { tenant, session, actor } = await authorize(action, String(propertyId)).catch((err: unknown) => (action === "handle_cash" ? authorize("outlet_cash", String(propertyId)) : Promise.reject(err)));
   return { schema: tenant.schemaName, tenantId: tenant.id, viewer: { userId: session.user.id, actor }, userName: session.user.name };
 }
 

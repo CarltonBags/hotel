@@ -207,10 +207,11 @@ export async function recordFiscalIn(tx: PoolClient, receiptId: string): Promise
     [receiptId],
   )).rows[0];
   if (v) return recordVoucherSaleIn(tx, receiptId, v);
-  const r = (await tx.query<{ property_id: string; register_id: string | null; amount: string; currency: string; tender: string; refund_of: string | null; folio_id: string; reservation_id: string; status: string; test: boolean; country: string; business_date: string }>(
-    `select rc.property_id, rc.register_id, p.amount, trim(p.currency) as currency, p.tender, p.refund_of, p.folio_id, p.reservation_id, r.status, r.test, pr.country,
+  // a payment on a stay, or on an Outlet Sale's bill (ticket 60: no reservation, always a sale)
+  const r = (await tx.query<{ property_id: string; register_id: string | null; amount: string; currency: string; tender: string; refund_of: string | null; folio_id: string; reservation_id: string | null; status: string | null; test: boolean; country: string; business_date: string }>(
+    `select rc.property_id, rc.register_id, p.amount, trim(p.currency) as currency, p.tender, p.refund_of, p.folio_id, p.reservation_id, r.status, coalesce(r.test, false) as test, pr.country,
             to_char(coalesce(pr.business_date, (now() at time zone pr.time_zone)::date), 'YYYY-MM-DD') as business_date
-     from receipts rc join payments p on p.id = rc.payment_id join reservations r on r.id = p.reservation_id join properties pr on pr.id = rc.property_id
+     from receipts rc join payments p on p.id = rc.payment_id left join reservations r on r.id = p.reservation_id join properties pr on pr.id = rc.property_id
      where rc.id = $1`,
     [receiptId],
   )).rows[0];
@@ -230,7 +231,7 @@ export async function recordFiscalIn(tx: PoolClient, receiptId: string): Promise
   } else {
     // what the money pays for: the folio's Charges, or before check-in the stay itself (as its Deposit Invoice)
     const charges = (await tx.query<{ rate: string; gross: string }>("select tax_rate as rate, sum(amount) as gross from charges where folio_id = $1 and voided_at is null group by tax_rate", [r.folio_id])).rows.map((c) => ({ rate: Number(c.rate), gross: Number(c.gross) }));
-    amounts = receiptVatAmounts(amount, charges.length ? charges : await stayComposition(tx, r.reservation_id));
+    amounts = receiptVatAmounts(amount, charges.length || !r.reservation_id ? charges : await stayComposition(tx, r.reservation_id));
     businessCase = r.status === "confirmed" ? "Anzahlungseinstellung" : "Umsatz";
   }
   const client = await clientIn(tx, r.property_id, r.register_id);

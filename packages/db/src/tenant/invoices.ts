@@ -371,19 +371,46 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
 export async function issueInvoice(pool: Pool, schema: string, folioId: string, userId: string): Promise<IssuedInvoice> {
   if (!isUuid(folioId)) throw new Error("Folio not found");
   return withTenant(pool, schema, async (tx) => {
-    const f = (await tx.query<{ reservation_id: string | null; group_id: string | null; property_id: string }>(
-      "select f.reservation_id, f.group_id, coalesce(r.property_id, g.property_id) as property_id from folios f left join reservations r on r.id = f.reservation_id left join groups g on g.id = f.group_id where f.id = $1",
-      [folioId],
-    )).rows[0];
-    if (!f) throw new Error("Folio not found");
-    await lockProperty(tx, f.property_id);
-    // a reservation's folio, or a group's Master Folio (ticket 59)
-    if (f.reservation_id) await tx.query("select 1 from reservations where id = $1 for update", [f.reservation_id]);
-    else await tx.query("select 1 from groups where id = $1 for update", [f.group_id]);
-    const issued = await issueIn(tx, f.reservation_id ? await contextOf(tx, f.reservation_id) : await groupContextOf(tx, f.group_id!), folioId, userId);
+    const issued = await issueFolioInvoiceIn(tx, folioId, userId);
     if (!issued) throw new Error("The folio has no open Charges to invoice");
     return issued;
   });
+}
+
+/**
+ * The invoice of a folio's open Charges, inside the caller's transaction,
+ * whoever the folio belongs to: a reservation, a group's Master Folio
+ * (ticket 59) or an Outlet Sale's bill (ticket 60). Null when nothing is open.
+ */
+export async function issueFolioInvoiceIn(tx: PoolClient, folioId: string, userId: string): Promise<IssuedInvoice | null> {
+  const f = (await tx.query<{ reservation_id: string | null; group_id: string | null; outlet_bill_id: string | null; property_id: string }>(
+    `select f.reservation_id, f.group_id, f.outlet_bill_id, coalesce(r.property_id, g.property_id, ob.property_id) as property_id
+     from folios f left join reservations r on r.id = f.reservation_id left join groups g on g.id = f.group_id left join outlet_bills ob on ob.id = f.outlet_bill_id where f.id = $1`,
+    [folioId],
+  )).rows[0];
+  if (!f) throw new Error("Folio not found");
+  await lockProperty(tx, f.property_id);
+  if (f.reservation_id) {
+    await tx.query("select 1 from reservations where id = $1 for update", [f.reservation_id]);
+    return issueIn(tx, await contextOf(tx, f.reservation_id), folioId, userId);
+  }
+  if (f.group_id) {
+    await tx.query("select 1 from groups where id = $1 for update", [f.group_id]);
+    return issueIn(tx, await groupContextOf(tx, f.group_id), folioId, userId);
+  }
+  await tx.query("select 1 from outlet_bills where id = $1 for update", [f.outlet_bill_id]);
+  return issueIn(tx, await outletContextOf(tx, f.outlet_bill_id!), folioId, userId);
+}
+
+/** An Outlet Sale's bill: the outlet and bill number as the reference, the Business Date it was served on. */
+async function outletContextOf(tx: PoolClient, billId: string): Promise<Context> {
+  const r = (await tx.query<{ property_id: string; legal_entity_id: string; currency: string; today: string; served: string; reference: string; country: string; time_zone: string }>(
+    `select ob.property_id, p.legal_entity_id, p.currency, p.time_zone, p.country, to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today,
+       to_char(coalesce(p.business_date, (now() at time zone p.time_zone)::date), 'YYYY-MM-DD') as served, o.name || ' ' || ob.number as reference
+     from outlet_bills ob join outlets o on o.id = ob.outlet_id join properties p on p.id = ob.property_id where ob.id = $1`,
+    [billId],
+  )).rows[0]!;
+  return { reservationId: null, propertyId: r.property_id, legalEntityId: r.legal_entity_id, currency: r.currency.trim(), today: r.today, confirmation: r.reference, arrival: r.served, departure: addDays(r.served, 1), status: "checked_out", country: r.country, timeZone: r.time_zone };
 }
 
 export async function issueDepositInvoiceIfDue(pool: Pool, schema: string, paymentId: string, userId: string): Promise<IssuedInvoice | null> {

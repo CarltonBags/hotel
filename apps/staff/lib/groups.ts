@@ -1,14 +1,12 @@
-import { findProperty, groupProperty, modulePeriods } from "@hoteloftware/db";
-import { moduleState, moduleVisible, todayIn, type PropertyAction } from "@hoteloftware/domain";
+import { groupProperty } from "@hoteloftware/db";
+import type { PropertyAction } from "@hoteloftware/domain";
 import { authorize, requirePrincipal } from "./authorize";
 import { pool } from "./db";
+import { moduleOn } from "./modules";
 
 /** The Groups Module of the subscription is on at the property (ticket 58). Server only. */
 export async function groupsModuleOn(schema: string, propertyId: string): Promise<boolean> {
-  const p = await findProperty(pool(), schema, propertyId);
-  if (!p) return false;
-  const periods = await modulePeriods(pool(), schema, [propertyId]);
-  return moduleVisible(moduleState(periods.get(propertyId) ?? [], "groups", todayIn(p.timeZone)));
+  return moduleOn(schema, propertyId, "groups");
 }
 
 /** A group (or one of its holdings) acted on: the one permission check at its property, and the Groups Module on there. */

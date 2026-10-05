@@ -1,4 +1,4 @@
-import { cashBook, cashSettings, listCashRegisters, listTenantUsers, myOpenShift } from "@hoteloftware/db";
+import { cashBook, cashSettings, listCashRegisters, listOutlets, listTenantUsers, myOpenShift } from "@hoteloftware/db";
 import { can, denominationsFor } from "@hoteloftware/domain";
 import { redirect } from "next/navigation";
 import { pool } from "@/lib/db";
@@ -23,8 +23,11 @@ export default async function CashPage({ searchParams }: { searchParams: Promise
   const s = tenant.schemaName;
   const userId = session.user.id;
   const viewer = { userId, actor };
-  const rights = { handle: can(actor, "handle_cash", property.id), paidOut: can(actor, "paid_out", property.id), manage: can(actor, "manage_cash", property.id) };
-  const [settings, registers, shift, users] = await Promise.all([cashSettings(pool(), s, property.id), listCashRegisters(pool(), s, property.id), myOpenShift(pool(), s, property.id, userId), listTenantUsers(pool(), tenant.id)]);
+  const desk = can(actor, "handle_cash", property.id);
+  const rights = { handle: desk || can(actor, "outlet_cash", property.id), paidOut: can(actor, "paid_out", property.id), manage: can(actor, "manage_cash", property.id) };
+  const [settings, allRegisters, shift, users, outlets] = await Promise.all([cashSettings(pool(), s, property.id), listCashRegisters(pool(), s, property.id), myOpenShift(pool(), s, property.id, userId), listTenantUsers(pool(), tenant.id), listOutlets(pool(), s, property.id)]);
+  // outlet staff see their outlets' registers only (ticket 60)
+  const registers = desk || rights.manage ? allRegisters : allRegisters.filter((r) => outlets.some((o) => o.cashRegisterId === r.id));
   if (!settings.enabled) {
     return (
       <div className="mx-auto max-w-3xl p-6">
