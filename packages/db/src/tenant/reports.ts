@@ -518,13 +518,20 @@ async function cashReport(tx: PoolClient, req: ReportRequest, props: PropertyInf
     for (const g of registers) {
       rows.push({ cells: { label: props.length > 1 ? `${p.name} · ${g.name}` : g.name, cashIn: money(g.cash_in), cashOut: money(g.cash_out), paidOuts: money(g.paid_outs), deposits: money(g.deposits), vouchers: money(g.vouchers), shifts: null, differences: money(g.differences) } });
     }
-    // Vouchers sold for cash, on the liability account they were booked to (ticket 53)
-    const liability = (await tx.query<{ account: string; total: string }>(
-      "select m.account, sum(m.amount) as total from cash_movements m where m.property_id = $1 and m.kind = 'voucher_sale' and m.business_date between $2 and $3 group by m.account order by m.account",
+    // Vouchers sold here in the period, by every tender, on the Legal Entity's liability account; and what is still owed on
+    // the company's Vouchers at the period's end (ticket 53)
+    const liability = (await tx.query<{ account: string; sold: string; open: string }>(
+      `select le.voucher_liability_account as account,
+         coalesce((select sum(v.amount) from vouchers v where v.property_id = $1 and not v.test and (v.sold_at at time zone pp.time_zone)::date between $2 and $3), 0) as sold,
+         coalesce((select sum(v.amount - coalesce((select sum(x.amount) from payments x where x.voucher_id = v.id and x.status = 'succeeded' and x.business_date <= $3), 0))
+                   from vouchers v where v.legal_entity_id = le.id and not v.test and (v.sold_at at time zone pp.time_zone)::date <= $3), 0) as open
+       from properties pp join legal_entities le on le.id = pp.legal_entity_id where pp.id = $1`,
       [p.id, req.from, req.to],
-    )).rows;
-    for (const l of liability) {
-      rows.push({ cells: { label: `${t(req, "voucherLiability")} ${l.account}${props.length > 1 ? ` (${p.name})` : ""}`, cashIn: null, cashOut: null, paidOuts: null, deposits: null, vouchers: money(l.total), shifts: null, differences: null }, emphasis: true });
+    )).rows[0];
+    if (liability && (Number(liability.sold) || Number(liability.open))) {
+      const at = props.length > 1 ? ` (${p.name})` : "";
+      rows.push({ cells: { label: `${t(req, "voucherLiability")} ${liability.account || "–"}${at}`, cashIn: null, cashOut: null, paidOuts: null, deposits: null, vouchers: money(liability.sold), shifts: null, differences: null }, emphasis: true });
+      rows.push({ cells: { label: `${t(req, "vouchersOpen")}${at}`, cashIn: null, cashOut: null, paidOuts: null, deposits: null, vouchers: money(liability.open), shifts: null, differences: null }, emphasis: true });
     }
     // a Cash Difference is booked on the Business Date its Shift closed on, like every Cash Book entry
     const people = (await tx.query<{ name: string | null; shifts: number; difference: string }>(

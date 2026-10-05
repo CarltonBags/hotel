@@ -104,6 +104,7 @@ describe("Vouchers at the desk", () => {
     const day = (await pool.query(`select to_char(business_date, 'YYYY-MM-DD') as d from ${s()}.cash_movements where kind = 'voucher_sale'`)).rows[0].d;
     const report = await runReport(pool, s(), { kind: "cash", from: day, to: day, propertyIds: [berlin], grain: "day", compare: { previous: false, lastYear: false }, language: "en" });
     expect(report.rows.find((r) => String(r.cells.label).includes("1720"))?.cells.vouchers).toBe(100);
+    expect(report.rows.find((r) => String(r.cells.label).includes("outstanding"))?.cells.vouchers).toBe(100);
     const rc = (await pool.query(`select id from ${s()}.receipts where token = $1`, [sold.receiptToken])).rows[0].id;
     expect(await signReceipt(pool, s(), deps, rc)).toMatchObject({ state: "signed" });
     expect(fiscal.signed.get(rc)!.input.amountsPerVatRate).toEqual([{ vatRate: "NULL", amount: "100.00" }]);
@@ -137,6 +138,10 @@ describe("Vouchers at the desk", () => {
 
   it("Vouchers in circulation are listed with their balance; a sold Voucher never changes", async () => {
     await sellVoucher(pool, s(), { ...sale, propertyId: potsdam, tender: "bank_transfer", reference: "SEPA 4711", amount: 50 }, viewer());
+    // a card sale counts on the liability account too, though not in the Cash Book
+    const day = (await pool.query(`select to_char(business_date, 'YYYY-MM-DD') as d from ${s()}.cash_movements where kind = 'voucher_sale'`)).rows[0].d;
+    const report = await runReport(pool, s(), { kind: "cash", from: day, to: addDays(day, 1), propertyIds: [potsdam], grain: "day", compare: { previous: false, lastYear: false }, language: "en" });
+    expect(report.rows.find((r) => String(r.cells.label).includes("1720"))?.cells.vouchers).toBe(50);
     const open = await listVouchers(pool, s(), berlin, { open: true });
     expect(open.map((v) => [v.amount, v.balance]).sort()).toEqual([[100, 10], [50, 50]].sort());
     await expect(sellVoucher(pool, s(), { ...sale, propertyId: potsdam, tender: "card_terminal", reference: "" }, viewer())).rejects.toThrow(/reference/);

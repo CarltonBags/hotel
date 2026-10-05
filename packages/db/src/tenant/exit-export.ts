@@ -54,8 +54,15 @@ const TABLES: { file: string; about: string; sql: string }[] = [
   },
   {
     file: "receipts.csv",
-    about: "One line per Receipt as issued at the desk: property, number, payment, issued at.",
-    sql: `select p.name as property, r.number, r.payment_id, r.issued_at from receipts r join properties p on p.id = r.property_id order by p.name, r.number`,
+    about: "One line per Receipt as issued at the desk: property, number, the payment or the Voucher sold, issued at.",
+    sql: `select p.name as property, r.number, r.payment_id, r.voucher_id, r.issued_at from receipts r join properties p on p.id = r.property_id order by p.name, r.number`,
+  },
+  {
+    file: "vouchers.csv",
+    about: "One line per Voucher sold: Legal Entity, property sold at, code, value, what is left on it (a liability of the Legal Entity), tender, sold at.",
+    sql: `select le.name as legal_entity, p.name as sold_at_property, v.code, v.amount, v.currency,
+            v.amount - coalesce((select sum(x.amount) from payments x where x.voucher_id = v.id and x.status = 'succeeded'), 0) as balance, v.tender, v.reference, v.sold_at
+          from vouchers v join legal_entities le on le.id = v.legal_entity_id join properties p on p.id = v.property_id where not v.test order by v.sold_at`,
   },
   {
     file: "invoices.csv",

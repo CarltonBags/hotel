@@ -22,6 +22,7 @@ import {
 import { paymentProvider } from "@hoteloftware/payments";
 import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
+import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { signPaymentReceipts } from "@/lib/fiscal";
 import { formAction, type FormState } from "@/lib/form";
@@ -59,6 +60,8 @@ export async function takePaymentAction(
   let extra: { paymentId?: string; pending?: boolean } = {};
   const state = await formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "take_payments");
+    // redeeming a Voucher is the desk's (matrix "Sell and redeem Vouchers at the desk"), not every role that takes payments
+    if (input?.tender === "voucher") await authorize("sell_vouchers", reservation.propertyId);
     const p = await takePayment(
       pool(),
       schema,

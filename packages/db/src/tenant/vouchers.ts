@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { VOUCHER_SALE_TENDERS, can, maskVoucherCode, normalizeVoucherCode, roundMoney, voucherBalance, voucherCode, type VoucherSaleTender } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
+import { inTestMode } from "./go-live";
 import { bookVoucherSaleIn, issueVoucherReceiptIn } from "./cash";
 import type { Viewer } from "./room-state";
 import { withTenant } from "./with-tenant";
@@ -32,7 +33,10 @@ export interface VoucherSale {
 export interface SoldVoucher {
   id: string;
   code: string;
+  receiptId: string;
   receiptToken: string;
+  /** False in Test Mode: no mail leaves for anyone outside. */
+  mailed: boolean;
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -95,10 +99,14 @@ export async function sellVoucher(pool: Pool, schema: string, input: VoucherSale
         `A voucher worth ${money} for ${p.name}. Code: ${code}. Redeemable at every property of ${p.le_name}; what is not used stays on it.`,
       ].join("\n");
     const mails = [{ to: recipientEmail, name: input.recipientName.trim() }, ...(buyerEmail && buyerEmail !== recipientEmail ? [{ to: buyerEmail, name: input.buyerName.trim() }] : [])];
-    for (const m of mails) {
-      await tx.query("insert into mail_outbox (to_email, subject, body, property_id, voucher_id) values ($1, $2, $3, $4, $5)", [m.to, `Ihr Wertgutschein · Your voucher (${p.name})`, body(m.name), input.propertyId, id]);
+    // in Test Mode a Voucher goes with the test records at go-live: its code never leaves by mail
+    const mailed = !(await inTestMode(tx));
+    if (mailed) {
+      for (const m of mails) {
+        await tx.query("insert into mail_outbox (to_email, subject, body, property_id, voucher_id) values ($1, $2, $3, $4, $5)", [m.to, `Ihr Wertgutschein · Your voucher (${p.name})`, body(m.name), input.propertyId, id]);
+      }
     }
-    return { id, code, receiptToken: token };
+    return { id, code, receiptId, receiptToken: token, mailed };
   });
 }
 
@@ -109,10 +117,11 @@ export async function sellVoucher(pool: Pool, schema: string, input: VoucherSale
 export async function redeemableVoucherIn(tx: PoolClient, propertyId: string, codeInput: string, amount: number): Promise<string> {
   const code = normalizeVoucherCode(codeInput);
   if (!code) throw new Error("Give the Voucher code (XXXX-XXXX-XXXX)");
-  const v = (await tx.query<{ id: string; legal_entity_id: string; test: boolean }>("select id, legal_entity_id, test from vouchers where code = $1 for update", [code])).rows[0];
+  const v = (await tx.query<{ id: string; legal_entity_id: string; currency: string }>("select id, legal_entity_id, trim(currency) as currency from vouchers where code = $1 for update", [code])).rows[0];
   if (!v) throw new Error("No Voucher with this code");
-  const le = (await tx.query<{ legal_entity_id: string }>("select legal_entity_id from properties where id = $1", [propertyId])).rows[0]!.legal_entity_id;
-  if (v.legal_entity_id !== le) throw new Error("This Voucher was sold by another company and cannot be redeemed here");
+  const p = (await tx.query<{ legal_entity_id: string; currency: string }>("select legal_entity_id, trim(currency) as currency from properties where id = $1", [propertyId])).rows[0]!;
+  if (v.legal_entity_id !== p.legal_entity_id) throw new Error("This Voucher was sold by another company and cannot be redeemed here");
+  if (v.currency !== p.currency) throw new Error(`This Voucher is in ${v.currency} and cannot pay a folio in ${p.currency}`);
   const left = (await balancesIn(tx, [v.id])).get(v.id)!;
   if (left <= 0) throw new Error("Nothing is left on this Voucher");
   if (amount > left) throw new Error(`Only ${left.toFixed(2)} is left on this Voucher`);
@@ -133,21 +142,20 @@ export interface VoucherRow {
   buyerName: string;
 }
 
-/** Vouchers of the property's Legal Entity, those with a balance left first (Vouchers in circulation). */
+/** Vouchers of the property's Legal Entity, newest first; `open`: only those with a balance left (Vouchers in circulation), however old. */
 export async function listVouchers(pool: Pool, schema: string, propertyId: string, options: { open?: boolean } = {}): Promise<VoucherRow[]> {
   if (!isUuid(propertyId)) return [];
-  return withTenant(pool, schema, async (tx) => {
-    const rows = (await tx.query<{ id: string; code: string; amount: string; currency: string; sold_at: Date; name: string; tender: string; recipient_name: string; recipient_email: string; buyer_name: string }>(
-      `select v.id, v.code, v.amount, trim(v.currency) as currency, v.sold_at, sp.name, v.tender, v.recipient_name, v.recipient_email, v.buyer_name
+  return withTenant(pool, schema, async (tx) =>
+    (await tx.query<{ id: string; code: string; amount: string; balance: string; currency: string; sold_at: Date; name: string; tender: string; recipient_name: string; recipient_email: string; buyer_name: string }>(
+      `select v.id, v.code, v.amount, v.amount - coalesce((select sum(p.amount) from payments p where p.voucher_id = v.id and p.status = 'succeeded'), 0) as balance,
+              trim(v.currency) as currency, v.sold_at, sp.name, v.tender, v.recipient_name, v.recipient_email, v.buyer_name
        from vouchers v join properties sp on sp.id = v.property_id
-       where v.legal_entity_id = (select legal_entity_id from properties where id = $1) order by v.sold_at desc limit 500`,
-      [propertyId],
-    )).rows;
-    const balances = await balancesIn(tx, rows.map((r) => r.id));
-    return rows
-      .map((r) => ({ id: r.id, code: r.code, amount: Number(r.amount), balance: balances.get(r.id) ?? 0, currency: r.currency, soldAt: r.sold_at, soldAtProperty: r.name, tender: r.tender, recipientName: r.recipient_name, recipientEmail: r.recipient_email, buyerName: r.buyer_name }))
-      .filter((v) => !options.open || v.balance > 0);
-  });
+       where v.legal_entity_id = (select legal_entity_id from properties where id = $1)
+         and (not $2 or v.amount - coalesce((select sum(p.amount) from payments p where p.voucher_id = v.id and p.status = 'succeeded'), 0) > 0)
+       order by v.sold_at desc limit 500`,
+      [propertyId, options.open === true],
+    )).rows.map((r) => ({ id: r.id, code: r.code, amount: Number(r.amount), balance: roundMoney(Number(r.balance)), currency: r.currency, soldAt: r.sold_at, soldAtProperty: r.name, tender: r.tender, recipientName: r.recipient_name, recipientEmail: r.recipient_email, buyerName: r.buyer_name })),
+  );
 }
 
 /** A Voucher as the desk looks it up by its code: what is left, and whether this property may redeem it. */
@@ -165,5 +173,6 @@ export async function voucherByCode(pool: Pool, schema: string, propertyId: stri
 /** The Legal Entity's account Vouchers sold are booked to (a liability). */
 export async function setVoucherLiabilityAccount(pool: Pool, schema: string, legalEntityId: string, account: string): Promise<void> {
   if (!isUuid(legalEntityId)) throw new Error("Legal Entity not found");
-  await withTenant(pool, schema, (tx) => tx.query("update legal_entities set voucher_liability_account = $2 where id = $1", [legalEntityId, account.trim().slice(0, 20)]));
+  const n = await withTenant(pool, schema, async (tx) => (await tx.query("update legal_entities set voucher_liability_account = $2 where id = $1", [legalEntityId, account.trim().slice(0, 20)])).rowCount);
+  if (!n) throw new Error("Legal Entity not found");
 }

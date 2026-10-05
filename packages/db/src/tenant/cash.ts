@@ -378,7 +378,7 @@ export async function bookVoucherSaleIn(tx: PoolClient, voucher: { id: string; p
 }
 
 async function bookCashIn(tx: PoolClient, m: { propertyId: string; amount: number; kind: CashMovementKind; paymentId?: string; voucherId?: string; account?: string; reason?: string }, userId: string): Promise<string> {
-  const payment = { propertyId: m.propertyId, amount: m.amount };
+  const payment = m;
   const settings = await settingsOf(tx, payment.propertyId);
   if (!settings.enabled) throw new Error("The cash desk is off at this property");
   const shift = (await tx.query<{ id: string; register_id: string }>("select id, register_id from cash_shifts where property_id = $1 and user_id = $2 and closed_at is null", [payment.propertyId, userId])).rows[0];
@@ -388,7 +388,8 @@ async function bookCashIn(tx: PoolClient, m: { propertyId: string; amount: numbe
   if (r.openShift?.id !== shift.id) throw new Error("Open your Shift on a Cash Register to take or give back cash");
   if (r.openShift.counted) throw new Error("Your Shift is counted for closing; close it and open a new one");
   if (payment.amount < 0 && -payment.amount > r.balance) throw new Error(`There is not that much cash in ${r.name}`);
-  await book(tx, { registerId: r.id, propertyId: payment.propertyId, shiftId: shift.id, kind: m.kind, amount: payment.amount, userId, ...(m.paymentId ? { paymentId: m.paymentId } : {}), ...(m.voucherId ? { voucherId: m.voucherId } : {}), ...(m.account ? { account: m.account } : {}), ...(m.reason ? { reason: m.reason } : {}) });
+  const { kind, amount, paymentId, voucherId, account, reason } = m;
+  await book(tx, { registerId: r.id, propertyId: m.propertyId, shiftId: shift.id, kind, amount, userId, ...(paymentId ? { paymentId } : {}), ...(voucherId ? { voucherId } : {}), ...(account ? { account } : {}), ...(reason ? { reason } : {}) });
   return r.id;
 }
 
@@ -403,7 +404,7 @@ export async function issueVoucherReceiptIn(tx: PoolClient, voucher: { id: strin
 }
 
 async function issueIn(tx: PoolClient, subject: { paymentId?: string; voucherId?: string; propertyId: string }, registerId: string | null, userId: string): Promise<string> {
-  const payment = { propertyId: subject.propertyId };
+  const payment = subject;
   // one Receipt per payment or sale; a number is taken only for a Receipt that is written
   const had = (await tx.query<{ id: string }>(subject.paymentId ? "select id from receipts where payment_id = $1" : "select id from receipts where voucher_id = $1", [subject.paymentId ?? subject.voucherId])).rows[0];
   if (had) return had.id;
@@ -544,7 +545,8 @@ export interface ReceiptView {
 // a Receipt is of a payment (on a stay) or of a Voucher sold (ticket 53)
 const RECEIPT_SELECT = `select rc.id, rc.number, rc.issued_at, rc.token, pr.name as property_name, pr.time_zone, le.name as le_name, le.address_line1, le.postal_code, le.city, le.country, le.vat_id,
     coalesce(p.amount, v.amount) as amount, coalesce(p.currency, v.currency) as currency, coalesce(p.tender, v.tender) as tender, p.card_brand, p.card_last4, p.refund_of is not null as refund,
-    b.confirmation_number, coalesce(g.first_name, '') as first_name, coalesce(g.last_name, v.buyer_name) as last_name, v.code as voucher_code,
+    b.confirmation_number, coalesce(g.first_name, split_part(v.buyer_name, ' ', 1)) as first_name,
+    coalesce(g.last_name, nullif(regexp_replace(v.buyer_name, '^[^ ]+ *', ''), ''), v.buyer_name) as last_name, v.code as voucher_code,
     to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure
   from receipts rc join properties pr on pr.id = rc.property_id join legal_entities le on le.id = pr.legal_entity_id
   left join payments p on p.id = rc.payment_id left join vouchers v on v.id = rc.voucher_id

@@ -248,7 +248,7 @@ export function PaymentsPanel({
           ) : null}
           <label className="grid gap-1">
             <span className="text-ink-80">{m["pay.tender"]}</span>
-            <select value={tender} onChange={(e) => setTender(e.target.value)} className={input}>
+            <select value={tender} onChange={(e) => (setTender(e.target.value), setReference(""))} className={input}>
               {DESK_TENDERS.filter((t) => t !== "cash" || cash).map((t) => (
                 <option key={t} value={t}>
                   {m[`pay.tender.${t}`]}
