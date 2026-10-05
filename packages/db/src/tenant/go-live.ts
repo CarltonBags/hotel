@@ -45,7 +45,7 @@ async function factsIn(tx: PoolClient, tenantId: string): Promise<GoLiveFacts> {
   );
   const props = await tx.query<{ name: string; rooms: number; priced_through: string | null; city_tax: boolean; today: string; country: string; printer: boolean; unit: boolean }>(
     `select p.name, p.country, p.receipt_printer <> '' as printer, exists (select 1 from fiscal_at_units u where u.legal_entity_id = p.legal_entity_id) as unit, (select count(*)::int from rooms r where r.property_id = p.id) as rooms,
-       (select to_char(max(x.date), 'YYYY-MM-DD') from rates x join rate_plans rp on rp.id = x.rate_plan_id where rp.property_id = p.id) as priced_through,
+       (select to_char(max(x.date), 'YYYY-MM-DD') from rates x join rate_plans rp on rp.id = x.rate_plan_id where rp.property_id = p.id and rp.group_id is null) as priced_through,
        exists (select 1 from city_tax_rules c where c.property_id = p.id) as city_tax,
        to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today
      from properties p order by p.name`,

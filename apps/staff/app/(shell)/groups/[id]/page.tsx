@@ -1,8 +1,10 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { groupView, listCompanyNames, listRoomTypes } from "@hoteloftware/db";
 import { can, groupStatusAllowed, type GroupStatus } from "@hoteloftware/domain";
 import { ActionForm, Field } from "@/components/form-fields";
 import { pool } from "@/lib/db";
+import { requireAllowed } from "@/lib/authorize";
+import { groupsModuleOn } from "@/lib/groups";
 import { loadShell } from "@/lib/shell";
 import { addHoldingAction, bookFromGroupAction, groupStatusAction, releaseDateAction, seriesAction, updateGroupAction } from "../actions";
 import { HoldingGrid } from "./holding-grid";
@@ -22,6 +24,8 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const viewer = { userId: session.user.id, actor };
   const g = await groupView(pool(), tenant.schemaName, (await params).id, viewer).catch(() => null);
   if (!g) notFound();
+  await requireAllowed("view_groups", g.propertyId);
+  if (!(await groupsModuleOn(tenant.schemaName, g.propertyId))) redirect("/not-allowed");
   const [types, companies] = await Promise.all([listRoomTypes(pool(), tenant.schemaName, g.propertyId), listCompanyNames(pool(), tenant.schemaName)]);
   const manage = can(actor, "manage_groups", g.propertyId);
   const contract = can(actor, "edit_group_contract", g.propertyId);
@@ -71,7 +75,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
             {h.released ? ` · ${m["group.released"]}` : ""}
             {h.releaseSoon ? <span className="ml-2 text-danger"> {m["group.releaseSoon"]}</span> : null}
           </h2>
-          <HoldingGrid groupId={g.id} holdingId={h.id} roomTypes={h.roomTypes} editable={(manage || contract) && open && !h.released} m={m} />
+          <HoldingGrid groupId={g.id} holdingId={h.id} roomTypes={h.roomTypes} editRooms={manage && open && !h.released} editPrices={contract && open} m={m} />
           {contract && open && !h.released ? (
             <ActionForm action={releaseDateAction} submitLabel={m["action.save"]} className="flex flex-wrap items-end gap-2">
               {hidden}
@@ -146,6 +150,8 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
           <h2 className="font-medium">{m["group.contract"]}</h2>
           <ActionForm action={updateGroupAction} submitLabel={m["action.save"]} pendingLabel={m["action.saving"]} className="grid gap-3 sm:grid-cols-2">
             {hidden}
+            {/* a person organiser stays unless a Company is chosen */}
+            {g.organiser && "guestId" in g.organiser ? <input type="hidden" name="organiserGuestId" value={g.organiser.guestId} /> : null}
             <Field label={m["group.name"]} name="name" defaultValue={g.name} />
             <label className="grid gap-1">
               <span className="text-ink-80">{m["group.organiser"]}</span>

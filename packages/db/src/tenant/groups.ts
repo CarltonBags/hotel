@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { OCCUPYING_STATUSES, addDays, can, groupStatusAllowed, releaseDateFor, releaseWarningDue, seriesArrivals, tentativeShortfall, unsoldHeld, type GroupStatus } from "@hoteloftware/domain";
+import { OCCUPYING_STATUSES, RELEASE_WARNING_DAYS, addDays, can, groupStatusAllowed, releaseDateFor, releaseWarningDue, seriesArrivals, tentativeShortfall, unsoldHeld, type GroupStatus } from "@hoteloftware/domain";
 import { checkDate, isUuid } from "./catalogue-common";
 import { createGuest } from "./guests";
 import { lockProperty } from "./property-lock";
@@ -82,6 +82,9 @@ export async function createGroup(pool: Pool, schema: string, input: GroupInput,
       [isUuid(input.basePlanId) ? input.basePlanId : null, input.propertyId],
     )).rows[0];
     if (!p) throw new Error("Choose the Rate Plan the group's prices start from");
+    const org = input.organiser;
+    if (org && "companyId" in org && !(isUuid(org.companyId) && (await tx.query("select 1 from companies where id = $1", [org.companyId])).rowCount)) throw new Error("Company not found");
+    if (org && "guestId" in org && !(isUuid(org.guestId) && (await tx.query("select 1 from guests where id = $1", [org.guestId])).rowCount)) throw new Error("Guest not found");
     const types = (await tx.query<{ id: string }>("select id from room_types where property_id = $1", [input.propertyId])).rows.map((t) => t.id);
     return { ...p, types };
   });
@@ -107,6 +110,7 @@ export async function createGroup(pool: Pool, schema: string, input: GroupInput,
     },
     { userId: viewer.userId },
   );
+  // the plan is made in its own transaction: a group that cannot be stored takes its plan away again
   return withTenant(pool, schema, async (tx) => {
     const id = (await tx.query<{ id: string }>(
       `insert into groups (property_id, name, organiser_company_id, organiser_guest_id, contact, option_date, terms, reduction_rules, release_days, rate_plan_id, created_by)
@@ -127,11 +131,19 @@ export async function createGroup(pool: Pool, schema: string, input: GroupInput,
     )).rows[0]!.id;
     await tx.query("update rate_plans set group_id = $2 where id = $1", [plan.id, id]);
     return { id, ratePlanId: plan.id };
+  }).catch(async (err: unknown) => {
+    await withTenant(pool, schema, async (tx) => {
+      await tx.query("delete from rate_plan_services where rate_plan_id = $1", [plan.id]);
+      await tx.query("delete from rate_plan_room_types where rate_plan_id = $1", [plan.id]);
+      await tx.query("delete from rate_plans where id = $1", [plan.id]);
+    }).catch(() => undefined);
+    throw err;
   });
 }
 
 /** The contract's data: name, organiser, contact, option date, terms, reduction rules, release days. */
-export async function updateGroup(pool: Pool, schema: string, groupId: string, input: Omit<GroupInput, "propertyId" | "basePlanId">, viewer: Viewer): Promise<void> {
+/** `organiser` undefined keeps the organiser as it is. */
+export async function updateGroup(pool: Pool, schema: string, groupId: string, input: Omit<GroupInput, "propertyId" | "basePlanId" | "organiser"> & { organiser?: GroupInput["organiser"] }, viewer: Viewer): Promise<void> {
   await withTenant(pool, schema, async (tx) => {
     const g = await groupIn(tx, groupId, true);
     need(viewer, "manage_groups", g.property_id);
@@ -141,8 +153,8 @@ export async function updateGroup(pool: Pool, schema: string, groupId: string, i
       [
         g.id,
         input.name.trim().slice(0, 120) || g.name,
-        input.organiser && "companyId" in input.organiser ? input.organiser.companyId : null,
-        input.organiser && "guestId" in input.organiser ? input.organiser.guestId : null,
+        input.organiser === undefined ? g.organiser_company_id : input.organiser && "companyId" in input.organiser ? input.organiser.companyId : null,
+        input.organiser === undefined ? g.organiser_guest_id : input.organiser && "guestId" in input.organiser ? input.organiser.guestId : null,
         input.contact.trim().slice(0, 300),
         input.optionDate,
         input.terms.trim().slice(0, 5000),
@@ -220,8 +232,10 @@ export async function setHeldRooms(pool: Pool, schema: string, holdingId: string
     need(viewer, "manage_groups", g.property_id);
     if (h.released) throw new Error("The holding is released");
     await lockProperty(tx, g.property_id);
+    const types = new Set((await tx.query<{ id: string }>("select id from room_types where property_id = $1", [g.property_id])).rows.map((t) => t.id));
     for (const c of cells) {
       checkDate(c.date);
+      if (!types.has(c.roomTypeId)) throw new Error("Room type not found at this property");
       if (c.date < h.arrival || c.date >= h.departure) throw new Error("A night outside the holding");
       if (!Number.isInteger(c.rooms) || c.rooms < 0 || c.rooms > 999) throw new Error("Held Rooms are a whole number");
       await tx.query("insert into group_held_rooms (holding_id, room_type_id, date, rooms) values ($1, $2, $3, $4) on conflict (holding_id, room_type_id, date) do update set rooms = excluded.rooms", [holdingId, c.roomTypeId, c.date, c.rooms]);
@@ -244,6 +258,27 @@ export async function setGroupStatus(pool: Pool, schema: string, groupId: string
     need(viewer, "manage_groups", g.property_id);
     if (!groupStatusAllowed(g.status, status)) throw new Error(`A ${g.status} group cannot become ${status}`);
     await lockProperty(tx, g.property_id);
+    if (status === "definite") {
+      const today = await todayIn(tx, g.property_id);
+      // Held Rooms are taken out of sale only where they are free: nights short of rooms are named, staff reduce first
+      const short: string[] = [];
+      for (const h of (await tx.query<{ id: string; arrival: string; departure: string }>("select id, to_char(arrival, 'YYYY-MM-DD') as arrival, to_char(departure, 'YYYY-MM-DD') as departure from group_holdings where group_id = $1 and released_at is null and departure > $2", [g.id, today])).rows) {
+        const data = await loadQuoteData(tx, g.property_id, h.arrival, h.departure, null, [h.id]);
+        const cells = (await tx.query<{ room_type_id: string; code: string; date: string; unsold: number }>(
+          `select x.room_type_id, t.code, to_char(x.date, 'YYYY-MM-DD') as date,
+                  greatest(x.rooms - (select count(*) from reservations r where r.group_holding_id = x.holding_id and r.room_type_id = x.room_type_id and r.status = any($2::text[]) and r.arrival <= x.date and r.departure > x.date), 0)::int as unsold
+           from group_held_rooms x join room_types t on t.id = x.room_type_id where x.holding_id = $1 and x.date >= $3`,
+          [h.id, OCCUPYING_STATUSES, today],
+        )).rows;
+        for (const c of cells) {
+          const type = data.types.find((t) => t.id === c.room_type_id);
+          if (type && c.unsold > type.rooms - data.roomsTaken(c.room_type_id, c.date)) short.push(`${c.code} ${c.date}`);
+        }
+      }
+      if (short.length) throw new Error(`Not enough rooms free to hold: ${short.slice(0, 6).join(", ")}${short.length > 6 ? " …" : ""}; reduce the Held Rooms first`);
+      // a Release Date already passed would release at once: tomorrow at the earliest (never after arrival)
+      await tx.query("update group_holdings set release_date = least(arrival, $2::date + 1), warned_at = null where group_id = $1 and released_at is null and release_date <= $2", [g.id, today]);
+    }
     await tx.query("update groups set status = $2 where id = $1", [g.id, status]);
     if (g.status === "definite" || status === "definite") await tellChannels(tx, g.id);
   });
@@ -260,7 +295,8 @@ export async function setReleaseDate(pool: Pool, schema: string, holdingId: stri
     need(viewer, "edit_group_contract", g.property_id);
     if (h.released) throw new Error("The Held Rooms are released already");
     if (date > h.arrival) throw new Error("The Release Date is on or before arrival");
-    if (date < (await todayIn(tx, g.property_id))) throw new Error("The Release Date is not in the past");
+    // tomorrow at the earliest: a release today would happen within the hour, without a warning
+    if (date <= (await todayIn(tx, g.property_id)) && date < h.arrival) throw new Error("The Release Date is after today");
     await tx.query("update group_holdings set release_date = $2, warned_at = null where id = $1", [holdingId, date]);
   });
 }
@@ -280,6 +316,17 @@ export async function bookFromGroup(
     return { ...row, group: await groupIn(tx, row.group_id) };
   });
   need(viewer, "manage_groups", h.group.property_id);
+  await withTenant(pool, schema, async (tx) => {
+    const x = (await tx.query<{ released: boolean; unsold: number }>(
+      `select gh.released_at is not null as released,
+              coalesce((select greatest(hr.rooms - (select count(*) from reservations r where r.group_holding_id = gh.id and r.room_type_id = hr.room_type_id and r.status = any($3::text[]) and r.arrival <= hr.date and r.departure > hr.date), 0)
+                        from group_held_rooms hr where hr.holding_id = gh.id and hr.room_type_id = $2 order by 1 limit 1), 0)::int as unsold
+       from group_holdings gh where gh.id = $1`,
+      [holdingId, input.roomTypeId, OCCUPYING_STATUSES],
+    )).rows[0]!;
+    if (x.released) throw new Error("The Held Rooms are released: book the room as a normal reservation");
+    if (h.group.status === "definite" && x.unsold <= 0) throw new Error("No Held Room of this type is left: add Held Rooms or book outside the group");
+  });
   const guest = await createGuest(pool, schema, { firstName: input.firstName.trim() || "Gast", lastName: input.lastName.trim() || h.group.name }, { userId: viewer.userId, propertyId: h.group.property_id });
   const booker = h.group.organiser_company_id ? { companyId: h.group.organiser_company_id } : { guestId: h.group.organiser_guest_id ?? guest.id };
   const b = await createBooking(pool, schema, h.group.property_id, viewer.userId, {
@@ -287,6 +334,10 @@ export async function bookFromGroup(
     walkIn: false,
     notes: "",
     reservations: [{ arrival: h.arrival, departure: h.departure, roomTypeId: input.roomTypeId, ratePlanId: h.group.rate_plan_id, adults: input.adults, childAges: [], primaryGuestId: guest.id, groupHoldingId: holdingId }],
+  }).catch(async (err: unknown) => {
+    // the guest made for a booking that failed goes again
+    await withTenant(pool, schema, (tx) => tx.query("delete from guests g where id = $1 and not exists (select 1 from reservations r where r.primary_guest_id = g.id)", [guest.id])).catch(() => undefined);
+    throw err;
   });
   return { reservationId: b.reservations[0]!.id };
 }
@@ -414,7 +465,8 @@ export async function listGroups(pool: Pool, schema: string, propertyId: string,
               (select to_char(min(h.arrival), 'YYYY-MM-DD') from group_holdings h where h.group_id = g.id) as first,
               (select to_char(max(h.departure), 'YYYY-MM-DD') from group_holdings h where h.group_id = g.id) as last,
               (select count(*)::int from group_holdings h where h.group_id = g.id) as holdings,
-              (select coalesce(sum(x.rooms), 0)::int from group_held_rooms x join group_holdings h on h.id = x.holding_id where h.group_id = g.id) as held,
+              -- rooms held on each holding's arrival night, against reservations booked: the same unit
+              (select coalesce(sum(x.rooms), 0)::int from group_held_rooms x join group_holdings h on h.id = x.holding_id where h.group_id = g.id and x.date = h.arrival) as held,
               (select count(*)::int from reservations r join group_holdings h on h.id = r.group_holding_id where h.group_id = g.id and r.status = any($2::text[])) as picked
        from groups g left join companies c on c.id = g.organiser_company_id left join guests gu on gu.id = g.organiser_guest_id
        where g.property_id = $1 order by g.status in ('lapsed', 'cancelled'), first nulls last, g.name`,
@@ -444,13 +496,15 @@ export async function runGroupDuties(pool: Pool, schema: string): Promise<GroupD
       `select h.id, g.id as group_id, g.property_id, g.name, to_char(h.arrival, 'YYYY-MM-DD') as arrival, to_char(h.release_date, 'YYYY-MM-DD') as release_date,
               to_char(coalesce(p.business_date, (now() at time zone p.time_zone)::date), 'YYYY-MM-DD') as today
        from group_holdings h join groups g on g.id = h.group_id join properties p on p.id = g.property_id
-       where g.status = 'definite' and h.released_at is null for update of h`,
+       where g.status = 'definite' and h.released_at is null
+         and h.release_date <= coalesce(p.business_date, (now() at time zone p.time_zone)::date) + ${RELEASE_WARNING_DAYS}
+       for update of h`,
     )).rows;
     for (const h of due) {
-      // the unsold Held Rooms of the arrival night (what the release gives back to sale)
+      // the most unsold Held Rooms on any night (what the release gives back to sale at its peak)
       const rooms = Number((await tx.query<{ n: number }>(
-        `select coalesce(sum(greatest(x.rooms - (select count(*) from reservations r where r.group_holding_id = x.holding_id and r.room_type_id = x.room_type_id and r.status = any($2::text[]) and r.arrival <= x.date and r.departure > x.date), 0)), 0)::int as n
-         from group_held_rooms x where x.holding_id = $1 and x.date = (select arrival from group_holdings where id = $1)`,
+        `select coalesce(max(n), 0)::int as n from (select x.date, sum(greatest(x.rooms - (select count(*) from reservations r where r.group_holding_id = x.holding_id and r.room_type_id = x.room_type_id and r.status = any($2::text[]) and r.arrival <= x.date and r.departure > x.date), 0)) as n
+         from group_held_rooms x where x.holding_id = $1 group by x.date) nights`,
         [h.id, OCCUPYING_STATUSES],
       )).rows[0]!.n);
       if (h.release_date <= h.today) {
@@ -470,4 +524,13 @@ export async function runGroupDuties(pool: Pool, schema: string): Promise<GroupD
     out.lapsed = lapsing.map((g) => ({ groupId: g.id, propertyId: g.property_id, groupName: g.name }));
     return out;
   });
+}
+
+/** The property of a group or of a holding (for the caller's rights check). */
+export async function groupProperty(pool: Pool, schema: string, ref: { groupId?: string; holdingId?: string }): Promise<string | null> {
+  const id = ref.groupId ?? ref.holdingId;
+  if (!id || !isUuid(id)) return null;
+  return withTenant(pool, schema, async (tx) =>
+    (await tx.query<{ property_id: string }>(ref.groupId ? "select property_id from groups where id = $1" : "select g.property_id from group_holdings h join groups g on g.id = h.group_id where h.id = $1", [id])).rows[0]?.property_id ?? null,
+  );
 }

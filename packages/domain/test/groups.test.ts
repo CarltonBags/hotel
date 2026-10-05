@@ -16,7 +16,9 @@ describe("groups", () => {
     expect(tentativeShortfall(-2, 10)).toBe(10);
     expect(tentativeShortfall(12, 10)).toBe(0);
     expect(releaseDateFor("2026-10-20", 14, "2026-10-05")).toBe("2026-10-06");
-    expect(releaseDateFor("2026-10-20", 30, "2026-10-05")).toBe("2026-10-05");
+    // too short a lead: tomorrow, so staff can still extend it; never after arrival
+    expect(releaseDateFor("2026-10-20", 30, "2026-10-05")).toBe("2026-10-06");
+    expect(releaseDateFor("2026-10-05", 14, "2026-10-05")).toBe("2026-10-05");
     expect(releaseWarningDue("2026-10-08", "2026-10-05")).toBe(true);
     expect(releaseWarningDue("2026-10-09", "2026-10-05")).toBe(false);
     expect(releaseWarningDue("2026-10-05", "2026-10-05")).toBe(false);

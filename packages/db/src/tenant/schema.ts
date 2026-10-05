@@ -366,9 +366,10 @@ export const ratePlans = pgTable(
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-    groupId: uuid("group_id"),
+    groupId: uuid("group_id").references((): AnyPgColumn => groups.id, { onDelete: "set null" }),
   },
   (t) => [
+    index("rate_plans_group_idx").on(t.groupId).where(sql`${t.groupId} is not null`),
     unique("rate_plans_property_id_code_key").on(t.propertyId, t.code),
     index("rate_plans_property_idx").on(t.propertyId, t.sortOrder),
     index("rate_plans_base_idx").on(t.basePlanId).where(sql`${t.basePlanId} is not null`),

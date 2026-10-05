@@ -42,10 +42,12 @@ export function seriesArrivals(from: string, to: string, weekday: number): strin
   return out;
 }
 
-/** A holding's Release Date: the given days before arrival, never before today. */
+/** A holding's Release Date: the given days before arrival, never sooner than tomorrow (so staff can extend it) and never after arrival. */
 export function releaseDateFor(arrival: string, days: number, today: string): string {
   const d = addDays(arrival, -days);
-  return d < today ? today : d;
+  const earliest = addDays(today, 1);
+  if (d >= earliest) return d;
+  return earliest > arrival ? arrival : earliest;
 }
 
 /** Staff are warned from this many days before the Release Date. */

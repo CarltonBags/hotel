@@ -54,4 +54,5 @@ alter table reservations add column group_holding_id uuid references group_holdi
 create index reservations_group_holding_idx on reservations(group_holding_id) where group_holding_id is not null;
 
 -- a group's own rate plan is not one staff pick from the rates grid
-alter table rate_plans add column group_id uuid;
+alter table rate_plans add column group_id uuid references groups(id) on delete set null;
+create index rate_plans_group_idx on rate_plans(group_id) where group_id is not null;

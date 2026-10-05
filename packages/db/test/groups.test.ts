@@ -14,7 +14,7 @@ import { setRates } from "../src/tenant/rates";
 import { createCompany } from "../src/tenant/companies";
 import { quoteStays } from "../src/tenant/reservations";
 import { connectChannels, pushChannels } from "../src/tenant/channels";
-import { addHolding, bookFromGroup, createGroup, createSeries, groupView, runGroupDuties, setGroupPrices, setGroupStatus, setReleaseDate } from "../src/tenant/groups";
+import { addHolding, bookFromGroup, createGroup, createSeries, groupView, runGroupDuties, setGroupPrices, setGroupStatus, setHeldRooms, setReleaseDate } from "../src/tenant/groups";
 import { runReport } from "../src/tenant/reports";
 import { resetTestDatabase, testPool } from "./helpers";
 
@@ -103,6 +103,18 @@ describe("Groups", () => {
     await pushChannels(pool, s(), propertyId, ch);
     expect(ch.availabilityOn(extType(), arrival)).toBe(14);
     await pool.query(`update ${s()}.properties set business_date = $2 where id = $1`, [propertyId, today]);
+  });
+
+  it("a group is made Definite only where its Held Rooms are free; a booking beyond them is refused", async () => {
+    const day = addDays(today, 45);
+    const g = await createGroup(pool, s(), { propertyId, name: "Zu groß", organiser: null, contact: "", optionDate: null, terms: "", reductionRules: "", releaseDays: 7, basePlanId: basePlan }, fd);
+    const h = await addHolding(pool, s(), g.id, { arrival: day, departure: addDays(day, 1), rooms: [{ roomTypeId: dbl, rooms: 21 }] }, fd);
+    await expect(setGroupStatus(pool, s(), g.id, "definite", fd)).rejects.toThrow(/Not enough rooms free to hold: DBL/);
+    await setHeldRooms(pool, s(), h, [{ roomTypeId: dbl, date: day, rooms: 1 }], fd);
+    await setGroupStatus(pool, s(), g.id, "definite", fd);
+    await setGroupPrices(pool, s(), g.id, [{ roomTypeId: dbl, date: day, price: 80 }], revenue);
+    await bookFromGroup(pool, s(), h, { roomTypeId: dbl, firstName: "A", lastName: "B", adults: 2 }, fd);
+    await expect(bookFromGroup(pool, s(), h, { roomTypeId: dbl, firstName: "C", lastName: "D", adults: 2 }, fd)).rejects.toThrow(/No Held Room/);
   });
 
   it("Tentative demand above availability shows the warning without blocking", async () => {

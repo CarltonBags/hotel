@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { listCompanyNames, listGroups, listRatePlans, modulePeriods } from "@hoteloftware/db";
-import { can, moduleState, moduleVisible, todayIn } from "@hoteloftware/domain";
+import { listCompanyNames, listGroups, listRatePlans } from "@hoteloftware/db";
+import { can } from "@hoteloftware/domain";
+import { requireAllowed } from "@/lib/authorize";
+import { groupsModuleOn } from "@/lib/groups";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { NewGroupForm } from "./new-group-form";
@@ -19,12 +21,10 @@ export default async function GroupsPage() {
       </div>
     );
   }
-  const { tenant, session, actor } = shell.principal;
-  if (!can(actor, "view_groups", property.id)) redirect("/not-allowed");
+  const { tenant, session, actor } = await requireAllowed("view_groups", property.id);
   const s = tenant.schemaName;
   // the Groups Module of the subscription
-  const periods = await modulePeriods(pool(), s, [property.id]);
-  if (!moduleVisible(moduleState(periods.get(property.id) ?? [], "groups", todayIn(property.timeZone)))) redirect("/not-allowed");
+  if (!(await groupsModuleOn(s, property.id))) redirect("/not-allowed");
   const [groups, companies, plans] = await Promise.all([listGroups(pool(), s, property.id, { userId: session.user.id, actor }), listCompanyNames(pool(), s), listRatePlans(pool(), s, property.id)]);
   return (
     <div className="mx-auto grid max-w-5xl gap-6 p-6">

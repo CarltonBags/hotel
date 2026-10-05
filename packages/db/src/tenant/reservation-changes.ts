@@ -165,7 +165,9 @@ async function planChange(tx: PoolClient, res: ResRow, patch: ReservationPatch, 
   if (after.arrival !== before.arrival && after.arrival < today) throw new Error("Arrival cannot move into the past");
   if (after.departure !== before.departure && after.departure < today) throw new Error("Departure cannot move into the past");
 
-  const data = await loadQuoteData(tx, res.property_id, after.arrival, after.departure, res.id);
+  // a group's reservation may move within its own Held Rooms (ticket 58)
+  const holding = (await tx.query<{ h: string | null }>("select group_holding_id as h from reservations where id = $1", [res.id])).rows[0]?.h;
+  const data = await loadQuoteData(tx, res.property_id, after.arrival, after.departure, res.id, holding ? [holding] : []);
   const type = data.types.find((t) => t.id === after.roomTypeId);
   if (!type) throw new Error("Room type not found at this property");
   const plan = data.plans.find((p) => p.id === res.rate_plan_id) ?? null;
