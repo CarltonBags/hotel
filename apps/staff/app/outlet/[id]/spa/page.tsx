@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { findProperty, outletProperty, spaDay } from "@hoteloftware/db";
-import { addDays, todayIn } from "@hoteloftware/domain";
+import { DATA_KINDS, addDays, todayIn } from "@hoteloftware/domain";
 import { pool } from "@/lib/db";
 import { deviceLanguage, deviceMessages } from "@/lib/device";
 import { outletAppContext, outletsModuleOn } from "@/lib/outlets";
+import { DataStream } from "@/shell/DataStream";
+import { LiveRefresh } from "@/shell/LiveRefresh";
 import { SpaBook } from "./spa-book";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +27,9 @@ export default async function SpaBookPage({ params, searchParams }: { params: Pr
   if (!day) notFound();
   return (
     <main className="mx-auto grid max-w-6xl gap-4 p-4" data-spa-book={date}>
+      {/* a guest's booking in the Portal shows at once (ticket 64) */}
+      <DataStream />
+      <LiveRefresh kind={DATA_KINDS.spa} propertyIds={[propertyId]} />
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-medium">
           {day.outlet.name} · {m["spa.book"]}

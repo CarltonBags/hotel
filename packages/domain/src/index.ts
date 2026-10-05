@@ -268,4 +268,4 @@ export { VOUCHER_SALE_TENDERS, maskVoucherCode, normalizeVoucherCode, voucherBal
 export { GROUP_STATUSES, RELEASE_WARNING_DAYS, groupStatusAllowed, releaseDateFor, releaseWarningDue, seriesArrivals, tentativeShortfall, unsoldHeld, type GroupStatus } from "./groups";
 export { checkRoomingList, depositStatus, parseRoomingList, roomsTogether, tourLeaderRegisters, type DepositInstallment, type FreeRoom, type RoomingProblem, type RoomingRow } from "./group-rooming";
 export { OUTLET_KINDS, PRINTER_KINDS, billTotal, eposPrintXml, lineFor, mayManageOutlet, splitIsValid, ticketsFor, ticketText, worksAnOutlet, chargesPerTaxCode, decidesAtOutlet, discountNeedsApproval, roomChargeCheck, tapToPayAccepts, type OutletChargeLine, type RoomChargeCheck, type BillLineDraft, type Modifier, type OutletKind, type PrintTicket, type PrinterKind } from "./outlets";
-export { appointmentProblem, instantAt, openSpaSlots, type AppointmentProblem, type Interval } from "./spa";
+export { appointmentProblem, instantAt, openSpaSlots, guestMayCancel, type AppointmentProblem, type Interval } from "./spa";

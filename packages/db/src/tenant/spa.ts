@@ -218,7 +218,7 @@ export async function bookAppointmentIn(tx: PoolClient, outletId: string, input:
   if (Number.isNaN(slot.start.getTime())) throw new Error("Choose a time");
   const hours = (await tx.query<{ starts_at: Date; ends_at: Date }>(`select starts_at, ends_at from spa_hours where therapist_id = $1${by.via === "portal" ? " and released" : ""}`, [input.therapistId])).rows.map((h) => ({ start: h.starts_at, end: h.ends_at }));
   const busy = async (column: "therapist_id" | "room_id", id: string) =>
-    (await tx.query<{ starts_at: Date; ends_at: Date }>(`select starts_at, ends_at from spa_appointments where ${column} = $1 and status <> 'cancelled' and starts_at < $3 and ends_at > $2`, [id, slot.start, slot.end])).rows.map((a) => ({ start: a.starts_at, end: a.ends_at }));
+    (await tx.query<{ starts_at: Date; ends_at: Date }>(`select starts_at, ends_at from spa_appointments where ${column} = $1 and status in ('booked', 'done') and starts_at < $3 and ends_at > $2`, [id, slot.start, slot.end])).rows.map((a) => ({ start: a.starts_at, end: a.ends_at }));
   // not in the past (a quarter of an hour's grace for the one being entered now)
   if (slot.start.getTime() < Date.now() - 15 * 60_000) throw new Error("The time has passed");
   let roomId: string | null = null;
@@ -309,7 +309,7 @@ export async function billAppointment(pool: Pool, schema: string, appointmentId:
   }
 }
 
-/** The guest did not come: the appointment is closed as a no-show (its time is free again). */
+/** The guest did not come: the appointment is closed as a no-show (its time free again for whoever comes instead). */
 export async function markNoShow(pool: Pool, schema: string, appointmentId: string, viewer: Viewer): Promise<void> {
   if (!isUuid(appointmentId)) throw new Error("Appointment not found");
   await withTenant(pool, schema, async (tx) => {
@@ -369,14 +369,24 @@ export async function spaGuests(pool: Pool, schema: string, outletId: string, qu
 }
 
 /** The spa's therapists, treatment rooms and treatments, for its setup page (whoever may see the outlet's setup). */
-export async function spaSetup(pool: Pool, schema: string, outletId: string, viewer: Viewer): Promise<{ therapists: { id: string; name: string; active: boolean }[]; rooms: { id: string; name: string; active: boolean }[]; treatments: { menuItemId: string; minutes: number; needsRoom: boolean; active: boolean }[] }> {
+export async function spaSetup(pool: Pool, schema: string, outletId: string, viewer: Viewer): Promise<{ cancelHours: number; therapists: { id: string; name: string; active: boolean }[]; rooms: { id: string; name: string; active: boolean }[]; treatments: { menuItemId: string; minutes: number; needsRoom: boolean; active: boolean }[] }> {
   return withTenant(pool, schema, async (tx) => {
     const o = await spaIn(tx, outletId);
     needManage(viewer, o);
     return {
+      cancelHours: (await tx.query<{ h: number }>("select spa_cancel_hours as h from outlets where id = $1", [o.id])).rows[0]!.h,
       therapists: (await tx.query<{ id: string; name: string; active: boolean }>("select id, name, active from spa_therapists where outlet_id = $1 order by name", [o.id])).rows,
       rooms: (await tx.query<{ id: string; name: string; active: boolean }>("select id, name, active from spa_rooms where outlet_id = $1 order by name", [o.id])).rows,
       treatments: (await tx.query<{ menu_item_id: string; minutes: number; needs_room: boolean; active: boolean }>("select menu_item_id, minutes, needs_room, active from spa_treatments where outlet_id = $1", [o.id])).rows.map((t) => ({ menuItemId: t.menu_item_id, minutes: t.minutes, needsRoom: t.needs_room, active: t.active })),
     };
+  });
+}
+
+/** Until how many hours before an appointment a guest cancels it in the Guest Portal (ticket 64); later only the spa does. */
+export async function setSpaCancelHours(pool: Pool, schema: string, outletId: string, hours: number, viewer: Viewer): Promise<void> {
+  if (!Number.isInteger(hours) || hours < 0 || hours > 168) throw new Error("Choose 0 to 168 hours");
+  await withTenant(pool, schema, async (tx) => {
+    needManage(viewer, await spaIn(tx, outletId));
+    await tx.query("update outlets set spa_cancel_hours = $2 where id = $1", [outletId, hours]);
   });
 }

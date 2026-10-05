@@ -70,3 +70,8 @@ export function instantAt(date: string, hhmm: string, timeZone: string): Date {
   at = wanted - offset(at);
   return new Date(at);
 }
+
+/** A guest cancels their own appointment (ticket 64) until the spa's hours before it; later only the spa does. */
+export function guestMayCancel(startsAt: Date, now: Date, hours: number): boolean {
+  return now.getTime() <= startsAt.getTime() - hours * 3_600_000;
+}

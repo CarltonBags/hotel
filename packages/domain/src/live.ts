@@ -5,7 +5,7 @@
  */
 export const DATA_CHANGE_PREFIX = "data.";
 
-export const DATA_KINDS = { reservations: "data.reservations", conversations: "data.conversations", typing: "data.typing" } as const;
+export const DATA_KINDS = { reservations: "data.reservations", conversations: "data.conversations", typing: "data.typing", spa: "data.spa" } as const;
 export type DataKind = (typeof DATA_KINDS)[keyof typeof DATA_KINDS];
 
 export function isDataChange(kind: string): boolean {

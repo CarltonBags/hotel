@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appointmentProblem, openSpaSlots } from "../src";
+import { appointmentProblem, guestMayCancel, openSpaSlots } from "../src";
 
 const t = (hhmm: string) => new Date(`2026-10-06T${hhmm}:00Z`);
 const iv = (a: string, b: string) => ({ start: t(a), end: t(b) });
@@ -37,5 +37,13 @@ describe("spa times", () => {
     expect(instantAt("2026-03-29", "01:30", "Europe/Berlin").toISOString()).toBe("2026-03-29T00:30:00.000Z");
     expect(instantAt("2026-03-29", "03:30", "Europe/Berlin").toISOString()).toBe("2026-03-29T01:30:00.000Z");
     expect(instantAt("2026-10-25", "04:00", "Europe/Berlin").toISOString()).toBe("2026-10-25T03:00:00.000Z");
+  });
+
+  it("a guest cancels their own appointment up to the spa's hours before it, not later", () => {
+    const start = new Date("2026-10-07T10:00:00Z");
+    expect(guestMayCancel(start, new Date("2026-10-06T10:00:00Z"), 24)).toBe(true);
+    expect(guestMayCancel(start, new Date("2026-10-06T10:01:00Z"), 24)).toBe(false);
+    expect(guestMayCancel(start, new Date("2026-10-07T09:59:00Z"), 0)).toBe(true);
+    expect(guestMayCancel(start, new Date("2026-10-07T10:00:01Z"), 0)).toBe(false);
   });
 });

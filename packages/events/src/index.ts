@@ -52,7 +52,7 @@ export { DATA_CHANGE_PREFIX, isDataChange } from "@hoteloftware/domain";
  * Tell every user of the tenant that data of a kind changed at a property, so
  * open lists can refresh. Carries no personal data: kind and property id only.
  */
-export function publishDataChange(db: Queryable, input: { tenantId: string; kind: "reservations" | "conversations"; propertyId: string }): Promise<number> {
+export function publishDataChange(db: Queryable, input: { tenantId: string; kind: "reservations" | "conversations" | "spa"; propertyId: string }): Promise<number> {
   // the property id rides in the body: these rows are tenant-wide and carry no personal data
   return publishNotification(db, { tenantId: input.tenantId, userId: null, kind: DATA_KINDS[input.kind], title: "", body: input.propertyId });
 }

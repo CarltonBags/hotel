@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MAX_COMPANIONS, expressCheckoutView, portalConversation, portalView } from "@hoteloftware/db";
+import { MAX_COMPANIONS, expressCheckoutView, portalConversation, portalSpa, portalView } from "@hoteloftware/db";
 import { cardLabel, extrasOpen, portalLanguage, type PortalLanguage } from "@hoteloftware/domain";
 import { headers } from "next/headers";
 import { portalText, type PortalKey } from "@/i18n/portal";
@@ -10,13 +10,14 @@ import { ExtraForm, InviteForm, PrecheckinForm } from "../forms";
 import { Glass } from "../glass";
 import { PortalMessages } from "../messages";
 import { CheckoutButton, PayPanel } from "../pay-panel";
+import { SpaPanel } from "../spa";
 
 export const dynamic = "force-dynamic";
 
 /** The Guest Portal (ticket 40): the stay of a Portal Link, or the Booker's whole booking. */
-export default async function PortalPage({ params, searchParams }: { params: Promise<{ key: string }>; searchParams: Promise<{ lang?: string }> }) {
+export default async function PortalPage({ params, searchParams }: { params: Promise<{ key: string }>; searchParams: Promise<{ lang?: string; spa?: string }> }) {
   const { key } = await params;
-  const asked = (await searchParams).lang;
+  const { lang: asked, spa: spaDay } = await searchParams;
   const tenant = await currentTenant();
   const view = tenant ? await portalView(pool(), tenant.schemaName, key) : null;
   if (!view) return <NotFound language={portalLanguage(asked, (await headers()).get("accept-language"))} />;
@@ -75,6 +76,8 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   const info = view.property.info[language] ?? view.property.info.en ?? view.property.info.de ?? "";
   const express = await expressCheckoutView(pool(), tenant!.schemaName, key);
   const payable = s.status === "confirmed" || s.status === "checked_in";
+  // the spa's released times for a day of the stay (ticket 64)
+  const spa = await portalSpa(pool(), tenant!.schemaName, key, spaDay && /^\d{4}-\d{2}-\d{2}$/.test(spaDay) ? spaDay : null);
   return (
     <>
       {wallpaper}
@@ -183,6 +186,14 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
               ))}
             </ul>
           ) : null}
+        </Glass>
+      ) : null}
+
+      {spa ? (
+        <Glass data-section="spa" id="spa">
+          <h2 className="text-xl font-semibold">{t("spa")}</h2>
+          <p className="text-sm text-white/70">{t("spaHelp")}</p>
+          <SpaPanel portalKey={key} language={language} spa={spa} timeZone={view.property.timeZone} prices={Object.fromEntries(spa.spas.flatMap((x) => x.treatments.map((tr) => [tr.id, money(tr.price)])))} />
         </Glass>
       ) : null}
 
