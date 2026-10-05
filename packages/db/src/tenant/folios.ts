@@ -673,8 +673,9 @@ async function correctIn(tx: PoolClient, chargeId: string, reason: string, userI
   if (c.origin === "correction") throw new Error("A correction is not corrected again; post the Charge anew instead");
   if (c.corrected) throw new Error("The Charge is already corrected");
   const { rows } = await tx.query<{ id: string }>(
-    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, corrects, posted_by)
-     select folio_id, reservation_id, property_id, service_id, description, service_date, quantity, -unit_price, -amount, tax_code_id, tax_rate, revenue_account, category, 'correction', id, $2
+    // an outlet's Room Charge keeps its bill and items on the correction (the outlet report nets it)
+    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, corrects, posted_by, outlet_bill_id, detail)
+     select folio_id, reservation_id, property_id, service_id, description, service_date, quantity, -unit_price, -amount, tax_code_id, tax_rate, revenue_account, category, 'correction', id, $2, outlet_bill_id, detail
      from charges where id = $1 returning id`,
     [chargeId, userId],
   );

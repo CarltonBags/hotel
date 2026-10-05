@@ -131,11 +131,11 @@ export interface OutletChargeLine {
   amount: number;
 }
 
-/** A bill as Charges: one per Tax Code (and rate), its items as detail, the bill's discount taken off each. */
+/** A bill as Charges: one per Tax Code (and rate; per revenue account where items of one Tax Code book to different ones), its items as detail, the bill's discount taken off each. */
 export function chargesPerTaxCode(lines: OutletChargeLine[], discountPercent: number): { taxCode: string; taxRate: number; revenueAccount: string; amount: number; items: { description: string; quantity: number; amount: number }[]; discount: number }[] {
   const out = new Map<string, { taxCode: string; taxRate: number; revenueAccount: string; gross: number; items: { description: string; quantity: number; amount: number }[] }>();
   for (const l of lines) {
-    const k = `${l.taxCode}|${l.taxRate}`;
+    const k = `${l.taxCode}|${l.taxRate}|${l.revenueAccount}`;
     if (!out.has(k)) out.set(k, { taxCode: l.taxCode, taxRate: l.taxRate, revenueAccount: l.revenueAccount, gross: 0, items: [] });
     const g = out.get(k)!;
     g.gross = roundMoney(g.gross + l.amount);
@@ -147,9 +147,14 @@ export function chargesPerTaxCode(lines: OutletChargeLine[], discountPercent: nu
   });
 }
 
-/** A discount beyond the outlet's percentage needs an Approval, unless the user approves outlet requests themselves. */
-export function discountNeedsApproval(actor: Actor, propertyId: string, percent: number, outletMax: number): boolean {
-  return percent > outletMax && !can(actor, "approve_outlet_requests", propertyId);
+/** A discount beyond the outlet's percentage needs an Approval, unless the user decides at this outlet (its Outlet Manager, the Property Manager). */
+export function discountNeedsApproval(percent: number, outletMax: number, decidesHere: boolean): boolean {
+  return percent > outletMax && !decidesHere;
+}
+
+/** Decides at the outlet without an Approval (Room Charge above the limit, discounts, voids, refunds): the Property Manager, or this outlet's own Outlet Manager. */
+export function decidesAtOutlet(actor: Actor, userId: string, outlet: { propertyId: string; managers: string[] }): boolean {
+  return can(actor, "manage_outlets", outlet.propertyId) || (can(actor, "approve_outlet_requests", outlet.propertyId) && outlet.managers.includes(userId));
 }
 
 /** Tap to pay on a phone takes Visa, Mastercard, Amex and Maestro, never girocard (it needs a reader). */

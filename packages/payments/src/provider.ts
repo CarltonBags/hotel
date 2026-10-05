@@ -97,6 +97,8 @@ export interface TerminalPaymentInput {
   hold: boolean;
   /** Keyed card-not-present entry (OTA virtual card) on the reader. */
   moto: boolean;
+  /** Tap to pay on a staff phone (ticket 61): girocard is declined there, it needs a reader. */
+  tapToPay?: boolean;
   description: string;
   /** Identifiers only (ADR 0007): payment or hold id, tenant. */
   metadata: Record<string, string>;

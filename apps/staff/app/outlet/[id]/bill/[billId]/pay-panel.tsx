@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import type { RoomChargeGuest } from "@hoteloftware/db";
 import type { Messages } from "@/i18n/messages";
 import type { ApprovalMode, ApprovalState } from "@/lib/approval";
-import { cancelCardAction, invoiceBillAction, payCashAction, payVoucherAction, pollCardAction, roomChargeAction, roomGuestsAction, simulateCardAction, startCardAction } from "../../../actions";
+import { cancelCardAction, invoiceBillAction, payCashAction, payVoucherAction, pollCardAction, refundOutletAction, roomChargeAction, roomGuestsAction, simulateCardAction, startCardAction } from "../../../actions";
 
 type Tab = "cash" | "card" | "voucher" | "room" | "account";
 
@@ -13,6 +13,8 @@ interface Props {
   outletId: string;
   billId: string;
   due: number;
+  /** A card payment still waiting at the device (after a reload). */
+  pendingPaymentId: string | null;
   readers: { readerId: string; label: string; kind: "reader" | "phone" }[];
   companies: { id: string; name: string }[];
   testMode: boolean;
@@ -45,15 +47,15 @@ export function ApprovalPrompt({ summary, onApprove, m }: { summary: string; onA
 }
 
 /** Close a bill: cash, card on a reader or tap to pay, Voucher, Room Charge, or on account to a Company (ticket 61). */
-export function PayPanel({ outletId, billId, due, readers, companies, testMode, rights, money, m }: Props) {
+export function PayPanel({ outletId, billId, due, pendingPaymentId, readers, companies, testMode, rights, money, m }: Props) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>("cash");
+  const [tab, setTab] = useState<Tab>(pendingPaymentId ? "card" : "cash");
   const [pending, start] = useTransition();
   const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
   const [customer, setCustomer] = useState("");
   const [reader, setReader] = useState(readers[0]?.readerId ?? "");
   const [tip, setTip] = useState("");
-  const [waiting, setWaiting] = useState<string | null>(null);
+  const [waiting, setWaiting] = useState<string | null>(pendingPaymentId);
   const [code, setCode] = useState("");
   const [query, setQuery] = useState("");
   const [guests, setGuests] = useState<RoomChargeGuest[]>([]);
@@ -62,6 +64,7 @@ export function PayPanel({ outletId, billId, due, readers, companies, testMode, 
   const [approval, setApproval] = useState<{ summary: string; retry: (mode: ApprovalMode) => void } | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const drawn = useRef(false);
+  const last = useRef<{ x: number; y: number } | null>(null);
   const phone = readers.find((r) => r.readerId === reader)?.kind === "phone";
   const done = (r: { error?: string; message?: string }) => {
     setNote(r.error ? { error: true, text: r.error } : r.message ? { error: false, text: r.message } : null);
@@ -88,13 +91,20 @@ export function PayPanel({ outletId, billId, due, readers, companies, testMode, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waiting, outletId, billId]);
 
-  // the guest's signature on the device
+  // the guest's signature on the device: strokes between the points, in the canvas's own pixels whatever its size on screen
   const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.buttons !== 1 || !canvas.current) return;
+    if (e.buttons !== 1 || !canvas.current) return (last.current = null);
     const c = canvas.current.getContext("2d")!;
     const r = canvas.current.getBoundingClientRect();
-    c.fillStyle = "#111";
-    c.fillRect(e.clientX - r.left, e.clientY - r.top, 2, 2);
+    const at = { x: ((e.clientX - r.left) * canvas.current.width) / r.width, y: ((e.clientY - r.top) * canvas.current.height) / r.height };
+    c.strokeStyle = "#111";
+    c.lineWidth = 2;
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(last.current?.x ?? at.x, last.current?.y ?? at.y);
+    c.lineTo(at.x, at.y);
+    c.stroke();
+    last.current = at;
     drawn.current = true;
   };
 
@@ -218,7 +228,7 @@ export function PayPanel({ outletId, billId, due, readers, companies, testMode, 
           {guest ? (
             <>
               <span className="text-sm text-ink-60">{m["outlet.sign"]}</span>
-              <canvas ref={canvas} width={320} height={110} onPointerMove={draw} className="touch-none rounded-xl border border-ink-10 bg-white" aria-label={m["outlet.sign"]} />
+              <canvas ref={canvas} width={320} height={110} onPointerMove={draw} onPointerUp={() => (last.current = null)} className="touch-none rounded-xl border border-ink-10 bg-white" aria-label={m["outlet.sign"]} />
               <div className="flex gap-2">
                 <button type="button" onClick={() => (canvas.current?.getContext("2d")?.clearRect(0, 0, 320, 110), (drawn.current = false))} className={`${button} border border-ink-10`}>
                   {m["outlet.clear"]}
@@ -255,6 +265,49 @@ export function PayPanel({ outletId, billId, due, readers, companies, testMode, 
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** Money back on a paid bill: by its own tender, with a reason; Service and Spa Staff need an Outlet Manager's Approval (ticket 61). */
+export function RefundPanel({ outletId, billId, payments, money, m }: { outletId: string; billId: string; payments: { id: string; tender: string; amount: number; refunded: number }[]; money: (n: number) => string; m: Messages }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [payment, setPayment] = useState(payments[0]?.id ?? "");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
+  const [approval, setApproval] = useState<{ summary: string; retry: (mode: ApprovalMode) => void } | null>(null);
+  const run = (mode?: ApprovalMode) =>
+    start(async () => {
+      const r = await refundOutletAction(outletId, billId, payment, Number(amount.replace(",", ".")), reason, mode);
+      if (r.approval) setApproval({ summary: r.approval.summary, retry: (md) => (setApproval(null), run(md)) });
+      else {
+        setNote(r.error ? { error: true, text: r.error } : { error: false, text: r.message ?? "" });
+        if (!r.error) router.refresh();
+      }
+    });
+  const input = "h-10 rounded-full border border-ink-10 bg-surface px-3";
+  if (!payments.length) return null;
+  return (
+    <div className="grid gap-2 border-t border-ink-10 pt-3" data-refund-panel>
+      <select value={payment} onChange={(e) => setPayment(e.target.value)} aria-label={m["outlet.refund"]} className={input}>
+        {payments.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.tender} · {money(p.amount)}
+            {p.refunded ? ` (−${money(p.refunded)})` : ""}
+          </option>
+        ))}
+      </select>
+      <div className="flex flex-wrap gap-2">
+        <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder={m["outlet.price"]} aria-label={m["outlet.price"]} className={`${input} w-28`} />
+        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={m["outlet.voidReason"]} aria-label={m["outlet.voidReason"]} className={`${input} flex-1`} />
+        <button type="button" disabled={pending || !amount || !reason.trim()} onClick={() => run()} className="h-10 rounded-full border border-ink-10 px-4 text-sm font-medium" data-refund>
+          {m["outlet.refund"]}
+        </button>
+      </div>
+      {approval ? <ApprovalPrompt summary={approval.summary} onApprove={approval.retry} m={m} /> : null}
+      {note ? <p role={note.error ? "alert" : "status"} className={note.error ? "text-danger" : "text-ink-60"}>{note.text}</p> : null}
     </div>
   );
 }

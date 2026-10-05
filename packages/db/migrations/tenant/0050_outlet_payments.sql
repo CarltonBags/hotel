@@ -37,4 +37,4 @@ alter table terminal_readers add column kind text not null default 'reader' cons
 
 -- Approvals at the outlet (an Outlet Manager or the Property Manager gives them)
 alter table approvals drop constraint approvals_kind_check;
-alter table approvals add constraint approvals_kind_check check (kind in ('refund_over_limit', 'price_below_floor', 'complimentary', 'paid_out_over_limit', 'room_charge_over_limit', 'outlet_discount', 'outlet_void'));
+alter table approvals add constraint approvals_kind_check check (kind in ('refund_over_limit', 'price_below_floor', 'complimentary', 'paid_out_over_limit', 'room_charge_over_limit', 'outlet_discount', 'outlet_void', 'outlet_refund'));

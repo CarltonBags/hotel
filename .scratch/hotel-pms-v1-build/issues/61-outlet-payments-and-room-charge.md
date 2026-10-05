@@ -4,9 +4,24 @@
 
 **Blocked by:** 60 Outlets, menus, table service, printers and Outlet Sale, 27 Payments: Stripe onboarding, Card Holds, Tenders and refunds, 53 Vouchers at the desk, 31 Approvals, role limits, Price Override and the audit log screen
 
-**Status:** ready-for-agent
+**Status:** in review (PR stacked on ticket 60)
 
-- [ ] Room Charge refused for a checked-out guest and for one over the Spending Limit without Approval
-- [ ] Bill with 7 % and 19 % items becomes two Charges with item detail on the folio
-- [ ] Tap to pay on a test phone completes for Visa; girocard routed to the reader
-- [ ] Discount above the outlet percentage needs Approval; void of a signed order by Service is refused
+- [x] Room Charge refused for a checked-out guest and for one over the Spending Limit without Approval
+- [x] Bill with 7 % and 19 % items becomes two Charges with item detail on the folio
+- [x] Tap to pay on a test phone completes for Visa; girocard routed to the reader
+- [x] Discount above the outlet percentage needs Approval; void of a signed order by Service is refused
+
+## Comments
+
+**Built.** At the outlet a bill closes by: cash through the outlet's Shift; Voucher (at a property of the selling Legal Entity); card on a paired reader (girocard; the guest adds a tip on the reader, kept apart from the amount) or tap to pay on a staff phone (a "phone" reader: Visa, Mastercard, Amex, Maestro; the provider declines girocard there, the reader takes it; the tip is typed with the amount); Room Charge; or on account to a Company. Room Charge: the waiter searches room or surname and sees room, surname, yes/no and what is left of tonight's Spending Limit (per property, default 150), never card data; allowed for a Checked-in stay not blocked ("cash only" on the reservation) and covered by a Card Hold, Card Guarantee or an on-account Company folio; above the limit the outlet's Outlet Manager (or the Property Manager) approves on the device or remotely; the guest signs on the device (kept with the bill) or on a printed slip; it lands on the stay's folio by its Routing Rules as one Charge per Tax Code (and revenue account) with the items as detail, shown under the Charge. Discounts up to the outlet's percentage for Service and Spa Staff, more with an Approval; a sent item is voided with a reason by the outlet's Outlet Manager or with an Approval; refunds of outlet payments the same. Tips stay out of revenue and of what is signed; the Receipt shows them apart. Outlet reports per outlet, Business Date and user who closed the bill: bills, paid (net of refunds), Room Charges, on account, discounts, tips, voids (Property Manager and Accounting every outlet, an Outlet Manager own outlets). Front Desk and Accounting see the items of outlet Room Charges on the folio and move or void them with the existing tools (a correction keeps its bill link).
+
+**Verified.** domain: 3 more tests (Room Charge rule, Charges per Tax Code and account with discount, discount Approval and own-outlet decisions, tap to pay and girocard). db: 6 tests (two Charges with items for 7 % and 19 %; refused for a checked-out or blocked guest and above the limit without an Approval, with the Outlet Manager's; Visa by tap to pay with tip, girocard declined on the phone and taken by the reader with a tip added there; discount and void Approvals, Spa Staff discount, another outlet's manager needs an Approval; outlet refund with Approval; outlet report). Walkthrough 11/11 in the outlet app (phone paired in the payment settings, simulated cards in test mode, signature drawn, folio items, report).
+
+**Review fixes.** A girocard on a phone is declined by the provider instead of being taken and marked failed afterwards; the Receipt of an outlet card payment is on the outlet's register; a bill waiting at the device can be resumed after a reload, and one given up before reaching the reader opens again; poll, cancel and test-card actions only act on the bill's own waiting payment; Charges per Tax Code are split by revenue account too; Spa Staff discount and void; only the outlet's own Outlet Manager decides without an Approval; refunds of outlet payments (with an Approval for Service and Spa Staff); corrections of outlet Room Charges keep their bill link; the "cash only" switch is checked in the db layer; the signature is drawn as strokes at any screen size; a Room Charge slip to sign on paper.
+
+**Open points.**
+- Tap to pay is real only with a native app: Stripe's Tap to Pay needs its iOS/Android SDK, which a web app cannot use. Built and tested here: the phone as a reader of its own kind, the routing (no girocard), tips, against the simulated provider. Owner to decide on a small native companion app (or readers only).
+- The tip on a reader is read as received minus amount; to be confirmed against Stripe's live reader (on-reader tipping).
+- Outlet Approvals given on the device check the approver's role at the property, not that they manage this outlet.
+- If posting the bill's Charges failed while a card payment settles, the settlement retries; no case is known, but it would block that payment's webhook.
+- Not asked for: the Spending Limit setting per property, the "cash only" switch on the reservation, discounts on Outlet Sales and on-account bills too.

@@ -64,7 +64,10 @@ describe("outlet payments", () => {
     expect(roomChargeCheck({ ...ok, covered: false, amount: 10 }).reason).toMatch(/Card Hold/);
   });
 
-  it("a bill becomes one Charge per Tax Code with its items as detail, the discount taken off per Tax Code", async () => {
+  it("a bill becomes one Charge per Tax Code (and revenue account) with its items as detail, the discount taken off per Tax Code", async () => {
+    const { chargesPerTaxCode: perTax } = await import("../src");
+    // a spa and a bar item at 19 % book to their own accounts
+    expect(perTax([{ taxCode: "STD", taxRate: 19, revenueAccount: "8410", description: "Pils", quantity: 1, amount: 4.5 }, { taxCode: "STD", taxRate: 19, revenueAccount: "8500", description: "Massage", quantity: 1, amount: 60 }], 0).map((c) => c.revenueAccount)).toEqual(["8410", "8500"]);
     const { chargesPerTaxCode } = await import("../src");
     const lines = [
       { taxCode: "FOOD", taxRate: 7, revenueAccount: "8400", description: "Schnitzel", quantity: 2, amount: 38 },
@@ -82,12 +85,15 @@ describe("outlet payments", () => {
   });
 
   it("a discount above the outlet's percentage needs an Approval for Service; tap to pay takes no girocard", async () => {
-    const { discountNeedsApproval, tapToPayAccepts } = await import("../src");
+    const { decidesAtOutlet, discountNeedsApproval, tapToPayAccepts } = await import("../src");
     const sv = { propertyRoles: [{ propertyId: "p", role: "service" as const }] };
     const om = { propertyRoles: [{ propertyId: "p", role: "outlet_manager" as const }] };
-    expect(discountNeedsApproval(sv, "p", 10, 10)).toBe(false);
-    expect(discountNeedsApproval(sv, "p", 15, 10)).toBe(true);
-    expect(discountNeedsApproval(om, "p", 50, 10)).toBe(false);
+    const bar = { propertyId: "p", managers: ["om"] };
+    expect(discountNeedsApproval(10, 10, decidesAtOutlet(sv, "sv", bar))).toBe(false);
+    expect(discountNeedsApproval(15, 10, decidesAtOutlet(sv, "sv", bar))).toBe(true);
+    expect(discountNeedsApproval(50, 10, decidesAtOutlet(om, "om", bar))).toBe(false);
+    // an Outlet Manager of another outlet decides nothing here
+    expect(decidesAtOutlet(om, "om", { propertyId: "p", managers: ["other"] })).toBe(false);
     expect(tapToPayAccepts("visa")).toBe(true);
     expect(tapToPayAccepts("girocard")).toBe(false);
   });

@@ -518,7 +518,11 @@ export async function refundPayment(
   const refund = await withTenant(pool, schema, async (tx) => {
     const orig = (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [input.paymentId])).rows[0];
     if (!orig) throw new Error("Payment not found");
-    await lockReservation(tx, orig.reservation_id);
+    // a payment on a stay, or on an outlet bill (ticket 61: the Outlet Manager refunds, or approves one)
+    const outletBill = orig.reservation_id ? null : (await tx.query<{ outlet_bill_id: string | null }>("select outlet_bill_id from folios where id = $1", [orig.folio_id])).rows[0]?.outlet_bill_id ?? null;
+    if (orig.reservation_id) await lockReservation(tx, orig.reservation_id);
+    else if (outletBill) await tx.query("select 1 from outlet_bills where id = $1 for update", [outletBill]);
+    else throw new Error("Only a payment on a stay or an outlet bill is refunded here");
     if (orig.refund_of || orig.status !== "succeeded") throw new Error("Only a received payment can be refunded");
     const refunds = (await tx.query<{ amount: string; status: PaymentStatus }>("select amount, status from payments where refund_of = $1", [orig.id])).rows.map((r) => ({ amount: Number(r.amount), status: r.status }));
     const limit = Number((await tx.query<{ refund_limit: string }>("select refund_limit from properties where id = $1", [orig.property_id])).rows[0]!.refund_limit);
@@ -527,7 +531,13 @@ export async function refundPayment(
     const verdict = refundCheck({ amount, refundable, refundedSoFar, limit, unlimited: actor.unlimited });
     if (verdict === "exceeds_refundable") throw new Error(`Cannot refund more than ${refundable.toFixed(2)} of this payment`);
     let approvedBy: string | null = null;
-    if (verdict === "needs_approval") {
+    if (outletBill && !actor.unlimited) {
+      approvedBy = await useApproval(
+        tx,
+        { kind: "outlet_refund", propertyId: orig.property_id, key: `${orig.id}:${amount.toFixed(2)}`, summary: `Refund of ${amount.toFixed(2)} ${orig.currency.trim()} at the outlet`, recordId: null },
+        actor,
+      );
+    } else if (verdict === "needs_approval") {
       approvedBy = await useApproval(
         tx,
         {

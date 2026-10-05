@@ -8,7 +8,7 @@ import { formatCurrency } from "@hoteloftware/domain";
 import type { Messages } from "@/i18n/messages";
 import type { ApprovalMode, ApprovalState } from "@/lib/approval";
 import { addItemAction, discountAction, moveAction, removeLineAction, sendRoundAction, splitAction, voidLineAction } from "../../../actions";
-import { ApprovalPrompt, PayPanel } from "./pay-panel";
+import { ApprovalPrompt, PayPanel, RefundPanel } from "./pay-panel";
 
 interface Props {
   bill: OutletBillView;
@@ -222,11 +222,17 @@ export function BillScreen({ bill, menu, tables, companies, currency, rights, re
               </button>
             </div>
           ) : null}
-          {open && rights.cash ? <PayPanel outletId={outletId} billId={bill.id} due={bill.due} readers={readers} companies={companies} testMode={testMode} rights={{ serve: rights.serve }} money={money} m={m} /> : null}
-          {bill.status === "paying" ? <p data-paying>{m["outlet.waiting"]}</p> : null}
+          {(open || bill.status === "paying") && rights.cash ? (
+            <PayPanel outletId={outletId} billId={bill.id} due={bill.due} pendingPaymentId={bill.pendingPaymentId} readers={readers} companies={companies} testMode={testMode} rights={{ serve: rights.serve }} money={money} m={m} />
+          ) : null}
+          {bill.status === "paid" && rights.cash ? <RefundPanel outletId={outletId} billId={bill.id} payments={bill.payments} money={money} m={m} /> : null}
           {bill.status === "charged" && bill.roomCharge ? (
             <p data-charged>
-              {m["outlet.room"]} · {bill.roomCharge.room ?? "–"} · {bill.roomCharge.guest}
+              {m["outlet.room"]} · {bill.roomCharge.room ?? "–"} · {bill.roomCharge.guest} ·{" "}
+              {/* the slip the guest signs when not on the device */}
+              <a href={`/outlet/${outletId}/bill/${bill.id}/slip`} className="text-accent underline" data-slip>
+                {m["outlet.slip"]}
+              </a>
             </p>
           ) : null}
           {bill.status === "paid" ? (

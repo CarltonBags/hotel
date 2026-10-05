@@ -19,11 +19,13 @@ import { createBooking } from "../src/tenant/reservations";
 import { assignRoom } from "../src/tenant/reservation-changes";
 import { checkIn, loadFolios } from "../src/tenant/folios";
 import { ApprovalRequired } from "../src/tenant/approvals";
-import { onboardPaymentAccount, refreshPaymentAccount, registerTerminalReader, simulateCard, syncPayment } from "../src/tenant/payments";
-import { createCashRegister, setCashDesk } from "../src/tenant/cash";
+import { onboardPaymentAccount, refreshPaymentAccount, refundPayment, registerTerminalReader, simulateCard, syncPayment } from "../src/tenant/payments";
+import { createCashRegister, openShift, setCashDesk } from "../src/tenant/cash";
 import {
   addBillItem,
   chargeBillToRoom,
+  payOutletBillCash,
+  setOutletManagers,
   createOutlet,
   openOutletBill,
   outletBill,
@@ -55,6 +57,7 @@ describe("Outlet payments", () => {
   let reservation = "";
   let phone = "";
   let reader = "";
+  let barRegister = "";
   const s = () => tenant.schemaName;
   const today = todayIn("Europe/Berlin");
   const provider = new FakePaymentProvider();
@@ -89,6 +92,8 @@ describe("Outlet payments", () => {
     const register = await createCashRegister(pool, s(), propertyId, "Bar till");
     bar = await createOutlet(pool, s(), propertyId, { name: "Bar", kind: "bar", cashRegisterId: register, active: true }, pm);
     await pool.query(`update ${s()}.outlets set discount_percent = 10 where id = $1`, [bar]);
+    await setOutletManagers(pool, s(), bar, [om.userId], pm);
+    barRegister = register;
     pils = await saveMenuItem(pool, s(), bar, { serviceId: drinks.id, name: "Pils", category: "Drinks", price: 4.5, printerId: null, modifiers: [], active: true, sortOrder: 1 }, pm);
     schnitzel = await saveMenuItem(pool, s(), bar, { serviceId: food.id, name: "Schnitzel", category: "Food", price: 19, printerId: null, modifiers: [], active: true, sortOrder: 2 }, pm);
     // a guest in house whose company pays on account: Room Charge is covered
@@ -156,7 +161,8 @@ describe("Outlet payments", () => {
     const g = await bill([[pils, 2]]);
     const onPhone = await startOutletCardPayment(pool, s(), provider, g, { readerId: phone, tip: 0 }, mia);
     await simulateCard(pool, s(), provider, { paymentId: onPhone.id }, { brand: "girocard" });
-    expect((await syncPayment(pool, s(), provider, onPhone.id)).status).toBe("failed");
+    // the provider declines girocard on a phone: nothing is taken, the bill stays open
+    expect(await syncPayment(pool, s(), provider, onPhone.id)).toMatchObject({ status: "failed", error: "girocard is not accepted by tap to pay: use the reader" });
     expect((await outletBill(pool, s(), g, mia)).status).toBe("open");
     await expect(startOutletCardPayment(pool, s(), provider, g, { readerId: reader, tip: 1 }, mia)).rejects.toThrow(/On the reader the guest adds the tip/);
     const onReader = await startOutletCardPayment(pool, s(), provider, g, { readerId: reader, tip: 0 }, mia);
@@ -183,13 +189,30 @@ describe("Outlet payments", () => {
     expect(view.lines.find((l) => l.id === pilsLine.id)!.voided).toEqual({ reason: "spilled" });
     // tonight's limit is used up: the Outlet Manager charges it
     await chargeBillToRoom(pool, s(), b, { reservationId: reservation, signature: null }, om);
+
+    // Spa Staff discount within the outlet's percentage; an Outlet Manager of another outlet decides nothing at this one
+    const spa = { userId: "user_spa", actor: { propertyRoles: [{ propertyId, role: "spa_staff" as const }] } };
+    const other = { userId: "user_om2", actor: { propertyRoles: [{ propertyId, role: "outlet_manager" as const }] } };
+    const d = await bill([[pils, 1]]);
+    await setBillDiscount(pool, s(), d, 5, spa);
+    await expect(setBillDiscount(pool, s(), d, 30, other)).rejects.toBeInstanceOf(ApprovalRequired);
+  });
+
+  it("a refund on an outlet bill needs the Outlet Manager or an Approval", async () => {
+    const r = await bill([[pils, 2]]);
+    await openShift(pool, s(), { registerId: barRegister, count: {} }, mia);
+    const paid = await payOutletBillCash(pool, s(), r, { customerName: "" }, mia);
+    await expect(refundPayment(pool, s(), provider, { paymentId: paid.paymentId, amount: 4.5, reason: "warm beer" }, { userId: mia.userId, unlimited: false })).rejects.toBeInstanceOf(ApprovalRequired);
+    const back = await refundPayment(pool, s(), provider, { paymentId: paid.paymentId, amount: 4.5, reason: "warm beer" }, { userId: mia.userId, unlimited: false, approverId: om.userId });
+    expect(back).toMatchObject({ status: "succeeded", amount: -4.5 });
   });
 
   it("the outlet report shows per outlet, day and user what was paid, charged, discounted, tipped and voided", async () => {
     const rows = await outletReport(pool, s(), propertyId, { from: today, to: today }, pm);
     // by who closed the bill: Mia four, the Outlet Manager the one beyond tonight's limit
     expect(rows.map((r) => [r.outlet, r.userId, r.bills, r.paid, r.roomCharged, r.discounts, r.tips, r.voids])).toEqual([
-      ["Bar", "user_mia", 4, 18, 51.5 + 114, 0, 3, 0],
+      // paid net of the refund
+      ["Bar", "user_mia", 5, 27 - 4.5, 51.5 + 114, 0, 3, 0],
       ["Bar", "user_om", 1, 0, 15.2, 3.8, 0, 1],
     ]);
     // Service sees no report

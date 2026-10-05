@@ -262,6 +262,8 @@ const catalog = {
   "outlet.username": { en: "User name", de: "Benutzername" },
   "outlet.password": { en: "Password", de: "Passwort" },
   "outlet.approve": { en: "Approve", de: "Freigeben" },
+  "outlet.refund": { en: "Refund", de: "Erstatten" },
+  "outlet.slip": { en: "Slip to sign", de: "Beleg zum Unterschreiben" },
   "outlet.due": { en: "To pay", de: "Zu zahlen" },
   "module.outlet_reports": { en: "Outlet reports", de: "Outlet-Berichte" },
   "outlet.report.bills": { en: "Bills", de: "Bons" },

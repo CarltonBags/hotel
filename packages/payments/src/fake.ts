@@ -7,6 +7,7 @@ interface FakeIntent extends IntentState {
   readerId: string | null;
   hold: boolean;
   refunded: number;
+  tapToPay?: boolean;
 }
 
 /**
@@ -74,6 +75,7 @@ export class FakePaymentProvider implements PaymentProvider {
       accountId,
       readerId: input.readerId,
       hold: input.hold,
+      tapToPay: input.tapToPay ?? false,
       status: "waiting",
       amount: input.amount,
       capturable: 0,
@@ -101,6 +103,11 @@ export class FakePaymentProvider implements PaymentProvider {
     reader.pending = null;
     if (Math.round(intent.amount * 100) === 13) {
       Object.assign(intent, { status: "failed", error: "Card declined" });
+      return;
+    }
+    // like Stripe's Tap to Pay: girocard is not accepted on a phone
+    if (intent.tapToPay && card.brand === "girocard") {
+      Object.assign(intent, { status: "failed", brand: "girocard", error: "girocard is not accepted by tap to pay: use the reader" });
       return;
     }
     Object.assign(intent, {

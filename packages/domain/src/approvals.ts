@@ -4,7 +4,7 @@
  * screen with their credentials or remotely on a request, which expires after
  * 24 hours and is used once.
  */
-export const APPROVAL_KINDS = ["refund_over_limit", "price_below_floor", "complimentary", "paid_out_over_limit", "room_charge_over_limit", "outlet_discount", "outlet_void"] as const;
+export const APPROVAL_KINDS = ["refund_over_limit", "price_below_floor", "complimentary", "paid_out_over_limit", "room_charge_over_limit", "outlet_discount", "outlet_void", "outlet_refund"] as const;
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 
 export const APPROVAL_TTL_HOURS = 24;
@@ -29,7 +29,7 @@ export function priceOverrideCheck(nights: { date: string; price: number }[], fl
 }
 
 /** Approvals at an outlet (ticket 61) are given by an Outlet Manager or the Property Manager; every other by the Property Manager. */
-export const OUTLET_APPROVAL_KINDS: readonly ApprovalKind[] = ["room_charge_over_limit", "outlet_discount", "outlet_void"];
+export const OUTLET_APPROVAL_KINDS: readonly ApprovalKind[] = ["room_charge_over_limit", "outlet_discount", "outlet_void", "outlet_refund"];
 export function approvalRight(kind: ApprovalKind): "approve_requests" | "approve_outlet_requests" {
   return OUTLET_APPROVAL_KINDS.includes(kind) ? "approve_outlet_requests" : "approve_requests";
 }

@@ -5,6 +5,9 @@ import {
   addBillItem,
   cancelPendingPayment,
   chargeBillToRoom,
+  outletBill,
+  refundPayment,
+  reopenPayingBill,
   invoiceOutletBill,
   payOutletBillVoucher,
   roomChargeGuests,
@@ -23,8 +26,9 @@ import {
   splitOutletBill,
   takePrintJobs,
   type PrintJob,
+  type Viewer as DbViewer,
 } from "@hoteloftware/db";
-import type { Actor } from "@hoteloftware/domain";
+import { decidesAtOutlet } from "@hoteloftware/domain";
 import { paymentProvider, type SimulatedCard } from "@hoteloftware/payments";
 import { withApproval, type ApprovalMode, type ApprovalState } from "@/lib/approval";
 import { formAction, type FormState } from "@/lib/form";
@@ -32,8 +36,8 @@ import { pool } from "@/lib/db";
 import { signPaymentReceipts } from "@/lib/fiscal";
 import { authorizeOutlet } from "@/lib/outlets";
 
-/** The user at the outlet, as the db layer checks them. */
-type Viewer = { userId: string; actor: Actor; name: string };
+/** The user at the outlet, as the db layer checks them, with the name printed on tickets. */
+type Viewer = DbViewer & { name: string };
 
 /** The outlet app (ticket 60): every action checked at the outlet's property with the Point of Sale Module on (the db layer checks again). */
 const refresh = (outletId: string) => revalidatePath(`/outlet/${outletId}`, "layout");
@@ -114,8 +118,8 @@ export async function invoiceBillAction(outletId: string, billId: string, compan
   });
 }
 
-/** Whoever works the outlet's tables or till prints its tickets. */
-const printer = (outletId: string) => authorizeOutlet("outlet_cash", { outletId }).catch(() => authorizeOutlet("serve_outlet", { outletId }));
+/** Whoever works the outlet's tables or till prints its tickets (every outlet role holds outlet_cash). */
+const printer = (outletId: string) => authorizeOutlet("outlet_cash", { outletId });
 
 export async function takePrintJobsAction(outletId: string): Promise<PrintJob[]> {
   try {
@@ -139,7 +143,7 @@ export async function reportPrintAction(outletId: string, jobId: string, ok: boo
 
 /** An action that may need an Outlet Manager's Approval: asked on the device with their credentials, or remotely. */
 async function outletApproval(billId: string, mode: ApprovalMode | undefined, body: (viewer: Viewer & { approverId: string | null }, schema: string) => Promise<FormState>): Promise<ApprovalState> {
-  const { tenant, viewer, propertyId } = await authorizeOutlet("outlet_cash", { billId }).catch(() => authorizeOutlet("serve_outlet", { billId }));
+  const { tenant, viewer, propertyId } = await authorizeOutlet("outlet_cash", { billId });
   return withApproval({ tenantId: tenant.id, schema: tenant.schemaName, propertyId, userId: viewer.userId, userName: viewer.name }, mode, (approverId) => formAction(() => body({ ...viewer, approverId }, tenant.schemaName)));
 }
 
@@ -195,9 +199,18 @@ export async function startCardAction(outletId: string, billId: string, readerId
   return { ...r, ...(paymentId ? { paymentId } : {}) };
 }
 
+/** The bill's own waiting card payment: an id from the browser is only taken when it is that one. */
+async function billPayment(billId: string, paymentId: string) {
+  const { tenant, viewer } = await authorizeOutlet("outlet_cash", { billId });
+  const bill = await outletBill(pool(), tenant.schemaName, billId, viewer);
+  if (!bill.pendingPaymentId || bill.pendingPaymentId !== String(paymentId)) throw new Error("No card payment is waiting on this bill");
+  return { tenant, viewer, paymentId: bill.pendingPaymentId };
+}
+
 /** The device polls the waiting payment; once settled its Receipt is signed. */
 export async function pollCardAction(outletId: string, billId: string, paymentId: string): Promise<{ status: string; error: string | null }> {
-  const { tenant } = await authorizeOutlet("outlet_cash", { billId });
+  const { tenant } = await billPayment(billId, paymentId).catch(() => ({ tenant: null }));
+  if (!tenant) return { status: "failed", error: "No card payment is waiting on this bill" };
   const p = await syncPayment(pool(), tenant.schemaName, paymentProvider(), String(paymentId));
   if (p.status !== "pending") {
     if (p.status === "succeeded") await signPaymentReceipts(tenant, p.id);
@@ -208,18 +221,34 @@ export async function pollCardAction(outletId: string, billId: string, paymentId
 
 export async function cancelCardAction(outletId: string, billId: string, paymentId: string): Promise<FormState> {
   return formAction(async () => {
-    const { tenant } = await authorizeOutlet("outlet_cash", { billId });
-    await cancelPendingPayment(pool(), tenant.schemaName, paymentProvider(), String(paymentId));
+    const { tenant, viewer, paymentId: id } = await billPayment(billId, paymentId);
+    await cancelPendingPayment(pool(), tenant.schemaName, paymentProvider(), id);
+    // a payment given up before it reached the reader leaves the bill open again
+    await reopenPayingBill(pool(), tenant.schemaName, billId, viewer);
     refresh(outletId);
   });
+}
+
+/** Give money back on a paid outlet bill: the outlet's Outlet Manager or the Property Manager, else with an Approval (cash out of the user's Shift). */
+export async function refundOutletAction(outletId: string, billId: string, paymentId: string, amount: number, reason: string, mode?: ApprovalMode): Promise<ApprovalState> {
+  const { tenant, viewer, propertyId } = await authorizeOutlet("outlet_cash", { billId });
+  const bill = await outletBill(pool(), tenant.schemaName, billId, viewer);
+  if (!bill.payments.some((p) => p.id === String(paymentId))) return { error: "Payment not found on this bill" };
+  return withApproval({ tenantId: tenant.id, schema: tenant.schemaName, propertyId, userId: viewer.userId, userName: viewer.name }, mode, (approverId) =>
+    formAction(async () => {
+      await refundPayment(pool(), tenant.schemaName, paymentProvider(), { paymentId: String(paymentId), amount: Number(amount), reason: String(reason ?? "") }, { userId: viewer.userId, unlimited: decidesAtOutlet(viewer.actor, viewer.userId, bill.outlet), approverId });
+      refresh(outletId);
+      return { ok: true, message: "Refunded." };
+    }),
+  );
 }
 
 /** Test mode: present a test card (its brand, a tip added on the reader) to the device. */
 export async function simulateCardAction(outletId: string, billId: string, paymentId: string, card: SimulatedCard): Promise<FormState> {
   return formAction(async () => {
-    const { tenant } = await authorizeOutlet("outlet_cash", { billId });
-    await simulateCard(pool(), tenant.schemaName, paymentProvider(), { paymentId: String(paymentId) }, card);
-    await signPaymentReceipts(tenant, String(paymentId));
+    const { tenant, paymentId: id } = await billPayment(billId, paymentId);
+    await simulateCard(pool(), tenant.schemaName, paymentProvider(), { paymentId: id }, card);
+    await signPaymentReceipts(tenant, id);
     refresh(outletId);
   });
 }

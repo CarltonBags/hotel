@@ -9,8 +9,8 @@ import { reservationScope } from "@/lib/reservation-scope";
 /** Block a stay from Room Charges at the outlets ("cash only"), or open it again (ticket 61): the desk, on the reservation's own property. */
 export async function roomChargeBlockedAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
-    const { schema, reservation } = await reservationScope(field(formData, "reservationId"), "manage_folios");
-    await setRoomChargeBlocked(pool(), schema, reservation.id, flag(formData, "blocked"));
+    const { schema, reservation, userId, actor } = await reservationScope(field(formData, "reservationId"), "manage_folios");
+    await setRoomChargeBlocked(pool(), schema, reservation.id, flag(formData, "blocked"), { userId, actor });
     revalidatePath(`/reservations/${reservation.id}`);
     return { ok: true, message: "Saved." };
   });

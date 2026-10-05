@@ -1206,7 +1206,7 @@ export const approvals = pgTable(
   (t) => [
     index("approvals_property_idx").on(t.propertyId, t.requestedAt.desc()),
     index("approvals_match_idx").on(t.kind, t.subjectKey, t.requestedBy).where(sql`${t.status} = 'approved'`),
-    check("approvals_kind_check", sql`${t.kind} in ('refund_over_limit', 'price_below_floor', 'complimentary', 'paid_out_over_limit', 'room_charge_over_limit', 'outlet_discount', 'outlet_void')`),
+    check("approvals_kind_check", sql`${t.kind} in ('refund_over_limit', 'price_below_floor', 'complimentary', 'paid_out_over_limit', 'room_charge_over_limit', 'outlet_discount', 'outlet_void', 'outlet_refund')`),
     check("approvals_status_check", sql`${t.status} in ('pending', 'approved', 'rejected', 'used')`),
     check("approvals_decided_check", sql`(${t.status} = 'pending') = (${t.decidedBy} is null)`),
     check("approvals_used_check", sql`(${t.status} = 'used') = (${t.usedAt} is not null)`),

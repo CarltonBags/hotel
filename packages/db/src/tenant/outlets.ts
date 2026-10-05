@@ -5,9 +5,9 @@ import {
   billTotal,
   can,
   chargesPerTaxCode,
+  decidesAtOutlet,
   discountNeedsApproval,
   roomChargeCheck,
-  tapToPayAccepts,
   isOneOf,
   lineFor,
   mayManageOutlet,
@@ -401,6 +401,10 @@ export interface OutletBillView {
   tip: number;
   /** A Room Charge: the room and surname it went to. */
   roomCharge: { room: string | null; guest: string } | null;
+  /** The card payment waiting at a reader or phone while the bill is paying. */
+  pendingPaymentId: string | null;
+  /** Payments received on the bill, for a refund. */
+  payments: { id: string; tender: string; amount: number; refunded: number }[];
   /** The Receipt of a bill paid on the spot. */
   receiptToken: string | null;
   invoiceId: string | null;
@@ -410,11 +414,12 @@ export async function outletBill(pool: Pool, schema: string, billId: string, vie
   return withTenant(pool, schema, async (tx) => {
     const b = await billIn(tx, billId);
     needWork(viewer, b.property_id);
-    const head = (await tx.query<{ table: string | null; label: string; receipt: string | null; invoice: string | null; tip: string; room: string | null; guest: string | null }>(
+    const head = (await tx.query<{ table: string | null; label: string; receipt: string | null; invoice: string | null; tip: string; room: string | null; guest: string | null; pending: string | null }>(
       `select t.name as table, b.label,
          (select coalesce(sum(p.tip), 0) from folios f join payments p on p.folio_id = f.id where f.outlet_bill_id = b.id and p.status = 'succeeded') as tip,
          (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = b.reservation_id order by a.to_date desc limit 1) as room,
          (select g.last_name from reservations r join guests g on g.id = r.primary_guest_id where r.id = b.reservation_id) as guest,
+         (select p.id from folios f join payments p on p.folio_id = f.id where f.outlet_bill_id = b.id and p.status = 'pending' and p.refund_of is null limit 1) as pending,
          (select rc.token from folios f join payments p on p.folio_id = f.id join receipts rc on rc.payment_id = p.id where f.outlet_bill_id = b.id limit 1) as receipt,
          (select i.id from folios f join invoices i on i.folio_id = f.id where f.outlet_bill_id = b.id and i.cancelled_by is null limit 1) as invoice
        from outlet_bills b left join outlet_tables t on t.id = b.table_id where b.id = $1`,
@@ -422,6 +427,11 @@ export async function outletBill(pool: Pool, schema: string, billId: string, vie
     )).rows[0]!;
     const lines = await linesOf(tx, b.id);
     const a = await amountsIn(tx, b);
+    const payments = (await tx.query<{ id: string; tender: string; amount: string; refunded: string }>(
+      `select p.id, p.tender, p.amount, (select coalesce(-sum(r.amount), 0) from payments r where r.refund_of = p.id and r.status in ('succeeded', 'pending', 'refund_pending_balance')) as refunded
+       from folios f join payments p on p.folio_id = f.id where f.outlet_bill_id = $1 and p.status = 'succeeded' and p.refund_of is null order by p.posted_at`,
+      [b.id],
+    )).rows.map((p) => ({ id: p.id, tender: p.tender, amount: Number(p.amount), refunded: Number(p.refunded) }));
     return {
       id: b.id,
       number: b.number,
@@ -437,6 +447,8 @@ export async function outletBill(pool: Pool, schema: string, billId: string, vie
       due: a.due,
       tip: Number(head.tip),
       roomCharge: head.guest ? { room: head.room, guest: head.guest } : null,
+      pendingPaymentId: head.pending,
+      payments,
       receiptToken: head.receipt,
       invoiceId: head.invoice,
     };
@@ -676,9 +688,9 @@ export async function setBillDiscount(pool: Pool, schema: string, billId: string
   const pct = roundMoney(Number(percent));
   if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error("A discount is a percentage from 0 to 100");
   await withTenant(pool, schema, async (tx) => {
-    const b = await openBillIn(tx, billId, viewer);
-    const max = Number((await tx.query<{ m: string }>("select discount_percent as m from outlets where id = $1", [b.outlet_id])).rows[0]!.m);
-    const approver = discountNeedsApproval(viewer.actor, b.property_id, pct, max)
+    // Service and Spa Staff alike (matrix "Discount")
+    const b = await openBillIn(tx, billId, viewer, "outlet_cash");
+    const approver = discountNeedsApproval(pct, b.outlet.discountPercent, decidesAtOutlet(viewer.actor, viewer.userId, b.outlet))
       ? await useApproval(tx, outletSubject(b, "outlet_discount", `${b.id}:${pct}`, `Discount of ${pct} % on bill ${b.outlet.name} ${b.number}`), viewer)
       : null;
     await tx.query("update outlet_bills set discount_percent = $2, discount_approved_by = $3 where id = $1", [b.id, pct, approver]);
@@ -695,12 +707,12 @@ export async function voidBillLine(pool: Pool, schema: string, billId: string, l
   if (!why) throw new Error("A reason is required to void an item");
   if (!isUuid(lineId)) throw new Error("Item not found");
   await withTenant(pool, schema, async (tx) => {
-    const b = await openBillIn(tx, billId, viewer);
+    const b = await openBillIn(tx, billId, viewer, "outlet_cash");
     const l = (await tx.query<{ description: string; round_id: string | null; voided_at: Date | null }>("select description, round_id, voided_at from outlet_bill_lines where id = $1 and bill_id = $2 for update", [lineId, b.id])).rows[0];
     if (!l) throw new Error("Item not found");
     if (l.voided_at) return;
     if (!l.round_id) throw new Error("An item not sent yet is taken back, not voided");
-    const approver = can(viewer.actor, "approve_outlet_requests", b.property_id) ? null : await useApproval(tx, outletSubject(b, "outlet_void", lineId, `Void of ${l.description} on bill ${b.outlet.name} ${b.number}`), viewer);
+    const approver = decidesAtOutlet(viewer.actor, viewer.userId, b.outlet) ? null : await useApproval(tx, outletSubject(b, "outlet_void", lineId, `Void of ${l.description} on bill ${b.outlet.name} ${b.number}`), viewer);
     await tx.query("update outlet_bill_lines set voided_at = clock_timestamp(), voided_by = $2, void_reason = $3, void_approved_by = $4 where id = $1", [lineId, viewer.userId, why, approver]);
   });
 }
@@ -764,6 +776,7 @@ export async function startOutletCardPayment(pool: Pool, schema: string, provide
       currency: prepared.ctx.currency,
       hold: false,
       moto: false,
+      tapToPay: prepared.reader.kind === "phone",
       description: "Outlet bill",
       metadata: { payment_id: prepared.row.id },
       idempotencyKey: `payment:${prepared.row.id}`,
@@ -788,12 +801,8 @@ export async function startOutletCardPayment(pool: Pool, schema: string, provide
 export async function settleOutletBillIn(tx: PoolClient, p: PaymentRow, state: { received: number; brand: string | null }): Promise<void> {
   const b = (await tx.query<BillRow>("select b.id, b.outlet_id, b.property_id, b.number, b.table_id, b.status from outlet_bills b join folios f on f.outlet_bill_id = b.id where f.id = $1 for update of b", [p.folio_id])).rows[0];
   if (!b || b.status !== "paying" || p.refund_of) return;
+  // a girocard on a phone is declined by the provider (tap to pay takes none) and so arrives here as failed: money that came through is kept
   const phone = (await tx.query<{ kind: string }>("select kind from terminal_readers where reader_id = $1", [p.reader_id])).rows[0]?.kind === "phone";
-  if (p.status === "succeeded" && phone && !tapToPayAccepts(state.brand)) {
-    // Stripe declines girocard on a phone; should one come through, it is not taken
-    await tx.query("update payments set status = 'failed', error = 'girocard needs the reader' where id = $1", [p.id]);
-    p.status = "failed";
-  }
   if (p.status !== "succeeded") {
     await tx.query("update outlet_bills set status = 'open' where id = $1", [b.id]);
     return;
@@ -802,6 +811,22 @@ export async function settleOutletBillIn(tx: PoolClient, p: PaymentRow, state: {
   if (!phone && tip) await tx.query("update payments set tip = $2 where id = $1", [p.id, tip]);
   await postBillIn(tx, b, null, p.posted_by);
   await tx.query("update outlet_bills set status = 'paid', closed_by = $2, closed_at = clock_timestamp() where id = $1", [b.id, p.posted_by]);
+  // the Receipt on the outlet's register (the desk's settle path finds it issued)
+  const register = (await tx.query<{ r: string | null }>("select cash_register_id as r from outlets where id = $1", [b.outlet_id])).rows[0]!.r;
+  await issueReceiptIn(tx, { id: p.id, propertyId: p.property_id }, register, p.posted_by);
+}
+
+/** A bill whose card payment ended without settling (cancelled before an intent, refused): open again. */
+export async function reopenPayingBill(pool: Pool, schema: string, billId: string, viewer: Viewer): Promise<void> {
+  await withTenant(pool, schema, async (tx) => {
+    const b = await billIn(tx, billId, true);
+    need(viewer, "outlet_cash", b.property_id);
+    await tx.query(
+      `update outlet_bills b set status = 'open' where b.id = $1 and b.status = 'paying'
+         and not exists (select 1 from folios f join payments p on p.folio_id = f.id where f.outlet_bill_id = b.id and p.status = 'pending')`,
+      [b.id],
+    );
+  });
 }
 
 // ── Room Charge (ticket 61) ──
@@ -876,7 +901,7 @@ export async function chargeBillToRoom(pool: Pool, schema: string, billId: strin
     const f = await roomChargeFactsIn(tx, b.property_id, input.reservationId);
     const c = roomChargeCheck({ ...f, amount: a.due });
     if (!c.allowed) throw new Error(c.reason!);
-    if (c.overLimit && !can(viewer.actor, "approve_outlet_requests", b.property_id)) {
+    if (c.overLimit && !decidesAtOutlet(viewer.actor, viewer.userId, b.outlet)) {
       await useApproval(tx, { kind: "room_charge_over_limit", propertyId: b.property_id, key: `${b.id}:${input.reservationId}:${a.due}`, summary: `Room Charge of ${a.due.toFixed(2)} to room ${f.room ?? "?"} (${f.lastName}), ${c.remaining.toFixed(2)} left tonight`, recordId: input.reservationId }, viewer);
     }
     const label = `${b.outlet.name} ${b.number}`;
@@ -912,9 +937,29 @@ export async function spendingLimitOf(pool: Pool, schema: string, propertyId: st
 }
 
 /** A stay blocked from Room Charges ("cash only"), or open again; the desk decides on the reservation. */
-export async function setRoomChargeBlocked(pool: Pool, schema: string, reservationId: string, blocked: boolean): Promise<void> {
+export async function setRoomChargeBlocked(pool: Pool, schema: string, reservationId: string, blocked: boolean, viewer: Viewer): Promise<void> {
   if (!isUuid(reservationId)) throw new Error("Reservation not found");
-  await withTenant(pool, schema, (tx) => tx.query("update reservations set room_charge_blocked = $2 where id = $1", [reservationId, blocked]));
+  await withTenant(pool, schema, async (tx) => {
+    const r = (await tx.query<{ property_id: string }>("select property_id from reservations where id = $1", [reservationId])).rows[0];
+    if (!r) throw new Error("Reservation not found");
+    need(viewer, "manage_folios", r.property_id);
+    await tx.query("update reservations set room_charge_blocked = $2 where id = $1", [reservationId, blocked]);
+  });
+}
+
+/** A Room Charge's slip: its items as charged to the stay, the total, when, and the guest's signature if given on the device. */
+export async function roomChargeSlip(pool: Pool, schema: string, billId: string, viewer: Viewer): Promise<{ items: { description: string; quantity: number; amount: number }[]; total: number; closedAt: Date; signature: string | null }> {
+  return withTenant(pool, schema, async (tx) => {
+    const b = await billIn(tx, billId);
+    needWork(viewer, b.property_id);
+    const head = (await tx.query<{ closed_at: Date; signature: string | null }>("select closed_at, signature from outlet_bills where id = $1 and status = 'charged'", [b.id])).rows[0];
+    if (!head) throw new Error("The bill is not charged to a room");
+    const charges = (await tx.query<{ amount: string; detail: { description: string; quantity: number; amount: number }[] | null }>(
+      "select amount, detail from charges where outlet_bill_id = $1 and reservation_id is not null and origin = 'outlet' order by posted_at, id",
+      [b.id],
+    )).rows;
+    return { items: charges.flatMap((c) => c.detail ?? []), total: roundMoney(charges.reduce((s, c) => s + Number(c.amount), 0)), closedAt: head.closed_at, signature: head.signature };
+  });
 }
 
 // ── outlet reports (ticket 61) ──
