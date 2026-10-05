@@ -63,7 +63,8 @@ export function FolioPanel({ reservationId, view, services, taxCodes, parties, l
   const [companyQuery, setCompanyQuery] = useState("");
   const [companyHits, setCompanyHits] = useState<Picked[]>([]);
 
-  const folioLabel = (f: Folio) => fill(m["folio.label"], { n: String(f.number), name: f.billToName });
+  // the group's Master Folio (ticket 59) shows this reservation's Charges on it
+  const folioLabel = (f: Folio) => (f.master ? fill(m["folio.master"], { name: `${f.master.groupName} · ${f.billToName}` }) : fill(m["folio.label"], { n: String(f.number), name: f.billToName }));
 
   return (
     <section aria-label={m["res.folio"]} className="grid gap-4 rounded-2xl bg-surface-2 p-5 text-sm">
@@ -76,7 +77,7 @@ export function FolioPanel({ reservationId, view, services, taxCodes, parties, l
       {folios.length === 0 ? <p className="text-ink-60">{m["folio.none"]}</p> : null}
 
       {folios.map((f) => (
-        <article key={f.id} aria-label={folioLabel(f)} data-folio={f.number} className="grid gap-2 rounded-xl bg-surface p-4">
+        <article key={f.id} aria-label={folioLabel(f)} data-folio={f.master ? "master" : f.number} className="grid gap-2 rounded-xl bg-surface p-4">
           <h3 className="font-medium">
             {folioLabel(f)} <span className="font-normal text-ink-60">· {m[`folio.billTo.${f.billTo}`]}</span>
           </h3>

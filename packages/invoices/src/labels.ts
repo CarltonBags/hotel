@@ -45,6 +45,8 @@ export const LABELS = {
     bank: "Bankverbindung",
     depositLine: "Anzahlung für den Aufenthalt",
     earlyDepartureFee: "Gebühr für vorzeitige Abreise",
+    room: "Zimmer",
+    groupDepositLine: "Anzahlung für die Gruppe",
     page: "Seite",
   },
   en: {
@@ -92,6 +94,8 @@ export const LABELS = {
     bank: "Bank details",
     depositLine: "Deposit for the stay",
     earlyDepartureFee: "Early departure fee",
+    room: "Room",
+    groupDepositLine: "Deposit for the group",
     page: "Page",
   },
 } as const;

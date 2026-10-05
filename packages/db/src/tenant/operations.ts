@@ -221,9 +221,9 @@ export async function workspaceList(pool: Pool, schema: string, propertyId: stri
          to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
          -- the guest's own folios: Charges less payments received (refunds count back)
          (select coalesce(sum(ch.amount), 0) from charges ch join folios f on f.id = ch.folio_id
-           where ch.reservation_id = r.id and ch.voided_at is null and f.bill_to_guest_id is not null)
+           where ch.reservation_id = r.id and ch.voided_at is null and f.bill_to_guest_id is not null and f.group_id is null)
          - (select coalesce(sum(pa.amount), 0) from payments pa join folios f on f.id = pa.folio_id
-           where pa.reservation_id = r.id and pa.status = 'succeeded' and f.bill_to_guest_id is not null) as balance,
+           where pa.reservation_id = r.id and pa.status = 'succeeded' and f.bill_to_guest_id is not null and f.group_id is null) as balance,
          (select sum(h.amount) from card_holds h where h.reservation_id = r.id and h.status = 'active') as card_hold
        from reservations r
        join bookings b on b.id = r.booking_id

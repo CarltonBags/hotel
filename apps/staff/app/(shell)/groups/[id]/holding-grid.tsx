@@ -72,7 +72,9 @@ export function HoldingGrid({ groupId, holdingId, roomTypes, editRooms, editPric
                 const rooms = editRooms ? cells.filter((c) => c.rooms !== was(c).rooms).map((c) => ({ roomTypeId: c.roomTypeId, date: c.date, rooms: Number(c.rooms || 0) })) : [];
                 const prices = editPrices ? cells.filter((c) => c.price !== was(c).price && c.price !== "").map((c) => ({ roomTypeId: c.roomTypeId, date: c.date, price: Number(c.price.replace(",", ".")) })) : [];
                 const r = await saveGridAction(groupId, holdingId, { rooms, prices });
-                setNote(r.error ?? r.message ?? null);
+                // a shrink: the contract may ask a fee (ticket 59)
+                const shrunk = rooms.some((c) => c.rooms < Number(saved.find((x) => x.roomTypeId === c.roomTypeId && x.date === c.date)!.rooms || 0));
+                setNote(r.error ?? (shrunk ? `${r.message ?? ""} ${m["group.shrunk"]}`.trim() : (r.message ?? null)));
                 if (!r.error) setSaved(cells);
               })
             }
