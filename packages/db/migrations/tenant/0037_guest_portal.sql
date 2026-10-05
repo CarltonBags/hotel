@@ -31,7 +31,9 @@ create table portal_codes (
   created_at timestamptz not null default now(),
   expires_at timestamptz not null,
   attempts integer not null default 0,
-  used_at timestamptz
+  used_at timestamptz,
+  -- asked by the Booker (not a room's guest): the code opens the whole booking
+  for_booking boolean not null default false
 );
 create index portal_codes_reservation_idx on portal_codes(reservation_id, created_at desc);
 
@@ -50,10 +52,12 @@ create index messaging_consents_guest_idx on messaging_consents(guest_id, transp
 -- what the portal tells guests (per language), and whether guests may upload a picture of their document
 alter table properties add column portal_info jsonb not null default '{}';
 alter table properties add column portal_document_images boolean not null default false;
+-- the property's own landscape behind the portal's glass card
+alter table properties add column portal_photo_file_id uuid references stored_files(id) on delete set null;
 
 -- a guest's document picture (per-property opt-in), in tenant file storage, kept as long as the registration form
 alter table stored_files drop constraint stored_files_kind_check;
-alter table stored_files add constraint stored_files_kind_check check (kind in ('issue_photo', 'fix_photo', 'id_document'));
+alter table stored_files add constraint stored_files_kind_check check (kind in ('issue_photo', 'fix_photo', 'id_document', 'portal_photo'));
 create table reservation_documents (
   id uuid primary key default gen_random_uuid(),
   reservation_id uuid not null references reservations(id) on delete cascade,

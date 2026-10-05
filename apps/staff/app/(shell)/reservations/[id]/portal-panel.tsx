@@ -2,7 +2,7 @@ import { can, type Actor } from "@hoteloftware/domain";
 import { portalSummary } from "@hoteloftware/db";
 import { fill, type Messages } from "@/i18n/messages";
 import { pool } from "@/lib/db";
-import { tenantUrl } from "@/lib/env";
+import { portalBaseUrl } from "@/lib/env";
 import { fileLink } from "@/lib/files";
 import { ActionForm } from "@/components/form-fields";
 import { revokePortalLinkAction } from "./portal-actions";
@@ -12,7 +12,7 @@ export async function PortalPanel({ schema, tenant, userId, reservationId, prope
   if (!can(actor, "view_reservations", propertyId)) return null;
   const p = await portalSummary(pool(), schema, reservationId);
   if (!p) return null;
-  const base = tenantUrl(tenant.slug, "").replace(/\/$/, "");
+  const base = portalBaseUrl(tenant.slug);
   const when = (d: Date) => new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "medium", timeStyle: "short", timeZone }).format(d);
   const manage = can(actor, "manage_reservations", propertyId);
   const seesDocuments = can(actor, "check_in", propertyId);
@@ -52,9 +52,16 @@ export async function PortalPanel({ schema, tenant, userId, reservationId, prope
           </div>
         ) : null}
         {manage ? (
-          <ActionForm action={revokePortalLinkAction} submitLabel={m["portal.revoke"]} pendingLabel={m["action.saving"]} className="contents">
-            <input type="hidden" name="reservationId" value={reservationId} />
-          </ActionForm>
+          <div className="flex flex-wrap gap-2">
+            <ActionForm action={revokePortalLinkAction} submitLabel={m["portal.revoke"]} pendingLabel={m["action.saving"]} className="contents">
+              <input type="hidden" name="reservationId" value={reservationId} />
+              <input type="hidden" name="which" value="stay" />
+            </ActionForm>
+            <ActionForm action={revokePortalLinkAction} submitLabel={m["portal.revokeBooking"]} pendingLabel={m["action.saving"]} className="contents">
+              <input type="hidden" name="reservationId" value={reservationId} />
+              <input type="hidden" name="which" value="booking" />
+            </ActionForm>
+          </div>
         ) : null}
       </div>
     </details>

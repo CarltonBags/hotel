@@ -96,6 +96,12 @@ describe("Guest Portal", () => {
     expect(changes).toEqual([{ user_id: "guest-portal" }]);
     const bad = { firstName: "", lastName: "Tanaka", dateOfBirth: null, nationality: null, countryOfResidence: null, addressLine1: "", postalCode: "", city: "", phone: "", documentType: null, documentNumber: "", documentCountry: null, documentExpiry: null, arrivalTime: "25:00", companions: [], emailConsent: null };
     await expect(savePrecheckin(pool, s(), keys.reservation, bad)).rejects.toThrow(/HH:MM/);
+    // empty fields keep what is stored
+    await savePrecheckin(pool, s(), keys.reservation, { ...bad, arrivalTime: "22:00", emailConsent: { granted: true, wording: "Messages about my stay by email" } });
+    const again = await portalView(pool, s(), keys.reservation);
+    expect(again?.kind === "reservation" && again.stay.guest).toMatchObject({ documentNumber: "TK1234567", city: "Tokyo", dateOfBirth: "1990-04-01" });
+    // consent unchanged: no second record
+    expect((await pool.query(`select count(*)::int as n from ${s()}.messaging_consents`)).rows[0].n).toBe(1);
   });
 
   it("extras from the catalogue until arrival become charges on the stay", async () => {
@@ -124,20 +130,54 @@ describe("Guest Portal", () => {
     expect(mail.sent.find((m) => m.to === "ken@example.com")!.text).toContain(`${links.base}/g/${keys.reservation}`);
   });
 
-  it("without the link: confirmation number and last name, then a code by email; the code is not kept", async () => {
+  it("the Booker's room: an invitation gives that room's guest a profile of their own, never the Booker's", async () => {
+    const keys = (await portalKeys(pool, s(), reservationIds[0]!))!;
+    const booker = (await pool.query(`select primary_guest_id from ${s()}.reservations where id = $1`, [reservationIds[0]])).rows[0].primary_guest_id;
+    await invitePortalGuest(pool, s(), keys.booking, reservationIds[0]!, "colleague@example.com", links);
+    const now = (await pool.query(`select r.primary_guest_id, g.email from ${s()}.reservations r join ${s()}.guests g on g.id = r.primary_guest_id where r.id = $1`, [reservationIds[0]])).rows[0];
+    expect(now.primary_guest_id).not.toBe(booker);
+    expect(now.email).toBe("colleague@example.com");
+    // the booking view carries no room guest's email or room link
+    const v = await portalView(pool, s(), keys.booking);
+    expect(JSON.stringify(v)).not.toContain("colleague@example.com");
+    expect(JSON.stringify(v)).not.toContain(keys.reservation);
+    // three a day per room
+    await invitePortalGuest(pool, s(), keys.booking, reservationIds[0]!, "colleague@example.com", links);
+    await invitePortalGuest(pool, s(), keys.booking, reservationIds[0]!, "colleague@example.com", links);
+    await expect(invitePortalGuest(pool, s(), keys.booking, reservationIds[0]!, "x@example.com", links)).rejects.toThrow(/often enough/);
+  });
+
+  it("the Booker's link is revoked like a stay's", async () => {
+    const old = (await portalKeys(pool, s(), reservationIds[0]!))!.booking;
+    await revokePortalLink(pool, s(), reservationIds[0]!, "booking");
+    expect(await portalView(pool, s(), old)).toBeNull();
+  });
+
+  it("parallel guesses cannot pass the five tries", async () => {
+    await pool.query(`delete from ${s()}.portal_codes`);
+    // both rooms now have their invited guests' own profiles
+    await requestPortalCode(pool, s(), { confirmationNumber: confirmation, lastName: "Guest" }, links);
+    const guesses = await Promise.all(Array.from({ length: 30 }, (_, i) => verifyPortalCode(pool, s(), { confirmationNumber: confirmation, lastName: "Guest", code: String(100000 + i) })));
+    expect(guesses.every((g) => g === null)).toBe(true);
+    expect((await pool.query(`select attempts from ${s()}.portal_codes`)).rows[0].attempts).toBe(5);
+  });
+
+  it("without the link: the Booker of several rooms gets a code that opens the whole booking; the code is not kept", async () => {
+    await pool.query(`delete from ${s()}.portal_codes`);
     await requestPortalCode(pool, s(), { confirmationNumber: confirmation, lastName: "tanaka " }, links);
     // nothing tells whether a booking matched
     await requestPortalCode(pool, s(), { confirmationNumber: "999999", lastName: "Nobody" }, links);
     mail.sent.length = 0;
     await dispatchMessages(pool, s(), tenant.id, { mail, sms: new FakeSmsProvider() }, { platformDomain: "mail.test" });
-    const sent = mail.sent.find((m) => m.subject.startsWith("Your code"))!;
+    // in the room's language (a new profile: the property's fallback)
+    const sent = mail.sent.find((m) => /(Your|Ihr) [Cc]ode/.test(m.subject) && m.to === "aiko@example.com")!;
     const code = sent.subject.match(/(\d{6})$/)![1]!;
-    const stored = (await pool.query(`select subject, secret_code from ${s()}.guest_messages where type = 'portal_code'`)).rows[0];
+    const stored = (await pool.query(`select subject, secret_code from ${s()}.guest_messages where type = 'portal_code' order by created_at desc limit 1`)).rows[0];
     expect(stored.subject).not.toContain(code);
     expect(stored.secret_code).toBeNull();
     expect(await verifyPortalCode(pool, s(), { confirmationNumber: confirmation, lastName: "Tanaka", code: "000000" === code ? "111111" : "000000" })).toBeNull();
     const key = await verifyPortalCode(pool, s(), { confirmationNumber: confirmation, lastName: "Tanaka", code });
-    expect(key).toBe((await portalKeys(pool, s(), reservationIds[0]!))!.reservation);
+    expect(key).toBe((await portalKeys(pool, s(), reservationIds[0]!))!.booking);
     // used once
     expect(await verifyPortalCode(pool, s(), { confirmationNumber: confirmation, lastName: "Tanaka", code })).toBeNull();
   });

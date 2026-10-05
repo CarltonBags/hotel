@@ -108,6 +108,14 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
               <textarea name={`info_${l}`} rows={4} defaultValue={portal.info[l] ?? ""} className="rounded-xl border border-ink-10 bg-surface p-2" />
             </label>
           ))}
+          <label className="grid gap-1">
+            <span>{m["portal.photo"]}</span>
+            <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" />
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="hidden" name="removePhoto" value="off" />
+            <input type="checkbox" name="removePhoto" /> {m["portal.removePhoto"]}
+          </label>
           <label className="flex items-center gap-2">
             <input type="hidden" name="documentImages" value="off" />
             <input type="checkbox" name="documentImages" defaultChecked={portal.documentImages} /> {m["portal.documentImages"]}

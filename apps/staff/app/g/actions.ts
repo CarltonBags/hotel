@@ -1,12 +1,13 @@
 "use server";
 
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addPortalDocument, addPortalExtra, invitePortalGuest, portalView, requestPortalCode, savePrecheckin, storeFile, verifyPortalCode } from "@hoteloftware/db";
+import { MAX_COMPANIONS, addPortalDocument, addPortalExtra, invitePortalGuest, portalView, requestPortalCode, savePrecheckin, storeFile, verifyPortalCode } from "@hoteloftware/db";
+import { portalLanguage } from "@hoteloftware/domain";
+import { portalText } from "@/i18n/portal";
 import { fileServices } from "@hoteloftware/storage";
 import { pool } from "@/lib/db";
-import { tenantUrl } from "@/lib/env";
+import { portalBaseUrl } from "@/lib/env";
 import { field, flag, formAction, type FormState } from "@/lib/form";
 import { currentTenant } from "@/lib/tenant";
 
@@ -20,7 +21,7 @@ async function tenant() {
   return t;
 }
 
-const links = (slug: string) => ({ base: tenantUrl(slug, "").replace(/\/$/, "") });
+const links = (slug: string) => ({ base: portalBaseUrl(slug) });
 const country = (v: string) => (/^[A-Za-z]{2}$/.test(v) ? v.toUpperCase() : null);
 const day = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 
@@ -28,7 +29,7 @@ export async function precheckinAction(key: string, _prev: FormState, formData: 
   return formAction(async () => {
     const t = await tenant();
     const docType = field(formData, "documentType");
-    const companions = [0, 1, 2, 3, 4, 5]
+    const companions = Array.from({ length: MAX_COMPANIONS }, (_, i) => i)
       .map((i) => ({ firstName: field(formData, `c${i}first`), lastName: field(formData, `c${i}last`), dateOfBirth: day(field(formData, `c${i}dob`)), nationality: country(field(formData, `c${i}nat`)) }))
       .filter((c) => c.firstName || c.lastName);
     await savePrecheckin(pool(), t.schemaName, key, {
@@ -47,11 +48,13 @@ export async function precheckinAction(key: string, _prev: FormState, formData: 
       documentExpiry: day(field(formData, "documentExpiry")),
       arrivalTime: field(formData, "arrivalTime") || null,
       companions,
-      emailConsent: { granted: flag(formData, "consent"), wording: field(formData, "consentWording") },
+      // the wording is ours, in the language the guest saw it in, never the form's
+      emailConsent: { granted: flag(formData, "consent"), wording: portalText(portalLanguage(field(formData, "lang"), null), "consent") },
     });
     const image = formData.get("documentImage");
     const view = await portalView(pool(), t.schemaName, key);
-    if (image instanceof File && image.size > 0 && view?.kind === "reservation") {
+    // only where the property takes document pictures; checked before anything is stored
+    if (image instanceof File && image.size > 0 && view?.kind === "reservation" && view.property.documentImages) {
       // the upload is the stay's own: its id comes from the key, never from the form
       const fileId = await storeFile(pool(), t.schemaName, fileServices(), { tenantId: t.id, kind: "id_document", bytes: new Uint8Array(await image.arrayBuffer()), contentType: image.type, propertyId: view.property.id, userId: `guest-portal:${view.stay.reservationId}` });
       await addPortalDocument(pool(), t.schemaName, key, fileId);
@@ -78,22 +81,10 @@ export async function inviteAction(key: string, _prev: FormState, formData: Form
   });
 }
 
-/** Requests for a code, per address of the requester: a few an hour. */
-const tries = new Map<string, number[]>();
-async function limited(kind: string, max: number): Promise<boolean> {
-  const h = await headers();
-  const who = `${kind}:${(h.get("x-forwarded-for") ?? "").split(",")[0]!.trim() || "local"}`;
-  const now = Date.now();
-  const recent = (tries.get(who) ?? []).filter((t) => now - t < 3_600_000);
-  recent.push(now);
-  tries.set(who, recent);
-  return recent.length > max;
-}
-
 export async function requestCodeAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const t = await tenant();
-    if (await limited("code", 10)) return { error: "tooMany" };
+    // limits are in the database: five codes an hour per stay, five tries per code
     await requestPortalCode(pool(), t.schemaName, { confirmationNumber: field(formData, "confirmation"), lastName: field(formData, "lastName") }, links(t.slug));
     // the same answer whether or not a booking matched
     return { ok: true, message: "codeSent" };
@@ -103,11 +94,10 @@ export async function requestCodeAction(_prev: FormState, formData: FormData): P
 export async function verifyCodeAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const result = await formAction(async () => {
     const t = await tenant();
-    if (await limited("verify", 20)) return { error: "tooMany" };
     const key = await verifyPortalCode(pool(), t.schemaName, { confirmationNumber: field(formData, "confirmation"), lastName: field(formData, "lastName"), code: field(formData, "code") });
     if (!key) return { error: "wrongCode" };
     return { ok: true, message: key };
   });
-  if (result.ok && result.message) redirect(`/g/${result.message}?lang=${field(formData, "lang") || "en"}`);
+  if (result.ok && result.message) redirect(`/g/${result.message}?lang=${portalLanguage(field(formData, "lang"), null)}`);
   return result;
 }

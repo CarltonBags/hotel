@@ -1,9 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { checkSenderDomain, findProperty, resetMessageText, setPortalSettings, sendTestMessage, setMessageText, setMessagingSettings, setSenderDomain } from "@hoteloftware/db";
+import { checkSenderDomain, findProperty, resetMessageText, setPortalSettings, storeFile, sendTestMessage, setMessageText, setMessagingSettings, setSenderDomain } from "@hoteloftware/db";
 import { MESSAGE_TYPES, MESSAGE_TYPE_INFO, isMessageLanguage, isMessageType, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
 import { mailProvider } from "@hoteloftware/messaging";
+import { fileServices } from "@hoteloftware/storage";
 import { authorize } from "@/lib/authorize";
 import { platformMailDomain } from "@/lib/env";
 import { pool } from "@/lib/db";
@@ -95,7 +96,14 @@ export async function testMessageAction(_prev: FormState, formData: FormData): P
 export async function portalSettingsAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const c = await scope(formData);
-    await setPortalSettings(pool(), c.schema, c.propertyId, { info: { de: field(formData, "info_de"), en: field(formData, "info_en") }, documentImages: flag(formData, "documentImages") });
+    const photo = formData.get("photo");
+    const photoFileId =
+      photo instanceof File && photo.size > 0
+        ? await storeFile(pool(), c.schema, fileServices(), { tenantId: c.tenantId, kind: "portal_photo", bytes: new Uint8Array(await photo.arrayBuffer()), contentType: photo.type, propertyId: c.propertyId, userId: c.userId })
+        : flag(formData, "removePhoto")
+          ? null
+          : undefined;
+    await setPortalSettings(pool(), c.schema, c.propertyId, { info: { de: field(formData, "info_de"), en: field(formData, "info_en") }, documentImages: flag(formData, "documentImages"), photoFileId });
     revalidatePath("/settings/messages");
   });
 }

@@ -290,13 +290,16 @@ interface ReservationFacts {
   email_bounced: string | null;
   email_complained: string | null;
   portal_key: string;
+  /** The Booker's own link to every room, when the guest is the Booker of a booking with more rooms. */
+  booking_key: string | null;
 }
 
 async function factsOf(tx: PoolClient, reservationId: string): Promise<ReservationFacts | null> {
   const { rows } = await tx.query<ReservationFacts>(
     `select r.property_id, b.confirmation_number, b.source = 'channel' as channel,
             (select cs.send_confirmation from channel_settings cs where cs.property_id = r.property_id and cs.channel = b.channel_name) as channel_confirmation, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
-            g.first_name, g.last_name, nullif(trim(g.email), '') as email, g.language, g.email_bounced, g.email_complained, r.portal_key
+            g.first_name, g.last_name, nullif(trim(g.email), '') as email, g.language, g.email_bounced, g.email_complained, r.portal_key,
+            case when b.booker_guest_id = r.primary_guest_id and (select count(*) from reservations x where x.booking_id = b.id and x.status <> 'cancelled') > 1 then b.portal_key end as booking_key
      from reservations r join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id where r.id = $1`,
     [reservationId],
   );
@@ -315,10 +318,11 @@ export async function queueGuestMessageIn(
     reservationId: string;
     type: MessageType;
     triggerKey: string;
-    invoiceId: string | null;
-    documentNumber: string | null;
-    amount: number | null;
-    userId: string | null;
+    invoiceId?: string | null;
+    documentNumber?: string | null;
+    amount?: number | null;
+    /** Who sent it by hand; none for automatic messages. */
+    userId?: string | null;
     now: Date;
     links: PortalLinks | null;
     /** Another recipient than the guest (the Booker invites a room's guest). */
@@ -342,9 +346,9 @@ export async function queueGuestMessageIn(
     confirmation: f.confirmation_number,
     arrival: dateText(f.arrival, language),
     departure: dateText(f.departure, language),
-    amount: input.amount === null ? "" : formatCurrency(input.amount, look.currency, language, look.country),
+    amount: input.amount == null ? "" : formatCurrency(input.amount, look.currency, language, look.country),
     document_number: input.documentNumber ?? "",
-    portal_link: input.links ? `${input.links.base}/g/${f.portal_key}` : "",
+    portal_link: input.links ? `${input.links.base}/g/${input.toEmail ? f.portal_key : (f.booking_key ?? f.portal_key)}` : "",
     // wired with Conversations (ticket 43)
     reply_address: "",
     checkout_time: look.checkoutTime,
@@ -353,18 +357,18 @@ export async function queueGuestMessageIn(
   };
   const rendered = renderMessage(await textIn(tx, f.property_id, input.type, language), values, { hotelName: look.name, accent: look.accent }, look.footer);
   const info = MESSAGE_TYPE_INFO[input.type];
+  // a message with a Portal Link waits until there is an address of the portal to put in it
+  if (info.needsPortal && !input.links) return null;
   const email = (input.toEmail ?? f.email)?.toLowerCase() ?? null;
   // kept, not sent: no address, an address that bounced, a complaint (non-essential only), our confirmation switched off for booking sites
   // the channel's own setting (ticket 38) before the property's switch for all booking sites
   const channelOff = f.channel && !(f.channel_confirmation ?? s.switched[CHANNEL_SWITCH] ?? true) && (input.type === "confirmation" || input.type === "cancellation");
-  // a message with a Portal Link but no address of the portal to put in it is not sent
-  const noLink = info.needsPortal && !input.links;
-  const reason = noLink ? "no_portal" : channelOff ? "channel" : !email ? "no_email" : email === f.email_bounced ? "bounced" : email === f.email_complained && !info.essential ? "complained" : null;
+  const reason = channelOff ? "channel" : !email ? "no_email" : email === f.email_bounced ? "bounced" : email === f.email_complained && !info.essential ? "complained" : null;
   const { rows } = await tx.query<{ id: string }>(
     `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by, secret_code)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, greatest(($13::date + $14::time) at time zone $15, $16::timestamptz), $17, $18)
      on conflict (reservation_id, type, trigger_key) do nothing returning id`,
-    [f.property_id, input.reservationId, input.type, input.triggerKey, language, email, rendered.subject, rendered.html, rendered.text, input.invoiceId, reason ? "suppressed" : "queued", reason, ...sendMoment(look, info.timing, input.now), input.now, input.userId, reason ? null : (input.code ?? null)],
+    [f.property_id, input.reservationId, input.type, input.triggerKey, language, email, rendered.subject, rendered.html, rendered.text, input.invoiceId ?? null, reason ? "suppressed" : "queued", reason, ...sendMoment(look, info.timing, input.now), input.now, input.userId ?? null, reason ? null : (input.code ?? null)],
   );
   return rows[0]?.id ?? null;
 }
@@ -505,7 +509,9 @@ export async function dispatchMessages(pool: Pool, schema: string, tenantId: str
   let sent = 0;
   let failed = 0;
   const due = await withTenant(pool, schema, async (tx) => {
-    await tx.query("update guest_messages set status = 'failed', failed_at = $1, reason = 'unknown: sending interrupted' where status = 'sending' and claimed_at < $1::timestamptz - interval '1 hour'", [now]);
+    await tx.query("update guest_messages set status = 'failed', failed_at = $1, reason = 'unknown: sending interrupted', secret_code = null where status = 'sending' and claimed_at < $1::timestamptz - interval '1 hour'", [now]);
+    // a code nobody could send in its ten minutes is of no use: not kept
+    await tx.query("update guest_messages set secret_code = null where secret_code is not null and created_at < $1::timestamptz - interval '15 minutes'", [now]);
     // the address may have bounced since it was queued
     await tx.query(
       `update guest_messages gm set status = 'suppressed', reason = case when lower(g.email_bounced) = gm.to_email then 'bounced' else 'complained' end
@@ -548,7 +554,7 @@ export async function dispatchMessages(pool: Pool, schema: string, tenantId: str
       const retry = err instanceof DeliveryError ? err.retry : true;
       const reason = err instanceof Error ? err.message.slice(0, 500) : String(err);
       await withTenant(pool, schema, async (tx) => {
-        if (!retry || m.attempts >= MAX_ATTEMPTS) return tx.query("update guest_messages set status = 'failed', failed_at = now(), reason = $2 where id = $1", [m.id, reason]);
+        if (!retry || m.attempts >= MAX_ATTEMPTS) return tx.query("update guest_messages set status = 'failed', failed_at = now(), reason = $2, secret_code = null where id = $1", [m.id, reason]);
         const look = await propertyLook(tx, m.property_id);
         const later = new Date(now.getTime() + 5 * 60_000 * 2 ** (m.attempts - 1));
         return tx.query("update guest_messages set status = 'queued', claimed_at = null, reason = $2, send_after = ($3::date + $4::time) at time zone $5 where id = $1", [m.id, reason, ...sendMoment(look, MESSAGE_TYPE_INFO[m.type].timing, later)]);

@@ -54,3 +54,8 @@ export const env = {
 export function platformMailDomain(): string {
   return process.env.MAIL_FROM_DOMAIN ?? process.env.MAILGUN_DOMAIN ?? "mail.hoteloftware.test";
 }
+
+/** Where a tenant's Guest Portal answers (no trailing slash): links in guest messages start with it. */
+export function portalBaseUrl(slug: string): string {
+  return tenantUrl(slug, "").replace(/\/$/, "");
+}

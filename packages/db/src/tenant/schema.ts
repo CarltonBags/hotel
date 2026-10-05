@@ -41,6 +41,7 @@ export const properties = pgTable(
     downtimeOptions: jsonb("downtime_options").notNull().default(sql`'{}'`),
     portalInfo: jsonb("portal_info").notNull().default(sql`'{}'`),
     portalDocumentImages: boolean("portal_document_images").notNull().default(false),
+    portalPhotoFileId: uuid("portal_photo_file_id").references((): AnyPgColumn => storedFiles.id, { onDelete: "set null" }),
     legalEntityId: uuid("legal_entity_id")
       .notNull()
       .references(() => legalEntities.id),
@@ -1333,7 +1334,7 @@ export const storedFiles = pgTable(
     deleteAfter: date("delete_after"),
   },
   (t) => [
-    check("stored_files_kind_check", sql`${t.kind} in ('issue_photo', 'fix_photo', 'id_document')`),
+    check("stored_files_kind_check", sql`${t.kind} in ('issue_photo', 'fix_photo', 'id_document', 'portal_photo')`),
     check("stored_files_size_check", sql`${t.size} > 0`),
     index("stored_files_retention_idx").on(t.deleteAfter).where(sql`${t.deleteAfter} is not null`),
   ],
@@ -1985,6 +1986,7 @@ export const portalCodes = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     attempts: integer("attempts").notNull().default(0),
     usedAt: timestamp("used_at", { withTimezone: true }),
+    forBooking: boolean("for_booking").notNull().default(false),
   },
   (t) => [index("portal_codes_reservation_idx").on(t.reservationId, t.createdAt.desc())],
 );

@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { portalView } from "@hoteloftware/db";
+import { MAX_COMPANIONS, portalView } from "@hoteloftware/db";
 import { extrasOpen, portalLanguage, type PortalLanguage } from "@hoteloftware/domain";
+import { headers } from "next/headers";
 import { portalText, type PortalKey } from "@/i18n/portal";
 import { pool } from "@/lib/db";
 import { currentTenant } from "@/lib/tenant";
@@ -16,16 +17,18 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   const asked = (await searchParams).lang;
   const tenant = await currentTenant();
   const view = tenant ? await portalView(pool(), tenant.schemaName, key) : null;
-  if (!view) return <NotFound language={portalLanguage(asked, null)} />;
-  const language = portalLanguage(asked, view.kind === "reservation" ? view.stay.guest.language : null);
+  if (!view) return <NotFound language={portalLanguage(asked, (await headers()).get("accept-language"))} />;
+  const language = portalLanguage(asked, view.language);
   const t = (k: PortalKey, v?: Record<string, string | number>) => portalText(language, k, v);
   const locale = language === "de" ? "de-DE" : "en-GB";
   const date = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
   const money = (n: number) => n.toLocaleString(locale, { style: "currency", currency: view.property.currency });
   const nights = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
   const other: PortalLanguage = language === "de" ? "en" : "de";
+  // the property's own landscape behind the card, when it set one
+  const wallpaper = view.property.photoFileId ? <div aria-hidden className="fixed inset-0 -z-0 bg-cover bg-center opacity-80" style={{ backgroundImage: `url(/g/${key}/photo)` }} /> : null;
   const header = (
-    <header className="flex items-center justify-between">
+    <header className="relative flex items-center justify-between" lang={language}>
       <p className="text-sm uppercase tracking-[0.2em] text-white/70">{view.property.name}</p>
       <Link href={`/g/${key}?lang=${other}`} className="text-sm text-white/70 underline">
         {t("language")}
@@ -36,6 +39,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   if (view.kind === "booking") {
     return (
       <>
+        {wallpaper}
         {header}
         <Glass data-booking>
           <h1 className="text-2xl font-semibold">{t("rooms")}</h1>
@@ -52,7 +56,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
               {date(s.arrival)} – {date(s.departure)}
               {s.precheckinAt ? ` · ${t("precheckinDone")}` : ""}
             </p>
-            {s.status === "confirmed" ? <InviteForm action={inviteAction.bind(null, key)} language={language} reservationId={s.reservationId} defaultEmail={s.guestEmail} /> : null}
+            {s.status === "confirmed" ? <InviteForm action={inviteAction.bind(null, key)} language={language} reservationId={s.reservationId} /> : null}
           </Glass>
         ))}
         <p className="text-center text-xs text-white/50">{t("noChange")}</p>
@@ -66,6 +70,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   const info = view.property.info[language] ?? view.property.info.en ?? view.property.info.de ?? "";
   return (
     <>
+      {wallpaper}
       {header}
       <Glass data-stay>
         <p className="text-sm text-white/60">{t("title")}</p>
@@ -90,6 +95,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
             language={language}
             persons={s.adults + s.childAges.length}
             documentImages={view.property.documentImages}
+            maxCompanions={MAX_COMPANIONS}
             values={{
               firstName: g.firstName,
               lastName: g.lastName,

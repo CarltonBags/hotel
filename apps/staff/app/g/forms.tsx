@@ -51,7 +51,7 @@ export interface PrecheckinValues {
 }
 
 /** Pre-check-in: one card, the guest's details, document, companions, arrival time, consent. */
-export function PrecheckinForm({ action, language, values, persons, documentImages }: { action: Action; language: PortalLanguage; values: PrecheckinValues; persons: number; documentImages: boolean }) {
+export function PrecheckinForm({ action, language, values, persons, documentImages, maxCompanions }: { action: Action; language: PortalLanguage; values: PrecheckinValues; persons: number; documentImages: boolean; maxCompanions: number }) {
   const [state, formAction, pending] = useActionState(action, {});
   const t = (k: PortalKey, v?: Record<string, string | number>) => portalText(language, k, v);
   const [count, setCount] = useState(Math.max(values.companions.length, Math.max(0, persons - 1)));
@@ -79,6 +79,7 @@ export function PrecheckinForm({ action, language, values, persons, documentImag
             <option value="passport">{t("passport")}</option>
             <option value="id_card">{t("idCard")}</option>
             <option value="driving_licence">{t("drivingLicence")}</option>
+            <option value="other">{t("otherDocument")}</option>
           </select>
         </label>
         <In label={t("documentNumber")} name="documentNumber" defaultValue={values.documentNumber} />
@@ -100,7 +101,7 @@ export function PrecheckinForm({ action, language, values, persons, documentImag
           <In label={t("nationality")} name={`c${i}nat`} defaultValue={values.companions[i]?.nationality} maxLength={2} />
         </div>
       ))}
-      {count < 6 ? (
+      {count < maxCompanions ? (
         <button type="button" onClick={() => setCount(count + 1)} className="justify-self-start text-sm text-white/70 underline">
           + {t("companion", { n: count + 1 })}
         </button>
@@ -109,7 +110,7 @@ export function PrecheckinForm({ action, language, values, persons, documentImag
         <input type="hidden" name="consent" value="off" />
         <input type="checkbox" name="consent" defaultChecked={values.consent} /> {t("consent")}
       </label>
-      <input type="hidden" name="consentWording" value={t("consent")} />
+      <input type="hidden" name="lang" value={language} />
       <Note state={state} language={language} />
       <button type="submit" disabled={pending} className={guestButton}>
         {t("save")}
@@ -135,14 +136,14 @@ export function ExtraForm({ action, language, serviceId, label }: { action: Acti
 }
 
 /** The Booker invites a room's guest by email. */
-export function InviteForm({ action, language, reservationId, defaultEmail }: { action: Action; language: PortalLanguage; reservationId: string; defaultEmail: string | null }) {
+export function InviteForm({ action, language, reservationId }: { action: Action; language: PortalLanguage; reservationId: string }) {
   const [state, formAction, pending] = useActionState(action, {});
   return (
     <form action={formAction} className="flex flex-wrap items-end gap-2" data-invite={reservationId}>
       <input type="hidden" name="reservationId" value={reservationId} />
       <label className="grid flex-1 gap-1 text-sm">
         <span className="text-white/70">{portalText(language, "inviteEmail")}</span>
-        <input name="email" type="email" required defaultValue={defaultEmail ?? ""} className={guestInput} />
+        <input name="email" type="email" required className={guestInput} />
       </label>
       <button type="submit" disabled={pending} className={guestButton}>
         {portalText(language, "invite")}

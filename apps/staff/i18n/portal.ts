@@ -27,6 +27,7 @@ const T = {
   passport: { de: "Reisepass", en: "Passport" },
   idCard: { de: "Personalausweis", en: "Identity card" },
   drivingLicence: { de: "Führerschein", en: "Driving licence" },
+  otherDocument: { de: "Anderes", en: "Other" },
   documentNumber: { de: "Nummer", en: "Number" },
   documentCountry: { de: "Ausstellungsland", en: "Issued by" },
   documentExpiry: { de: "Gültig bis", en: "Valid until" },

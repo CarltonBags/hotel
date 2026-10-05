@@ -19,7 +19,8 @@ const mapped = new Set<string>();
 /** Where a tenant's Guest Portal answers: its subdomain, with the scheme of the app's own address. */
 export function portalBase(slug: string, env: NodeJS.ProcessEnv = process.env): string | null {
   if (!env.APP_DOMAIN) return null;
-  const scheme = (env.BETTER_AUTH_URL ?? "").startsWith("http://") ? "http" : "https";
+  // the same rule as the app's tenantUrl: https when the app's own address is
+  const scheme = (env.BETTER_AUTH_URL ?? "").startsWith("https") ? "https" : "http";
   return `${scheme}://${slug}.${env.APP_DOMAIN}`;
 }
 

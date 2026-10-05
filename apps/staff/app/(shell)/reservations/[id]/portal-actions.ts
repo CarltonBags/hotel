@@ -10,7 +10,7 @@ import { reservationScope } from "@/lib/reservation-scope";
 export async function revokePortalLinkAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const { schema, reservation } = await reservationScope(field(formData, "reservationId"), "manage_reservations");
-    await revokePortalLink(pool(), schema, reservation.id);
+    await revokePortalLink(pool(), schema, reservation.id, field(formData, "which") === "booking" ? "booking" : "stay");
     revalidatePath(`/reservations/${reservation.id}`);
     return { ok: true, message: "A new link was made; the old one opens nothing." };
   });
