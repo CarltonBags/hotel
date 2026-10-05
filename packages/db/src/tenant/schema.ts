@@ -1271,7 +1271,6 @@ export const housekeepingTasks = pgTable(
     priority: boolean("priority").notNull().default(false),
     version: integer("version").notNull().default(0),
     skipReason: text("skip_reason"),
-    conversationMessageId: uuid("conversation_message_id").references((): AnyPgColumn => conversationMessages.id, { onDelete: "set null" }),
   },
   (t) => [
     index("housekeeping_tasks_reservation_idx").on(t.reservationId),
@@ -2143,9 +2142,19 @@ export const inboundMails = pgTable(
     subject: text("subject").notNull().default(""),
     autoReply: boolean("auto_reply").notNull(),
     raw: jsonb("raw").notNull(),
+    mime: bytea("mime"),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique("inbound_mails_provider_key").on(t.providerId), index("inbound_mails_conversation_idx").on(t.conversationId)],
+);
+
+export const housekeepingTaskMessages = pgTable(
+  "housekeeping_task_messages",
+  {
+    taskId: uuid("task_id").notNull().references(() => housekeepingTasks.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id").primaryKey().references(() => conversationMessages.id, { onDelete: "cascade" }),
+  },
+  (t) => [index("housekeeping_task_messages_task_idx").on(t.taskId)],
 );
 
 export const tenantSchema = {
@@ -2252,4 +2261,5 @@ export const tenantSchema = {
   conversationMessages,
   quickReplies,
   inboundMails,
+  housekeepingTaskMessages,
 };

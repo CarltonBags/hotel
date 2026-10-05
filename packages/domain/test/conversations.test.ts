@@ -50,7 +50,8 @@ describe("replies by email and retention (ticket 43)", () => {
   it("a reply address names the tenant and the Conversation's token, and reads back", () => {
     const a = replyAddress("alpha", "0123456789abcdef0123", "replies.example.com");
     expect(a).toBe("alpha.0123456789abcdef0123@replies.example.com");
-    expect(parseReplyAddress(`"Guest" <${a.toUpperCase()}>`)).toEqual({ slug: "alpha", token: "0123456789abcdef0123" });
+    expect(parseReplyAddress(`"Guest" <${a.toUpperCase()}>`)).toEqual({ slug: "alpha", token: "0123456789abcdef0123", domain: "replies.example.com" });
+    expect(parseReplyAddress(`mail.${a}`)).toBeNull();
     expect(parseReplyAddress("someone@example.com")).toBeNull();
   });
 
@@ -59,6 +60,8 @@ describe("replies by email and retention (ticket 43)", () => {
     expect(isAutoReply({ "auto-submitted": "no" }, "Re: your stay")).toBe(false);
     expect(isAutoReply({ "x-autoreply": "yes" }, "Hello")).toBe(true);
     expect(isAutoReply({ precedence: "bulk" }, "Hello")).toBe(true);
+    // Exchange sets this on ordinary mail too
+    expect(isAutoReply({ "x-auto-response-suppress": "All" }, "Re: Your booking")).toBe(false);
     expect(isAutoReply({}, "Abwesenheitsnotiz: Re: Ihre Buchung")).toBe(true);
     expect(isAutoReply({}, "Out of Office: Re: Your booking")).toBe(true);
     expect(isAutoReply({}, "Automatic reply: Re: Your booking")).toBe(true);

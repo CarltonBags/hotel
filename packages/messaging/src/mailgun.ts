@@ -112,19 +112,53 @@ export class MailgunProvider implements MailProvider {
   }
 
   /** Incoming mail by a store-and-notify route: the notice carries the same signature as events, as form fields. */
-  verifyInbound(fields: Record<string, string>): boolean {
+  verifyInbound(_headers: Record<string, string>, fields: Record<string, string>): boolean {
     return this.verifyWebhook({}, JSON.stringify({ signature: { timestamp: fields.timestamp, token: fields.token, signature: fields.signature } }));
+  }
+
+  /** The signed token: the notice's identity (its other fields are not signed). */
+  inboundReplayKey(fields: Record<string, string>): string | null {
+    return typeof fields.token === "string" && fields.token.length >= 20 ? `mailgun:${fields.token}` : null;
   }
 
   parseInbound(fields: Record<string, string>): InboundMail | null {
     return inboundFromFields(fields);
   }
 
-  async fetchInboundAttachment(url: string): Promise<Uint8Array> {
-    // only from the provider's own storage, with our key
+  async fetchInboundAttachment(url: string, maxBytes: number): Promise<Uint8Array> {
+    const bytes = await this.fromStorage(url, {}, maxBytes);
+    if (!bytes) throw new DeliveryError("The attachment is larger than allowed", false);
+    return bytes;
+  }
+
+  async fetchInboundRaw(fields: Record<string, string>, maxBytes: number): Promise<Uint8Array | null> {
+    if (!fields["message-url"]) return null;
+    const json = await this.fromStorage(fields["message-url"], { accept: "message/rfc2822" }, maxBytes * 2);
+    if (!json) return null;
+    const mime = (JSON.parse(Buffer.from(json).toString("utf8")) as { "body-mime"?: string })["body-mime"];
+    return mime && mime.length <= maxBytes ? new Uint8Array(Buffer.from(mime, "utf8")) : null;
+  }
+
+  /** Read from Mailgun's storage only (our key goes nowhere else), stopping past the limit (null). */
+  private async fromStorage(url: string, headers: Record<string, string>, maxBytes: number): Promise<Uint8Array | null> {
     if (!/^https:\/\/[a-z0-9.-]+\.mailgun\.net\//.test(url)) throw new DeliveryError("Not a Mailgun storage address", false);
-    const res = await this.fetcher(url, { headers: { authorization: `Basic ${Buffer.from(`api:${this.apiKey}`).toString("base64")}` }, signal: AbortSignal.timeout(30_000) });
+    const res = await this.fetcher(url, { headers: { ...headers, authorization: `Basic ${Buffer.from(`api:${this.apiKey}`).toString("base64")}` }, signal: AbortSignal.timeout(30_000) });
     if (!res.ok) throw new DeliveryError(`Mailgun storage refused (${res.status})`, res.status >= 500 || res.status === 429);
-    return new Uint8Array(await res.arrayBuffer());
+    if (Number(res.headers.get("content-length") ?? "0") > maxBytes) return null;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const reader = res.body?.getReader();
+    if (!reader) return null;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+    return new Uint8Array(Buffer.concat(chunks));
   }
 }

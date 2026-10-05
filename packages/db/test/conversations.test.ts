@@ -197,18 +197,18 @@ describe("Guest Inbox and Conversations", () => {
     const target = (await conversationByReplyToken(pool, s(), token))!;
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
     const fileId = await storeFile(pool, s(), files, { tenantId: tenant.id, kind: "conversation_file", bytes: png, contentType: "image/png", propertyId, userId: PORTAL_USER });
-    const got = await receiveGuestEmail(pool, s(), { providerId: "<m1@mail>", token, sender: "aiko@example.com", subject: "Re: New message", text: "Here is the photo of the stain.", autoReply: false, raw: { subject: "Re: New message" }, fileIds: [fileId] }, links);
+    const got = await receiveGuestEmail(pool, s(), { providerId: "<m1@mail>", token, sender: "aiko@example.com", subject: "Re: New message", text: "Here is the photo of the stain.", autoReply: false, raw: { subject: "Re: New message" }, fileIds: [fileId], mime: null }, links);
     expect(got).toMatchObject({ conversationId: target.conversationId });
     const thread = (await conversationView(pool, s(), propertyId, target.conversationId))!.messages.filter((m) => m.kind === "guest");
     expect(thread.at(-1)).toMatchObject({ body: "Here is the photo of the stain.", fileId, byEmail: true });
     // the same mail delivered again is taken once
-    expect(await receiveGuestEmail(pool, s(), { providerId: "<m1@mail>", token, sender: "aiko@example.com", subject: "Re", text: "again", autoReply: false, raw: {}, fileIds: [] }, links)).toBeNull();
+    expect(await receiveGuestEmail(pool, s(), { providerId: "<m1@mail>", token, sender: "aiko@example.com", subject: "Re", text: "again", autoReply: false, raw: {}, fileIds: [], mime: null }, links)).toBeNull();
   });
 
   it("an out-of-office reply is kept but not counted as a guest message", async () => {
     const token = (await pool.query(`select reply_token from ${s()}.conversations c join ${s()}.reservations r on r.id = c.reservation_id where r.portal_key = $1`, [key])).rows[0].reply_token;
     const before = (await conversationView(pool, s(), propertyId, (await conversationByReplyToken(pool, s(), token))!.conversationId))!.messages.length;
-    expect(await receiveGuestEmail(pool, s(), { providerId: "<ooo@mail>", token, sender: "aiko@example.com", subject: "Out of Office: Re: New message", text: "I am away until Monday.", autoReply: true, raw: {}, fileIds: [] }, links)).toBeNull();
+    expect(await receiveGuestEmail(pool, s(), { providerId: "<ooo@mail>", token, sender: "aiko@example.com", subject: "Out of Office: Re: New message", text: "I am away until Monday.", autoReply: true, raw: {}, fileIds: [], mime: null }, links)).toBeNull();
     expect((await conversationView(pool, s(), propertyId, (await conversationByReplyToken(pool, s(), token))!.conversationId))!.messages.length).toBe(before);
     expect((await pool.query(`select auto_reply from ${s()}.inbound_mails where provider_id = '<ooo@mail>'`)).rows[0].auto_reply).toBe(true);
   });
@@ -229,6 +229,12 @@ describe("Guest Inbox and Conversations", () => {
     const taskId = await messageToTask(pool, s(), propertyId, msg.id, "housekeeping", viewer);
     expect((await pool.query(`select room_id, kind from ${s()}.housekeeping_tasks where id = $1`, [taskId])).rows[0]).toEqual({ room_id: room, kind: "clean" });
     expect((await conversationView(pool, s(), propertyId, c.id))!.messages.find((m) => m.id === msg.id)).toMatchObject({ issueId, taskId });
+    // the task was done; another request opens it again and is linked on its own
+    await pool.query(`update ${s()}.housekeeping_tasks set status = 'done' where id = $1`, [taskId]);
+    const other = (await conversationView(pool, s(), propertyId, c.id))!.messages.find((m) => m.kind === "guest" && m.id !== msg.id)!;
+    expect(await messageToTask(pool, s(), propertyId, other.id, "housekeeping", viewer)).toBe(taskId);
+    expect((await pool.query(`select status from ${s()}.housekeeping_tasks where id = $1`, [taskId])).rows[0].status).toBe("open");
+    expect((await conversationView(pool, s(), propertyId, c.id))!.messages.find((m) => m.id === other.id)?.taskId).toBe(taskId);
   });
 
   it("retention deletes a Conversation 13 months after the stay and keeps a disputed one", async () => {

@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { can, conversationExpired, deskMinutesBetween, deskNight, isMessageLanguage, messageLanguage, portalLinkOpen, todayIn, type DeskHours, type MessageLanguage, type QuickReplyValues } from "@hoteloftware/domain";
+import { DEFAULT_MINUTES, can, conversationExpired, deskMinutesBetween, deskNight, isMessageLanguage, messageLanguage, portalLinkOpen, todayIn, type DeskHours, type MessageLanguage, type QuickReplyValues } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
 import { fileIn, setFileRetention, type StoredFile } from "./files";
 import { ENSURE_MESSAGING, dateText, enabledTypes, queueGuestMessageIn, type PortalLinks } from "./messages";
@@ -244,6 +244,16 @@ async function guestMessagesIn(
   return { messageId: first, guestName, autoReplied };
 }
 
+/** Replies count while the stay's Portal Link would open (until 30 days after departure). */
+async function replyWindowOpen(tx: PoolClient, c: ConversationRow): Promise<boolean> {
+  const { rows } = await tx.query<{ departure: string | null; time_zone: string }>(
+    `select to_char(coalesce(r.departure, (select max(x.departure) from reservations x where x.booking_id = c.booking_id)), 'YYYY-MM-DD') as departure, p.time_zone
+     from conversations c left join reservations r on r.id = c.reservation_id join properties p on p.id = c.property_id where c.id = $1`,
+    [c.id],
+  );
+  return !!rows[0]?.departure && portalLinkOpen(rows[0].departure, todayIn(rows[0].time_zone));
+}
+
 /** Where an email reply goes: the Conversation of its reply address (null when the token is not ours). */
 export async function conversationByReplyToken(pool: Pool, schema: string, token: string): Promise<{ conversationId: string; propertyId: string } | null> {
   if (!/^[0-9a-f]{20,64}$/.test(token)) return null;
@@ -266,6 +276,13 @@ export interface InboundGuestMail {
   raw: unknown;
   /** Attachments already checked and stored (images and PDFs up to 10 MB). */
   fileIds: string[];
+  /** The mail as sent, when the provider gave it. */
+  mime: Uint8Array | null;
+}
+
+/** Whether a mail was taken before (a notice delivered again), so its attachments are not fetched twice. */
+export async function inboundMailKnown(pool: Pool, schema: string, providerId: string): Promise<boolean> {
+  return withTenant(pool, schema, async (tx) => (await tx.query("select 1 from inbound_mails where provider_id = $1", [providerId])).rows.length > 0);
 }
 
 /**
@@ -276,17 +293,23 @@ export interface InboundGuestMail {
  */
 export async function receiveGuestEmail(pool: Pool, schema: string, mail: InboundGuestMail, links: PortalLinks | null, now = new Date()): Promise<(GuestPost & { conversationId: string }) | null> {
   return withTenant(pool, schema, async (tx) => {
-    const target = mail.token ? (await tx.query<{ id: string }>("select id from conversations where reply_token = $1", [mail.token])).rows[0] : undefined;
+    const c = mail.token ? (await tx.query<ConversationRow>(`select ${ROW} from conversations where reply_token = $1 for update`, [mail.token])).rows[0] : undefined;
     const { rows: kept } = await tx.query(
-      "insert into inbound_mails (provider_id, conversation_id, sender, subject, auto_reply, raw) values ($1, $2, $3, $4, $5, $6) on conflict (provider_id) do nothing returning id",
-      [mail.providerId, target?.id ?? null, mail.sender.slice(0, 500), mail.subject.slice(0, 500), mail.autoReply, JSON.stringify(mail.raw)],
+      "insert into inbound_mails (provider_id, conversation_id, sender, subject, auto_reply, raw, mime) values ($1, $2, $3, $4, $5, $6, $7) on conflict (provider_id) do nothing returning id",
+      [mail.providerId, c?.id ?? null, mail.sender.slice(0, 500), mail.subject.slice(0, 500), mail.autoReply, JSON.stringify(mail.raw), mail.mime ? Buffer.from(mail.mime) : null],
     );
-    if (!kept.length || !target || mail.autoReply) return null;
+    if (!kept.length || !c || mail.autoReply) return null;
+    // the same guards as the portal: the link's window and the hourly limit (kept above, not posted)
+    if (!(await replyWindowOpen(tx, c))) return null;
+    try {
+      await assertGuestPace(tx, { reservationId: c.reservation_id, bookingId: c.booking_id, propertyId: c.property_id });
+    } catch {
+      return null;
+    }
     const body = mail.text.trim().slice(0, 5000);
     const fileIds = [];
     for (const f of mail.fileIds) fileIds.push((await attachIn(tx, f, PORTAL_USER))!);
     if (!body && !fileIds.length) return null;
-    const c = (await tx.query<ConversationRow>(`select ${ROW} from conversations where id = $1 for update`, [target.id])).rows[0]!;
     const posted = await guestMessagesIn(tx, c, { body, fileIds, via: "email" }, links, now);
     return { conversationId: c.id, propertyId: c.property_id, ...posted };
   });
@@ -475,7 +498,7 @@ interface ThreadOwner {
 async function threadIn(tx: PoolClient, c: ThreadOwner, forStaff: boolean): Promise<ThreadMessage[]> {
   const { rows } = await tx.query<{ id: string; kind: ThreadMessage["kind"]; author_name: string; body: string; subject: string | null; file_id: string | null; file_type: string | null; at: Date; not_sent: boolean; by_email: boolean; issue_id: string | null; task_id: string | null }>(
     `select m.id, m.kind, m.author_name, m.body, null as subject, m.file_id, f.content_type as file_type, m.created_at as at, false as not_sent, m.via = 'email' as by_email,
-            (select i.id from maintenance_issues i where i.conversation_message_id = m.id limit 1) as issue_id, (select t.id from housekeeping_tasks t where t.conversation_message_id = m.id limit 1) as task_id
+            (select i.id from maintenance_issues i where i.conversation_message_id = m.id limit 1) as issue_id, (select tm.task_id from housekeeping_task_messages tm where tm.message_id = m.id) as task_id
      from conversation_messages m left join stored_files f on f.id = m.file_id where m.conversation_id = $1 and ($4 or m.kind <> 'note')
      union all
      select gm.id, 'auto', '', gm.body_text, gm.subject, null, null, gm.send_after, gm.status in ('failed', 'suppressed'), false, null, null
@@ -719,49 +742,67 @@ export async function deleteExpiredConversations(pool: Pool, schema: string, tod
 }
 
 export type TaskFromMessage = "maintenance" | "housekeeping";
+export const TASKS_FROM_MESSAGES: readonly TaskFromMessage[] = ["maintenance", "housekeeping"];
+
+/** The rooms a Conversation's guests sleep in (for a Booker's, every room of the booking): tonight's first, then the next, then the last. */
+export async function conversationRooms(pool: Pool, schema: string, propertyId: string, conversationId: string): Promise<{ id: string; number: string }[]> {
+  if (!isUuid(conversationId)) return [];
+  return withTenant(pool, schema, async (tx) => roomsIn(tx, propertyId, conversationId));
+}
+
+async function roomsIn(tx: PoolClient, propertyId: string, conversationId: string): Promise<{ id: string; number: string; reservation_id: string }[]> {
+  return (await tx.query<{ id: string; number: string; reservation_id: string }>(
+    `select distinct on (m.id) m.id, m.number, a.reservation_id from conversations c join reservations r on r.id = c.reservation_id or r.booking_id = c.booking_id
+       join room_assignments a on a.reservation_id = r.id join rooms m on m.id = a.room_id join properties p on p.id = c.property_id
+     where c.id = $1 and c.property_id = $2 and r.status <> 'cancelled'
+     order by m.id, case when a.from_date <= p.business_date and a.to_date > p.business_date then 0 when a.from_date > p.business_date then 1 else 2 end, abs(a.from_date - p.business_date)`,
+    [conversationId, propertyId],
+  )).rows;
+}
 
 /**
  * A guest's message becomes work for the guest's room (ticket 43): a
- * Maintenance Issue, or a Housekeeping Task for today's Business Date (added
- * to the room's open hand-made task if there is one), linked back to the
- * message. The stay needs a room.
+ * Maintenance Issue, or a Housekeeping Task for the Business Date (the
+ * room's hand-made task of the day takes the request and opens again if it
+ * was done), linked back to the message. With several rooms (a Booker's
+ * Conversation) staff name the room. Done once per message and kind.
  */
-export async function messageToTask(pool: Pool, schema: string, propertyId: string, messageId: string, kind: TaskFromMessage, viewer: Viewer): Promise<string> {
+export async function messageToTask(pool: Pool, schema: string, propertyId: string, messageId: string, kind: TaskFromMessage, viewer: Viewer, roomId: string | null = null): Promise<string> {
   if (!isUuid(messageId)) throw new Error("Message not found");
   if (!can(viewer.actor, "use_guest_inbox", propertyId)) throw new Error("Not allowed");
   return withTenant(pool, schema, async (tx) => {
-    const { rows } = await tx.query<{ id: string; body: string; conversation_id: string; reservation_id: string | null; booking_id: string | null; business_date: string }>(
-      `select m.id, m.body, m.conversation_id, c.reservation_id, c.booking_id, to_char(p.business_date, 'YYYY-MM-DD') as business_date
+    const { rows } = await tx.query<{ id: string; body: string; conversation_id: string; business_date: string }>(
+      `select m.id, m.body, m.conversation_id, to_char(p.business_date, 'YYYY-MM-DD') as business_date
        from conversation_messages m join conversations c on c.id = m.conversation_id join properties p on p.id = c.property_id
        where m.id = $1 and m.kind = 'guest' and c.property_id = $2 for update of m`,
       [messageId, propertyId],
     );
     const m = rows[0];
     if (!m) throw new Error("Message not found");
-    const done = (await tx.query<{ id: string }>(`select id from ${kind === "maintenance" ? "maintenance_issues" : "housekeeping_tasks"} where conversation_message_id = $1`, [m.id])).rows[0];
+    const done =
+      kind === "maintenance"
+        ? (await tx.query<{ id: string }>("select id from maintenance_issues where conversation_message_id = $1", [m.id])).rows[0]
+        : (await tx.query<{ id: string }>("select task_id as id from housekeeping_task_messages where message_id = $1", [m.id])).rows[0];
     if (done) return done.id;
-    // the guest's room tonight; before arrival the room they get first; after, the last one (for a booking, its rooms')
-    const { rows: room } = await tx.query<{ room_id: string; reservation_id: string }>(
-      `select a.room_id, a.reservation_id from room_assignments a join reservations r on r.id = a.reservation_id
-       where (r.id = $1 or r.booking_id = $2)
-       order by case when a.from_date <= $3::date and a.to_date > $3::date then 0 when a.from_date > $3::date then 1 else 2 end, abs(a.from_date - $3::date) limit 1`,
-      [m.reservation_id, m.booking_id, m.business_date],
-    );
-    if (!room[0]) throw new Error("The stay has no room yet");
-    const note = `Guest: ${m.body}`.slice(0, 1000);
+    const rooms = await roomsIn(tx, propertyId, m.conversation_id);
+    const room = roomId ? rooms.find((r) => r.id === roomId) : rooms.length === 1 ? rooms[0] : undefined;
+    if (!rooms.length) throw new Error("The stay has no room yet");
+    if (!room) throw new Error("Choose the room");
+    const note = `Guest: ${m.body || "(attachment)"}`.slice(0, 1000);
     if (kind === "maintenance") {
-      const issue = await reportIssueIn(tx, { propertyId, roomId: room[0].room_id, place: "", pick: "other", urgency: "today", note, photoFileId: null, block: null }, viewer);
-      await tx.query("update maintenance_issues set conversation_message_id = $2 where id = $1", [issue.id, m.id]);
-      return issue.id;
+      return (await reportIssueIn(tx, { propertyId, roomId: room.id, place: "", pick: "other", urgency: "today", note, photoFileId: null, block: null, conversationMessageId: m.id }, viewer)).id;
     }
     const { rows: task } = await tx.query<{ id: string }>(
-      `insert into housekeeping_tasks (property_id, room_id, business_date, kind, reservation_id, note, minutes, created_by, conversation_message_id)
-       values ($1, $2, $3, 'clean', $4, $5, 10, $6, $7)
-       on conflict (room_id, business_date, kind) do update set note = case when housekeeping_tasks.note = '' then excluded.note else housekeeping_tasks.note || E'\n' || excluded.note end,
-         conversation_message_id = coalesce(housekeeping_tasks.conversation_message_id, excluded.conversation_message_id), changed = true
+      `insert into housekeeping_tasks (property_id, room_id, business_date, kind, reservation_id, note, minutes, created_by)
+       values ($1, $2, $3, 'clean', $4, $5, $6, $7)
+       on conflict (room_id, business_date, kind) do update set
+         note = case when housekeeping_tasks.note = '' then excluded.note else housekeeping_tasks.note || E'\\n' || excluded.note end,
+         status = case when housekeeping_tasks.status in ('done', 'skipped') then 'open' else housekeeping_tasks.status end,
+         changed = true
        returning id`,
-      [propertyId, room[0].room_id, m.business_date, room[0].reservation_id, note, viewer.userId, m.id],
+      [propertyId, room.id, m.business_date, room.reservation_id, note, DEFAULT_MINUTES.clean, viewer.userId],
     );
+    await tx.query("insert into housekeeping_task_messages (task_id, message_id) values ($1, $2)", [task[0]!.id, m.id]);
     return task[0]!.id;
   });
 }

@@ -23,6 +23,8 @@ export interface IssueReport {
   photoFileId: string | null;
   /** Take the room out from tonight for this many nights. */
   block: { kind: RoomBlockKind; nights: number } | null;
+  /** Made from a guest's message (ticket 43). */
+  conversationMessageId?: string | null;
 }
 
 /** What the fixer gives: a note, a photo, and with a Room Block not over whether to end it. */
@@ -66,9 +68,9 @@ export async function reportIssueIn(tx: PoolClient, input: IssueReport, viewer: 
     blockId = (await createRoomBlockIn(tx, { roomId: input.roomId, kind: input.block.kind, from: bd, to: addDays(bd, input.block.nights), reason: `Maintenance: ${input.pick}${input.note ? ` – ${input.note}` : ""}` }, viewer)).id;
   }
   const { rows } = await tx.query<{ id: string }>(
-    `insert into maintenance_issues (property_id, room_id, place, pick, urgency, note, photo_file_id, block_id, reported_at, reported_by)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id`,
-    [input.propertyId, input.roomId, input.roomId ? "" : place, input.pick, input.urgency, input.note.trim().slice(0, 1000), photo, blockId, at, viewer.userId],
+    `insert into maintenance_issues (property_id, room_id, place, pick, urgency, note, photo_file_id, block_id, reported_at, reported_by, conversation_message_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id`,
+    [input.propertyId, input.roomId, input.roomId ? "" : place, input.pick, input.urgency, input.note.trim().slice(0, 1000), photo, blockId, at, viewer.userId, input.conversationMessageId ?? null],
   );
   return { id: rows[0]!.id, blockId };
 }

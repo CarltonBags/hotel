@@ -1,11 +1,11 @@
 import type { Pool } from "pg";
-import { can, isAutoReply, isConversationFile, parseReplyAddress } from "@hoteloftware/domain";
-import { FileRefused, PORTAL_USER, conversationByReplyToken, dispatchMessages, escalateConversations, listTenantUsers, receiveGuestEmail, releaseEscalation, storeFile, mapProviderAccount, recordMailEvent, scanGuestMessages, type BouncedMessage, type Tenant } from "@hoteloftware/db";
-import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
+import { CONVERSATION_FILE_BYTES, can, isAutoReply, isConversationFile, parseReplyAddress } from "@hoteloftware/domain";
+import { FileRefused, PORTAL_USER, conversationByReplyToken, inboundMailKnown, dispatchMessages, escalateConversations, listTenantUsers, receiveGuestEmail, releaseEscalation, storeFile, mapProviderAccount, recordMailEvent, scanGuestMessages, type BouncedMessage, type Tenant } from "@hoteloftware/db";
+import { DeliveryError, type InboundMail, type MailProvider, type SmsProvider } from "@hoteloftware/messaging";
 import { notifyStaff, notifyWithRight, publishDataChange, publishNotification } from "@hoteloftware/events";
 import { fileServices } from "@hoteloftware/storage";
 import type { ProviderProcessor } from "./payments";
-import type { WebhookSource } from "./webhooks";
+import { formFieldsOf, type WebhookSource } from "./webhooks";
 
 /** The mail provider's delivery events, routed to the tenant named in the event's variables. */
 export const MAIL_SOURCE = "mail";
@@ -40,7 +40,6 @@ export async function runMessaging(pool: Pool, tenant: { id: string; slug: strin
     await mapProviderAccount(pool, INBOUND_SOURCE, tenant.slug, tenant.id);
     mapped.add(tenant.id);
   }
-  const base = portalBase(tenant.slug);
   const queued = await scanGuestMessages(pool, tenant.schemaName, new Date(), guestLinks(tenant.slug));
   const r = await dispatchMessages(pool, tenant.schemaName, tenant.id, providers, { platformDomain });
   await escalateUnread(pool, tenant).catch((err) => console.error("[messaging] inbox escalation", err));
@@ -99,52 +98,69 @@ async function notifyBounce(pool: Pool, tenant: Tenant, bounce: BouncedMessage |
   });
 }
 
-const formFields = (rawBody: string) => Object.fromEntries(new URLSearchParams(rawBody));
-
 /** Guests' email replies: the provider stores the mail and sends a signed notice (form fields). */
 export function inboundWebhookSource(mail: MailProvider): WebhookSource {
   return {
     name: INBOUND_SOURCE,
-    verify: (_headers, rawBody) => mail.verifyInbound(formFields(rawBody)),
-    externalId: (_headers, body) => mail.parseInbound((body ?? {}) as Record<string, string>)?.id ?? null,
+    verify: (headers, rawBody) => mail.verifyInbound(headers, formFieldsOf(rawBody, headers["content-type"] ?? "") ?? {}),
+    // the signed part of the notice: a captured signature sent again with other fields is a duplicate
+    externalId: (_headers, body) => mail.inboundReplayKey((body ?? {}) as Record<string, string>),
     externalRef: (body) => parseReplyAddress(mail.parseInbound((body ?? {}) as Record<string, string>)?.recipient ?? "")?.slug ?? null,
   };
 }
 
+const RAW_MAIL_BYTES = 25 * 1024 * 1024;
+
 /**
- * A guest's email reply (ticket 43): kept as received; out-of-office replies
- * are not counted; text and attachments (images and PDFs up to 10 MB, others
- * left with the raw mail) land in the Conversation; the inbox hears of it.
+ * A guest's email reply (ticket 43): kept as received (the notice and the
+ * mail itself); out-of-office replies are not counted; text and attachments
+ * (images and PDFs up to 10 MB; others stay in the kept mail) land in the
+ * Conversation; the inbox hears of it. The guest's text then leaves the
+ * stored notice, so it goes with the Conversation's retention.
  */
 export function inboundProcessor(mail: MailProvider): ProviderProcessor {
   return async ({ tenant, data, pool }) => {
     const stored = await pool.query<{ body: Record<string, string> | null }>("select body from control.webhook_events where id = $1", [data.eventId]);
     const fields = stored.rows[0]?.body ?? {};
     const m = mail.parseInbound(fields);
-    if (!m) return;
-    const address = parseReplyAddress(m.recipient);
-    if (!address || address.slug !== tenant.slug) return;
-    const target = await conversationByReplyToken(pool, tenant.schemaName, address.token);
-    const autoReply = isAutoReply(m.headers, m.subject);
-    const fileIds: string[] = [];
-    if (target && !autoReply) {
-      for (const a of m.attachments) {
-        if (!isConversationFile(a.type, a.size)) continue;
-        try {
-          const bytes = await mail.fetchInboundAttachment(a.url);
-          fileIds.push(await storeFile(pool, tenant.schemaName, fileServices(), { tenantId: tenant.id, kind: "conversation_file", bytes, contentType: a.type, propertyId: target.propertyId, userId: PORTAL_USER }));
-        } catch (err) {
-          // a refused file stays with the raw mail; anything else is tried again with the whole notice
-          if (!(err instanceof FileRefused)) throw err;
-        }
+    const address = m ? parseReplyAddress(m.recipient) : null;
+    const domain = process.env.MAIL_INBOUND_DOMAIN?.toLowerCase();
+    if (m && address && address.slug === tenant.slug && (!domain || address.domain === domain)) await takeReply(pool, tenant, mail, m, address.token, fields);
+    await pool.query("update control.webhook_events set body = null, raw_body = '' where id = $1", [data.eventId]);
+  };
+}
+
+async function takeReply(pool: Pool, tenant: Tenant, mail: MailProvider, m: InboundMail, token: string, fields: Record<string, string>): Promise<void> {
+  // the mail's id with the address it came to: the same mail to two Conversations is taken for each
+  const providerId = `${m.id}|${token}`;
+  if (await inboundMailKnown(pool, tenant.schemaName, providerId)) return;
+  const target = await conversationByReplyToken(pool, tenant.schemaName, token);
+  const autoReply = isAutoReply(m.headers, m.subject);
+  const fileIds: string[] = [];
+  if (target && !autoReply) {
+    for (const a of m.attachments) {
+      if (!isConversationFile(a.type, a.size)) continue;
+      try {
+        const bytes = await mail.fetchInboundAttachment(a.url, CONVERSATION_FILE_BYTES);
+        fileIds.push(await storeFile(pool, tenant.schemaName, fileServices(), { tenantId: tenant.id, kind: "conversation_file", bytes, contentType: a.type, propertyId: target.propertyId, userId: PORTAL_USER }));
+      } catch (err) {
+        // a file refused for what it is stays in the kept mail; storage or provider away: the notice is tried again
+        // (files stored before a failed try are unused uploads and go after two days)
+        if (!(err instanceof FileRefused) && !(err instanceof DeliveryError && !err.retry)) throw err;
       }
     }
-    const got = await receiveGuestEmail(pool, tenant.schemaName, { providerId: m.id, token: address.token, sender: m.sender, subject: m.subject, text: m.text, autoReply, raw: fields, fileIds }, guestLinks(tenant.slug));
-    if (!got) return;
+  }
+  const mime = await mail.fetchInboundRaw(fields, RAW_MAIL_BYTES).catch(() => null);
+  const got = await receiveGuestEmail(pool, tenant.schemaName, { providerId, token, sender: m.sender, subject: m.subject, text: m.text, autoReply, raw: fields, fileIds, mime }, guestLinks(tenant.slug));
+  if (!got) return;
+  // telling the inbox is best effort: the message is in, a retry would not tell anyone either
+  try {
     await publishDataChange(pool, { tenantId: tenant.id, kind: "conversations", propertyId: got.propertyId });
     const users = (await listTenantUsers(pool, tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "use_guest_inbox", got.propertyId));
     for (const u of users) {
       await publishNotification(pool, { tenantId: tenant.id, userId: u.id, kind: "inbox.message", title: got.guestName || "Guest message", body: m.text.split("\n")[0]!.slice(0, 120) || "📎", href: `/inbox?c=${got.conversationId}` });
     }
-  };
+  } catch (err) {
+    console.error("[messaging] inbox not told of an email reply", err);
+  }
 }

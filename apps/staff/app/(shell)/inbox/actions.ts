@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { claimConversation, conversationOfReservation, markConversationSeen, messageToTask, postStaffMessage, setConversationDisputed } from "@hoteloftware/db";
+import { TASKS_FROM_MESSAGES, claimConversation, conversationOfReservation, markConversationSeen, messageToTask, postStaffMessage, setConversationDisputed, type TaskFromMessage } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { guestLinks } from "@/lib/env";
@@ -52,19 +52,19 @@ export async function messageToTaskAction(_prev: FormState, formData: FormData):
   return formAction(async () => {
     const propertyId = field(formData, "propertyId");
     const { tenant, session, actor } = await inbox(propertyId);
-    const kind = field(formData, "kind");
-    if (kind !== "maintenance" && kind !== "housekeeping") throw new Error("Choose the kind of work");
-    await messageToTask(pool(), tenant.schemaName, propertyId, field(formData, "messageId"), kind, { userId: session.user.id, actor });
+    const kind = field(formData, "kind") as TaskFromMessage;
+    if (!TASKS_FROM_MESSAGES.includes(kind)) throw new Error("Choose the kind of work");
+    await messageToTask(pool(), tenant.schemaName, propertyId, field(formData, "messageId"), kind, { userId: session.user.id, actor }, field(formData, "roomId") || null);
     revalidatePath("/inbox");
   });
 }
 
-/** Keep a Conversation past its retention while a dispute is open, or release it. */
+/** Keep a Conversation past its retention while a dispute is open, or release it (the Property Manager: a legal hold). */
 export async function disputeAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const propertyId = field(formData, "propertyId");
-    const { tenant, session } = await inbox(propertyId);
-    await setConversationDisputed(pool(), tenant.schemaName, propertyId, field(formData, "conversationId"), field(formData, "disputed") === "1", session.user.id);
+    const { tenant, session } = await authorize("keep_conversations", propertyId);
+    await setConversationDisputed(pool(), tenant.schemaName, propertyId, field(formData, "conversationId"), flag(formData, "disputed"), session.user.id);
     revalidatePath("/inbox");
   });
 }

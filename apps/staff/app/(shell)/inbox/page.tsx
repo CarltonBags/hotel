@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { conversationProperty, conversationView, listConversations, listQuickReplies, type ThreadMessage } from "@hoteloftware/db";
-import { DATA_KINDS, can } from "@hoteloftware/domain";
+import { conversationProperty, conversationRooms, conversationView, modulePeriods, listConversations, listQuickReplies, type ThreadMessage } from "@hoteloftware/db";
+import { DATA_KINDS, can, moduleState, moduleVisible, todayIn } from "@hoteloftware/domain";
 import { ActionForm } from "@/components/form-fields";
 import { fill, type Messages } from "@/i18n/messages";
 import { requireAllowed, requirePrincipal } from "@/lib/authorize";
@@ -22,7 +22,9 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   // one property, or with "All properties" every one whose inbox the user works, combined (ticket 43)
   const inView = shell.properties.filter((p) => !shell.scope || shell.scope === "all" || p.id === shell.scope);
   const { tenant, session, actor } = await requirePrincipal();
-  const allowed = inView.filter((p) => can(actor, "use_guest_inbox", p.id));
+  // where the user works the inbox and the Guest Portal Module is on
+  const periods = await modulePeriods(pool(), tenant.schemaName, inView.map((p) => p.id));
+  const allowed = inView.filter((p) => can(actor, "use_guest_inbox", p.id) && moduleVisible(moduleState(periods.get(p.id) ?? [], "guest_portal", todayIn(p.timeZone))));
   if (!allowed.length) {
     if (inView[0]) await requireAllowed("use_guest_inbox", inView[0].id);
     return (
@@ -37,13 +39,17 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   const open = (await searchParams).c ?? "";
   const openAt = open ? await conversationProperty(pool(), tenant.schemaName, open, ids) : null;
   const property = allowed.find((p) => p.id === openAt) ?? allowed[0]!;
-  const [list, view, replies] = await Promise.all([
+  const [list, view, replies, rooms] = await Promise.all([
     listConversations(pool(), tenant.schemaName, ids),
     openAt ? conversationView(pool(), tenant.schemaName, openAt, open) : Promise.resolve(null),
     openAt ? listQuickReplies(pool(), tenant.schemaName, openAt) : Promise.resolve([]),
+    openAt ? conversationRooms(pool(), tenant.schemaName, openAt, open) : Promise.resolve([]),
   ]);
+  const zoneOf = new Map(allowed.map((p) => [p.id, p.timeZone]));
+  const keeps = can(actor, "keep_conversations", property.id);
   const locale = language === "de" ? "de-DE" : "en-GB";
-  const when = (d: Date) => new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short", timeZone: property.timeZone }).format(d);
+  // each hotel's own clock
+  const when = (d: Date, at = property.id) => new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short", timeZone: zoneOf.get(at) ?? property.timeZone }).format(d);
   const day = (d: string) => new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(`${d}T12:00:00Z`));
   const waited = (since: Date) => {
     const min = Math.max(0, Math.round((Date.now() - since.getTime()) / 60_000));
@@ -66,7 +72,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                 <span className="flex items-center gap-2">
                   {c.unread ? <span aria-label={m["inbox.unread"]} className="size-2 shrink-0 rounded-full bg-accent" /> : null}
                   <span className={`truncate ${c.unread ? "font-semibold" : "font-medium"}`}>{c.guestName || c.confirmationNumber}</span>
-                  <span className="ml-auto shrink-0 text-[12px] text-ink-60">{c.lastMessageAt ? when(c.lastMessageAt) : ""}</span>
+                  <span className="ml-auto shrink-0 text-[12px] text-ink-60">{c.lastMessageAt ? when(c.lastMessageAt, c.propertyId) : ""}</span>
                 </span>
                 <span className="truncate text-[12px] text-ink-60">
                   {combined ? <span data-hotel>{c.propertyName} · </span> : null}
@@ -108,11 +114,13 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
               <div className="ml-auto flex items-center gap-2 text-sm">
                 {view.conversation.disputed ? <span data-disputed className="rounded-full bg-warning/20 px-2 py-0.5 text-[12px]">{m["inbox.disputed"]}</span> : null}
                 {view.conversation.claimedName ? <span data-claimed>{fill(m["inbox.handledBy"], { name: view.conversation.claimedName })}</span> : null}
-                <ActionForm action={disputeAction} submitLabel={view.conversation.disputed ? m["inbox.disputeEnd"] : m["inbox.dispute"]} className="flex">
-                  <input type="hidden" name="propertyId" value={property.id} />
-                  <input type="hidden" name="conversationId" value={view.conversation.id} />
-                  <input type="hidden" name="disputed" value={view.conversation.disputed ? "0" : "1"} />
-                </ActionForm>
+                {keeps ? (
+                  <ActionForm action={disputeAction} submitLabel={view.conversation.disputed ? m["inbox.disputeEnd"] : m["inbox.dispute"]} className="flex">
+                    <input type="hidden" name="propertyId" value={property.id} />
+                    <input type="hidden" name="conversationId" value={view.conversation.id} />
+                    {view.conversation.disputed ? null : <input type="hidden" name="disputed" value="on" />}
+                  </ActionForm>
+                ) : null}
                 <ActionForm action={claimAction} submitLabel={view.conversation.claimedBy === session.user.id ? m["inbox.release"] : m["inbox.claim"]} className="flex">
                   <input type="hidden" name="propertyId" value={property.id} />
                   <input type="hidden" name="conversationId" value={view.conversation.id} />
@@ -136,7 +144,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                   ))}
                 </details>
               ) : null}
-              <Thread messages={view.messages} m={m} when={when} file={file} work={{ propertyId: property.id }} />
+              <Thread messages={view.messages} m={m} when={when} file={file} toWork={{ propertyId: property.id, rooms }} />
             </div>
             <TypingIndicator conversationId={view.conversation.id} />
             <Composer propertyId={property.id} conversationId={view.conversation.id} seenUpTo={view.latestGuestMessageId} quickReplies={languageReplies} values={view.values} />
@@ -148,7 +156,17 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
 }
 
 /** The thread; on the open Conversation (not earlier stays) a guest message can become work for the room. */
-function Thread({ messages, m, when, file, work }: { messages: ThreadMessage[]; m: Messages; when: (d: Date) => string; file: (id: string) => string; work?: { propertyId: string } }) {
+function Thread({ messages, m, when, file, toWork }: { messages: ThreadMessage[]; m: Messages; when: (d: Date) => string; file: (id: string) => string; toWork?: { propertyId: string; rooms: { id: string; number: string }[] } }) {
+  // with several rooms (a Booker's Conversation) staff name the room
+  const roomChoice = toWork && toWork.rooms.length > 1 ? (
+    <select name="roomId" required className="h-8 rounded-lg bg-surface px-2" aria-label="Room">
+      {toWork.rooms.map((r) => (
+        <option key={r.id} value={r.id}>
+          {r.number}
+        </option>
+      ))}
+    </select>
+  ) : null;
   return (
     <ol className="grid gap-2" data-thread>
       {messages.map((x) => (
@@ -176,28 +194,30 @@ function Thread({ messages, m, when, file, work }: { messages: ThreadMessage[]; 
               <img src={file(x.fileId)} alt="" className="max-h-64 rounded-xl" />
             )
           ) : null}
-          {x.kind === "guest" && work ? (
+          {x.kind === "guest" && toWork ? (
             <span className="flex flex-wrap items-center gap-2 text-[12px]" data-work>
               {x.issueId ? (
-                <Link href="/maintenance" className="underline" data-issue>
+                <Link href={`/maintenance#issue-${x.issueId}`} className="underline" data-issue>
                   {m["inbox.issueMade"]}
                 </Link>
               ) : (
-                <ActionForm action={messageToTaskAction} submitLabel={m["inbox.toIssue"]} className="flex">
-                  <input type="hidden" name="propertyId" value={work.propertyId} />
+                <ActionForm action={messageToTaskAction} submitLabel={m["inbox.toIssue"]} className="flex gap-1">
+                  <input type="hidden" name="propertyId" value={toWork.propertyId} />
                   <input type="hidden" name="messageId" value={x.id} />
                   <input type="hidden" name="kind" value="maintenance" />
+                  {roomChoice}
                 </ActionForm>
               )}
               {x.taskId ? (
-                <Link href="/housekeeping" className="underline" data-task>
+                <Link href={`/housekeeping#task-${x.taskId}`} className="underline" data-task>
                   {m["inbox.taskMade"]}
                 </Link>
               ) : (
-                <ActionForm action={messageToTaskAction} submitLabel={m["inbox.toTask"]} className="flex">
-                  <input type="hidden" name="propertyId" value={work.propertyId} />
+                <ActionForm action={messageToTaskAction} submitLabel={m["inbox.toTask"]} className="flex gap-1">
+                  <input type="hidden" name="propertyId" value={toWork.propertyId} />
                   <input type="hidden" name="messageId" value={x.id} />
                   <input type="hidden" name="kind" value="housekeeping" />
+                  {roomChoice}
                 </ActionForm>
               )}
             </span>

@@ -19,16 +19,25 @@ alter table guest_messages add column reply_to text;
 -- every email that came in, as received (kept with its Conversation); automatic replies are kept but not counted
 create table inbound_mails (
   id uuid primary key default gen_random_uuid(),
+  -- the mail's own id with the address it came to: the same mail to two Conversations is taken for each
   provider_id text not null constraint inbound_mails_provider_key unique,
   conversation_id uuid references conversations(id) on delete cascade,
   sender text not null,
   subject text not null default '',
   auto_reply boolean not null,
+  -- the provider's notice, and the mail itself as sent (MIME, up to 25 MB)
   raw jsonb not null,
+  mime bytea,
   received_at timestamptz not null default now()
 );
 create index inbound_mails_conversation_idx on inbound_mails(conversation_id);
 
 -- a guest message turned into work, linked back
 alter table maintenance_issues add column conversation_message_id uuid references conversation_messages(id) on delete set null;
-alter table housekeeping_tasks add column conversation_message_id uuid references conversation_messages(id) on delete set null;
+-- several guest requests can go to the room's one hand-made task of the day: each message linked
+create table housekeeping_task_messages (
+  task_id uuid not null references housekeeping_tasks(id) on delete cascade,
+  message_id uuid not null references conversation_messages(id) on delete cascade,
+  primary key (message_id)
+);
+create index housekeeping_task_messages_task_idx on housekeeping_task_messages(task_id);

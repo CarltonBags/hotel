@@ -67,8 +67,9 @@ describe("incoming mail (ticket 43)", () => {
       signature,
     };
     const mg = new MailgunProvider("key", "mg.example", "signing");
-    expect(mg.verifyInbound(fields)).toBe(true);
-    expect(mg.verifyInbound({ ...fields, signature: "00" })).toBe(false);
+    expect(mg.verifyInbound({}, fields)).toBe(true);
+    expect(mg.inboundReplayKey(fields)).toBe(`mailgun:${token}`);
+    expect(mg.verifyInbound({}, { ...fields, signature: "00" })).toBe(false);
     expect(mg.parseInbound(fields)).toMatchObject({ id: "<abc@mail.example>", text: "Thanks!", headers: { "auto-submitted": "no" }, attachments: [{ name: "a.png", type: "image/png" }] });
   });
 });

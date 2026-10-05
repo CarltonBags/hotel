@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import type { DomainStatus, InboundMail, MailEvent, MailMessage, MailProvider, SmsProvider } from "./provider";
+import { DeliveryError, type DomainStatus, type InboundMail, type MailEvent, type MailMessage, type MailProvider, type SmsProvider } from "./provider";
 import { inboundFromFields } from "./inbound";
 
 /** In-memory mail for tests and development without provider keys: keeps what was sent; events carry a shared secret. */
@@ -31,11 +31,13 @@ export class FakeMailProvider implements MailProvider {
     return { id: e.id, type: e.type, severity: e.severity ?? null, tenantId: e.tenantId ?? null, messageId: e.messageId ?? null, recipient: e.recipient ?? "", detail: e.detail ?? "" };
   }
 
-  /** Incoming mail notices carry the test secret as a field. */
-  verifyInbound(fields: Record<string, string>): boolean {
-    const given = Buffer.from(fields.secret ?? "");
-    const expected = Buffer.from(this.webhookSecret);
-    return expected.length > 0 && given.length === expected.length && timingSafeEqual(given, expected);
+  /** Incoming mail notices carry the test secret in x-fake-signature, like events (headers are not stored). */
+  verifyInbound(headers: Record<string, string>): boolean {
+    return this.verifyWebhook(headers);
+  }
+
+  inboundReplayKey(fields: Record<string, string>): string | null {
+    return fields["Message-Id"] ?? fields.token ?? null;
   }
 
   parseInbound(fields: Record<string, string>): InboundMail | null {
@@ -43,10 +45,17 @@ export class FakeMailProvider implements MailProvider {
   }
 
   /** The stand-in keeps attachments as data: addresses. */
-  async fetchInboundAttachment(url: string): Promise<Uint8Array> {
+  async fetchInboundAttachment(url: string, maxBytes: number): Promise<Uint8Array> {
     const m = /^data:[^;,]+;base64,(.*)$/.exec(url);
-    if (!m) throw new Error("Not a stored attachment");
-    return new Uint8Array(Buffer.from(m[1]!, "base64"));
+    if (!m) throw new DeliveryError("Not a stored attachment", false);
+    const bytes = new Uint8Array(Buffer.from(m[1]!, "base64"));
+    if (bytes.length > maxBytes) throw new DeliveryError("The attachment is larger than allowed", false);
+    return bytes;
+  }
+
+  async fetchInboundRaw(fields: Record<string, string>, maxBytes: number): Promise<Uint8Array | null> {
+    const mime = fields["body-mime"];
+    return mime && mime.length <= maxBytes ? new Uint8Array(Buffer.from(mime, "utf8")) : null;
   }
 
   async domainStatus(domain: string): Promise<DomainStatus> {

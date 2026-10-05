@@ -1,5 +1,5 @@
-import { unreadConversations } from "@hoteloftware/db";
-import { can } from "@hoteloftware/domain";
+import { modulePeriods, unreadConversations } from "@hoteloftware/db";
+import { can, moduleState, moduleVisible, todayIn } from "@hoteloftware/domain";
 import { accessibleProperties, requirePrincipal } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 
@@ -9,7 +9,10 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<Response> {
   const { tenant, actor } = await requirePrincipal();
   const scope = new URL(request.url).searchParams.get("scope") ?? "";
-  const ids = (await accessibleProperties()).map((p) => p.id).filter((id) => (!scope || scope === "all" || scope === id) && can(actor, "use_guest_inbox", id));
+  const inView = (await accessibleProperties()).filter((p) => (!scope || scope === "all" || scope === p.id) && can(actor, "use_guest_inbox", p.id));
+  // only where the Guest Portal Module is on, as the inbox itself
+  const periods = await modulePeriods(pool(), tenant.schemaName, inView.map((p) => p.id));
+  const ids = inView.filter((p) => moduleVisible(moduleState(periods.get(p.id) ?? [], "guest_portal", todayIn(p.timeZone)))).map((p) => p.id);
   const unread = await unreadConversations(pool(), tenant.schemaName, ids);
   return Response.json({ unread }, { headers: { "cache-control": "no-store" } });
 }

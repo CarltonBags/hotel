@@ -365,7 +365,8 @@ export async function queueGuestMessageIn(
   );
   const s = setting[0]!;
   const language = messageLanguage(f.language, s.use_guest_language, s.fallback_language);
-  const replyTo = input.links?.replyDomain ? await replyAddressIn(tx, input.conversationId ?? null, input.reservationId, input.links.replyDomain) : null;
+  // a message the guest may answer carries its Conversation's address; documents and codes keep the property's Reply-to
+  const replyTo = input.links?.replyDomain && MESSAGE_TYPE_INFO[input.type].replyHere ? await replyAddressIn(tx, input.conversationId ?? null, input.reservationId, input.links.replyDomain) : null;
   const values: Partial<Record<Placeholder, string>> = {
     guest_name: input.greetName ?? [f.first_name, f.last_name].filter(Boolean).join(" "),
     hotel_name: look.name,

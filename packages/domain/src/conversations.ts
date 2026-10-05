@@ -77,10 +77,10 @@ export function replyAddress(slug: string, token: string, domain: string): strin
   return `${slug}.${token}@${domain}`;
 }
 
-/** The tenant and token of a reply address (also inside "Name <address>"); null for any other address. */
-export function parseReplyAddress(address: string): { slug: string; token: string } | null {
-  const m = /([a-z0-9-]+)\.([0-9a-f]{20,64})@/i.exec(address);
-  return m ? { slug: m[1]!.toLowerCase(), token: m[2]!.toLowerCase() } : null;
+/** The tenant, token and domain of a reply address (also inside "Name <address>"); null for any other address. */
+export function parseReplyAddress(address: string): { slug: string; token: string; domain: string } | null {
+  const m = /(?:^|[<\s"])([a-z0-9-]+)\.([0-9a-f]{20,64})@([a-z0-9.-]+)(?:$|[>\s"])/i.exec(address.trim());
+  return m ? { slug: m[1]!.toLowerCase(), token: m[2]!.toLowerCase(), domain: m[3]!.toLowerCase() } : null;
 }
 
 const AUTO_SUBJECT = /^\s*(out of (the )?office|automatic reply|auto(matische)?[ -]?(reply|antwort)|autoreply|abwesenheit(snotiz)?|absence|vacation|urlaub|r[ée]ponse automatique|absent)\b/i;
@@ -89,7 +89,7 @@ const AUTO_SUBJECT = /^\s*(out of (the )?office|automatic reply|auto(matische)?[
 export function isAutoReply(headers: Record<string, string>, subject: string): boolean {
   const submitted = headers["auto-submitted"]?.trim().toLowerCase();
   if (submitted && submitted !== "no") return true;
-  if (headers["x-autoreply"] || headers["x-autorespond"] || headers["x-auto-response-suppress"]?.toLowerCase().includes("all")) return true;
+  if (headers["x-autoreply"] || headers["x-autorespond"]) return true;
   if (["bulk", "auto_reply", "junk", "list"].includes(headers["precedence"]?.trim().toLowerCase() ?? "")) return true;
   return AUTO_SUBJECT.test(subject);
 }

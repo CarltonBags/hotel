@@ -182,6 +182,8 @@ export const PROPERTY_ACTIONS = {
   manage_payment_settings: ["property_manager"],
   /** The Guest Inbox: read and answer Conversations, Internal Notes, claim (ticket 42). */
   use_guest_inbox: ["property_manager", "front_desk"],
+  /** Keep a Conversation past its retention for a dispute, and release it (ticket 43). */
+  keep_conversations: ["property_manager"],
   /** Told when a guest message stays unopened past the property's time (ticket 42). */
   receive_inbox_escalations: ["property_manager"],
   /** Downtime Reports, the offline lists and Catch-up Entry after an outage (ticket 86). */

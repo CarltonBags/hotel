@@ -47,28 +47,30 @@ export interface MessageTypeInfo {
   repeatable: boolean;
   /** Carries the Portal Link: not sent until the Guest Portal gives one (ticket 40). */
   needsPortal: boolean;
+  /** The guest's email answer lands in the Conversation (ticket 43); documents and codes keep the property's Reply-to. */
+  replyHere: boolean;
 }
 
 export const MESSAGE_TYPE_INFO: Record<MessageType, MessageTypeInfo> = {
-  confirmation: { timing: "at_once", switchable: false, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: false },
-  cancellation: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: false, needsPortal: false },
-  deposit_invoice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
-  payment_receipt: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
-  final_invoice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
-  refund_notice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
-  fee_notice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: false, needsPortal: false },
-  card_request: { timing: "at_once", switchable: false, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: true },
-  balance_request: { timing: "at_once", switchable: true, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: true },
-  pre_arrival: { timing: "sending_hours", switchable: true, defaultOn: true, critical: false, essential: false, repeatable: false, needsPortal: true },
-  welcome: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: false },
-  departure_eve: { timing: "evening", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: true },
-  thanks: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: true },
+  confirmation: { timing: "at_once", switchable: false, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: false , replyHere: true },
+  cancellation: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: false, needsPortal: false , replyHere: true },
+  deposit_invoice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false , replyHere: false },
+  payment_receipt: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false , replyHere: false },
+  final_invoice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false , replyHere: false },
+  refund_notice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false , replyHere: false },
+  fee_notice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: false, needsPortal: false , replyHere: false },
+  card_request: { timing: "at_once", switchable: false, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: true , replyHere: true },
+  balance_request: { timing: "at_once", switchable: true, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: true , replyHere: true },
+  pre_arrival: { timing: "sending_hours", switchable: true, defaultOn: true, critical: false, essential: false, repeatable: false, needsPortal: true , replyHere: true },
+  welcome: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: false , replyHere: true },
+  departure_eve: { timing: "evening", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: true , replyHere: true },
+  thanks: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: true , replyHere: true },
   // the Booker invites a room's guest; the one-time code when the guest has no link at hand (ticket 40)
-  portal_invitation: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: true },
-  portal_code: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
+  portal_invitation: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: true , replyHere: false },
+  portal_code: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false , replyHere: false },
   // a staff member answered in the Conversation; outside Desk Hours the automatic reply (ticket 42)
-  inbox_reply: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: false, repeatable: true, needsPortal: true },
-  desk_closed: { timing: "at_once", switchable: true, defaultOn: true, critical: false, essential: false, repeatable: true, needsPortal: true },
+  inbox_reply: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: false, repeatable: true, needsPortal: true , replyHere: true },
+  desk_closed: { timing: "at_once", switchable: true, defaultOn: true, critical: false, essential: false, repeatable: true, needsPortal: true , replyHere: true },
 };
 
 /** The Guest Portal hands out Portal Links (ticket 40); before it, messages that needed one stayed unsent. */

@@ -64,10 +64,14 @@ export interface MailProvider {
   /** A hotel's own sending domain: registered at the provider on first ask; verified once its DNS records are in place. */
   domainStatus(domain: string): Promise<DomainStatus>;
   /** Whether a notice of an incoming mail (form fields) really comes from the provider. */
-  verifyInbound(fields: Record<string, string>): boolean;
+  verifyInbound(headers: Record<string, string>, fields: Record<string, string>): boolean;
+  /** What makes the notice's delivery unique, covered by its signature (a captured signature with other fields is a duplicate). */
+  inboundReplayKey(fields: Record<string, string>): string | null;
   parseInbound(fields: Record<string, string>): InboundMail | null;
-  /** An attachment of an incoming mail, from the provider's storage. */
-  fetchInboundAttachment(url: string): Promise<Uint8Array>;
+  /** An attachment of an incoming mail, from the provider's storage; refused (not retried) above `maxBytes`. */
+  fetchInboundAttachment(url: string, maxBytes: number): Promise<Uint8Array>;
+  /** The mail as sent (MIME), from the provider's storage; null when it keeps none or it is larger than `maxBytes`. */
+  fetchInboundRaw(fields: Record<string, string>, maxBytes: number): Promise<Uint8Array | null>;
 }
 
 export interface DomainStatus {

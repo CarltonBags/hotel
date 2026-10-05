@@ -84,7 +84,7 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
               </>
             );
             return (
-              <article key={i.id} className="grid gap-2 rounded-2xl bg-surface-2 p-4 text-sm" data-issue={i.roomNumber ?? i.place} data-status={i.status}>
+              <article key={i.id} id={`issue-${i.id}`} className="grid gap-2 rounded-2xl bg-surface-2 p-4 text-sm" data-issue={i.roomNumber ?? i.place} data-status={i.status}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-base font-medium">{i.roomNumber ? `${m["mi.room"]} ${i.roomNumber}` : i.place}</span>
                   <span className={`rounded-full px-2 py-0.5 text-xs ${badge[i.urgency]}`}>{m[`mi.urgency.${i.urgency}`]}</span>

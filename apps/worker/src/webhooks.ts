@@ -55,7 +55,7 @@ export async function receiveWebhook(
   let body: unknown = null;
   try {
     // JSON, or form fields (an email provider's notice of an incoming mail)
-    body = !input.rawBody ? null : (input.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded") ? Object.fromEntries(new URLSearchParams(input.rawBody)) : JSON.parse(input.rawBody);
+    body = !input.rawBody ? null : (formFieldsOf(input.rawBody, input.headers["content-type"] ?? "") ?? JSON.parse(input.rawBody));
   } catch {
     body = null;
   }
@@ -98,6 +98,24 @@ export async function receiveWebhook(
   } finally {
     client.release();
   }
+}
+
+/**
+ * A form body's text fields (urlencoded or multipart); null when the body is
+ * not a form. Notices carry no files, so multipart parts are read as text.
+ */
+export function formFieldsOf(rawBody: string, contentType: string): Record<string, string> | null {
+  if (contentType.includes("application/x-www-form-urlencoded")) return Object.fromEntries(new URLSearchParams(rawBody));
+  const boundary = /multipart\/form-data;.*boundary="?([^";]+)"?/i.exec(contentType)?.[1];
+  if (!boundary) return null;
+  const fields: Record<string, string> = {};
+  for (const part of rawBody.split(`--${boundary}`)) {
+    const at = part.indexOf("\r\n\r\n");
+    if (at < 0) continue;
+    const name = /name="([^"]*)"/i.exec(part.slice(0, at))?.[1];
+    if (name && !/filename=/i.test(part.slice(0, at))) fields[name] = part.slice(at + 4).replace(/\r\n$/, "");
+  }
+  return fields;
 }
 
 /** Secrets never land in the stored headers. */
