@@ -1,3 +1,5 @@
+import { roundMoney } from "./money";
+
 /**
  * Rooming lists, keeping a group together and its deposit schedule
  * (ticket 59, "Groups and allotments").
@@ -132,9 +134,9 @@ export function depositStatus(schedule: { id: string; dueDate: string; amount: n
   return [...schedule]
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
     .map((d) => {
-      const covered = Math.round(Math.min(left, d.amount) * 100) / 100;
-      left = Math.round((left - covered) * 100) / 100;
-      const open = Math.round((d.amount - covered) * 100) / 100;
+      const covered = roundMoney(Math.min(left, d.amount));
+      left = roundMoney(left - covered);
+      const open = roundMoney(d.amount - covered);
       return { id: d.id, dueDate: d.dueDate, amount: d.amount, paid: covered, open, overdue: open > 0 && today > d.dueDate };
     });
 }

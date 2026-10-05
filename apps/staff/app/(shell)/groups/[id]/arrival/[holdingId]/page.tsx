@@ -46,16 +46,18 @@ export default async function GroupArrivalPage({ params }: { params: Promise<{ i
         </p>
       </div>
       {checkIn ? (
-        <div data-assign-rooms><ActionForm action={assignGroupRoomsAction} submitLabel={m["group.assignRooms"]} className="flex flex-wrap items-end gap-3">
-          {hidden}
-          <label className="grid gap-1 text-sm">
-            <span className="text-ink-80">{m["group.assignRooms"]}</span>
-            <select name="by" className="h-10 rounded-xl border border-ink-10 bg-surface px-3">
-              <option value="floor">{m["group.byFloor"]}</option>
-              <option value="section">{m["group.bySection"]}</option>
-            </select>
-          </label>
-        </ActionForm></div>
+        <div data-assign-rooms>
+          <ActionForm action={assignGroupRoomsAction} submitLabel={m["group.assignRooms"]} className="flex flex-wrap items-end gap-3">
+            {hidden}
+            <label className="grid gap-1 text-sm">
+              <span className="text-ink-80">{m["group.assignRooms"]}</span>
+              <select name="by" className="h-10 rounded-xl border border-ink-10 bg-surface px-3">
+                <option value="floor">{m["group.byFloor"]}</option>
+                <option value="section">{m["group.bySection"]}</option>
+              </select>
+            </label>
+          </ActionForm>
+        </div>
       ) : null}
       <ArrivalList groupId={a.groupId} holdingId={a.holdingId} reservations={a.reservations} canCheckIn={checkIn && a.arrival <= a.businessDate} canRename={manage} m={m} />
       {a.registrationNeeded || reg ? (

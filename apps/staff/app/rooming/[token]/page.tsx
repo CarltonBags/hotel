@@ -1,5 +1,6 @@
 import { roomingByToken } from "@hoteloftware/db";
 import { pool } from "@/lib/db";
+import { groupsModuleOn } from "@/lib/groups";
 import { currentTenant } from "@/lib/tenant";
 import { RoomingForm } from "./rooming-form";
 
@@ -9,7 +10,9 @@ export const dynamic = "force-dynamic";
 export default async function OrganiserRoomingPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const tenant = await currentTenant();
-  const view = tenant ? await roomingByToken(pool(), tenant.schemaName, token) : null;
+  const found = tenant ? await roomingByToken(pool(), tenant.schemaName, token) : null;
+  // the Groups Module off: the link opens nothing
+  const view = found && tenant && (await groupsModuleOn(tenant.schemaName, found.propertyId)) ? found : null;
   return (
     <main className="mx-auto grid min-h-screen max-w-3xl content-start gap-6 bg-white p-6 text-black" data-organiser-rooming>
       {view ? (

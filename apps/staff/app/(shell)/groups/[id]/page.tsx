@@ -185,19 +185,21 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
       <section className={section} data-group-billing>
         <h2 className="font-medium">{m["group.billing"]}</h2>
         {manage ? (
-          <div data-group-routing><ActionForm action={groupRoutingAction} submitLabel={m["action.save"]} className="grid gap-2">
-            {hidden}
-            <span className="text-ink-80">{m["group.routing"]}</span>
-            <div className="flex flex-wrap gap-4">
-              {ROUTING_CATEGORIES.map((c) => (
-                <label key={c} className="flex items-center gap-2">
-                  <input type="checkbox" name="category" value={c} defaultChecked={master?.routing.includes(c) ?? false} />
-                  {m[`companies.routing.${c}`]}
-                </label>
-              ))}
-            </div>
-            <p className="text-xs text-ink-60">{m["group.routingHelp"]}</p>
-          </ActionForm></div>
+          <div data-group-routing>
+            <ActionForm action={groupRoutingAction} submitLabel={m["action.save"]} className="grid gap-2">
+              {hidden}
+              <span className="text-ink-80">{m["group.routing"]}</span>
+              <div className="flex flex-wrap gap-4">
+                {ROUTING_CATEGORIES.map((c) => (
+                  <label key={c} className="flex items-center gap-2">
+                    <input type="checkbox" name="category" value={c} defaultChecked={master?.routing.includes(c) ?? false} />
+                    {m[`companies.routing.${c}`]}
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-ink-60">{m["group.routingHelp"]}</p>
+            </ActionForm>
+          </div>
         ) : null}
         {master ? (
           <p data-master-balance={master.balance}>
@@ -246,13 +248,16 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
             )}
           </div>
         ) : null}
+        {/* a shrink or cancellation: the contract for everyone deciding it, the fee for who may post it */}
+        <div className="grid gap-2" data-group-fee>
+          <span className="text-ink-80">{m["group.fee"]}</span>
+          <div className="rounded-xl bg-surface p-3">
+            <p className="whitespace-pre-wrap">{g.terms || "–"}</p>
+            <p className="whitespace-pre-wrap text-ink-60">{g.reductionRules}</p>
+          </div>
+        </div>
         {fee ? (
-          <div className="grid gap-2" data-group-fee>
-            <span className="text-ink-80">{m["group.fee"]}</span>
-            <div className="rounded-xl bg-surface p-3">
-              <p className="whitespace-pre-wrap">{g.terms || "–"}</p>
-              <p className="whitespace-pre-wrap text-ink-60">{g.reductionRules}</p>
-            </div>
+          <div className="grid gap-2" data-group-fee-form>
             <p className="text-xs text-ink-60">{m["group.feeHelp"]}</p>
             <ActionForm action={groupFeeAction} submitLabel={m["group.postFee"]} className="flex flex-wrap items-end gap-2">
               {hidden}

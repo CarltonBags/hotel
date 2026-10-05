@@ -190,10 +190,11 @@ describe("Group billing and check-in", () => {
     const h = await addHolding(pool, s(), later, { arrival: addDays(today, 30), departure: addDays(today, 32), rooms: [{ roomTypeId: dbl, rooms: 2 }] }, fd);
     await setGroupPrices(pool, s(), later, [30, 31].map((n) => ({ roomTypeId: dbl, date: addDays(today, n), price: 100 })), fd);
     await setDepositSchedule(pool, s(), later, [{ dueDate: addDays(today, -1), amount: 200 }, { dueDate: addDays(today, 10), amount: 200 }], fd);
-    await expect(takeGroupPayment(pool, s(), later, { amount: 100, reference: "Kongress 1" }, fd)).rejects.toThrow(/reservations first/);
-    await createPlaceholderReservations(pool, s(), h, fd);
+    // the organiser pays before any reservation exists: taxed by the Held Rooms at the contract prices
     const paid = await takeGroupPayment(pool, s(), later, { amount: 100, reference: "Kongress 1" }, fd);
     expect(paid.depositInvoice?.kind).toBe("deposit");
+    expect((await invoiceDocument(pool, s(), paid.depositInvoice!.id)).totals.byTax.map((x) => x.rate)).toEqual([7]);
+    await createPlaceholderReservations(pool, s(), h, fd);
     const view = await masterFolio(pool, s(), later, fd);
     expect(view.deposits.map((d) => [d.paid, d.open, d.overdue])).toEqual([
       [100, 100, true],

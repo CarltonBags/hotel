@@ -329,7 +329,9 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     for (const job of jobs) {
       const tenant = await findTenantById(pool, job.data.tenantId);
       if (!tenant) continue;
-      const d = { ...(await runGroupDuties(pool, tenant.schemaName)), depositsDue: await remindGroupDeposits(pool, tenant.schemaName) };
+      // the release has committed: a failing deposit look must not swallow its notices
+      const depositsDue = await remindGroupDeposits(pool, tenant.schemaName).catch((err) => (console.error("[groups] deposits", err), []));
+      const d = { ...(await runGroupDuties(pool, tenant.schemaName)), depositsDue };
       await notifyGroupDuties(pool, tenant, d).catch((err) => console.error("[groups] not told", err));
       if (d.released.length || d.lapsed.length) console.log(`[groups] ${tenant.slug}: released ${d.released.length}, lapsed ${d.lapsed.length}`);
     }

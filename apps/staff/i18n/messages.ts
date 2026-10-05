@@ -164,7 +164,7 @@ const catalog = {
   "group.reservations": { en: "Reservations", de: "Reservierungen" },
   "group.assignRooms": { en: "Assign rooms together", de: "Zimmer zusammen zuweisen" },
   "group.byFloor": { en: "by floor", de: "nach Etage" },
-  "group.bySection": { en: "by Section", de: "nach Bereich" },
+  "group.bySection": { en: "by Section", de: "nach Revier" },
   "group.checkInSelected": { en: "Check in selected", de: "Ausgewählte einchecken" },
   "group.checkInAll": { en: "Check in all", de: "Alle einchecken" },
   "group.placeholder": { en: "name to come", de: "Name folgt" },

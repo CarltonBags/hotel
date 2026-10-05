@@ -148,12 +148,21 @@ async function contextOf(tx: PoolClient, reservationId: string): Promise<Context
   };
 }
 
-/** A group's Master Folio: the group's property, its name as the reference, its holdings' dates. */
+/**
+ * A group's Master Folio: the group's property, its name as the reference.
+ * Money is a deposit while an arrival still lies ahead of the Business Date
+ * (for a Series, the next departure's); its dates are that arrival's.
+ */
 async function groupContextOf(tx: PoolClient, groupId: string): Promise<Context> {
-  const r = (await tx.query<{ property_id: string; legal_entity_id: string; currency: string; today: string; name: string; arrival: string | null; departure: string | null; country: string; time_zone: string }>(
+  const r = (await tx.query<{ property_id: string; legal_entity_id: string; currency: string; today: string; name: string; arrival: string | null; departure: string | null; country: string; time_zone: string; ahead: boolean }>(
     `select g.property_id, p.legal_entity_id, p.currency, p.time_zone, to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today, g.name, p.country,
-       (select to_char(min(arrival), 'YYYY-MM-DD') from group_holdings where group_id = g.id) as arrival,
-       (select to_char(max(departure), 'YYYY-MM-DD') from group_holdings where group_id = g.id) as departure
+       coalesce(
+         (select to_char(min(arrival), 'YYYY-MM-DD') from group_holdings where group_id = g.id and arrival > coalesce(p.business_date, (now() at time zone p.time_zone)::date)),
+         (select to_char(min(arrival), 'YYYY-MM-DD') from group_holdings where group_id = g.id)) as arrival,
+       coalesce(
+         (select to_char(departure, 'YYYY-MM-DD') from group_holdings where group_id = g.id and arrival > coalesce(p.business_date, (now() at time zone p.time_zone)::date) order by arrival limit 1),
+         (select to_char(max(departure), 'YYYY-MM-DD') from group_holdings where group_id = g.id)) as departure,
+       exists (select 1 from group_holdings where group_id = g.id and arrival > coalesce(p.business_date, (now() at time zone p.time_zone)::date)) as ahead
      from groups g join properties p on p.id = g.property_id where g.id = $1`,
     [groupId],
   )).rows[0]!;
@@ -166,8 +175,8 @@ async function groupContextOf(tx: PoolClient, groupId: string): Promise<Context>
     confirmation: r.name,
     arrival: r.arrival ?? r.today,
     departure: r.departure ?? addDays(r.today, 1),
-    // before the stay: a payment is a deposit
-    status: (r.arrival ?? r.today) > r.today ? "confirmed" : "checked_in",
+    // before an arrival: a payment is a deposit
+    status: r.ahead ? "confirmed" : "checked_in",
     country: r.country,
     timeZone: r.time_zone,
   };
@@ -292,10 +301,10 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
   const pending = (await tx.query("select 1 from payments where folio_id = $1 and status = 'pending' and refund_of is null limit 1", [folioId])).rows.length;
   if (pending) throw new Error("A payment is still waiting at the reader; finish or cancel it first");
   const billTo = await billToOf(tx, folioId, ctx.country);
-  const forRoom = (c: (typeof charges)[number]) => (c.guest ? `${c.room ? `${LABELS[billTo.language].room} ${c.room} · ` : ""}${c.guest}: ` : "");
+  const roomAndGuest = (c: (typeof charges)[number]) => (c.guest ? `${c.room ? `${LABELS[billTo.language].room} ${c.room} · ` : ""}${c.guest}: ` : "");
   const lines: InvoiceCharge[] = charges.map((c) => ({
     // the early-departure fee is stored in English; the invoice speaks the buyer's language
-    description: forRoom(c) + (c.origin === "fee" ? LABELS[billTo.language].earlyDepartureFee : c.description),
+    description: roomAndGuest(c) + (c.origin === "fee" ? LABELS[billTo.language].earlyDepartureFee : c.description),
     serviceDate: c.service_date,
     amount: Number(c.amount),
     unitPrice: Number(c.unit_price),
@@ -401,6 +410,19 @@ export async function stayComposition(tx: PoolClient, reservationId: string): Pr
 /** A group's stays together, by Tax Code: what a deposit on its Master Folio is taxed by. */
 async function groupComposition(tx: PoolClient, groupId: string): Promise<{ taxCode: string; rate: number; gross: number }[]> {
   const ids = (await tx.query<{ id: string }>("select r.id from reservations r join group_holdings h on h.id = r.group_holding_id where h.group_id = $1 and r.status = 'confirmed'", [groupId])).rows;
+  // no reservations yet (the organiser pays first): the Held Rooms at the contract prices, taxed like the group's accommodation
+  if (!ids.length) {
+    return (await tx.query<{ code: string; rate: string; gross: string }>(
+      `select t.code, tr.rate, sum(hr.rooms * ra.price) as gross
+       from group_held_rooms hr join group_holdings h on h.id = hr.holding_id join groups g on g.id = h.group_id
+       join rates ra on ra.rate_plan_id = g.rate_plan_id and ra.room_type_id = hr.room_type_id and ra.date = hr.date
+       join rate_plans pl on pl.id = g.rate_plan_id left join rate_plans b on b.id = pl.base_plan_id
+       join services s on s.id = coalesce(pl.accommodation_service_id, b.accommodation_service_id) join tax_codes t on t.id = s.tax_code_id
+       cross join lateral (select rate from tax_code_rates where tax_code_id = t.id and valid_from <= hr.date order by valid_from desc limit 1) tr
+       where g.id = $1 and hr.rooms > 0 group by t.code, tr.rate order by t.code`,
+      [groupId],
+    )).rows.filter((x) => Number(x.gross) > 0).map((x) => ({ taxCode: x.code, rate: Number(x.rate), gross: Number(x.gross) }));
+  }
   const sum = new Map<string, { taxCode: string; rate: number; gross: number }>();
   for (const { id } of ids) {
     for (const x of await stayComposition(tx, id)) {
@@ -448,7 +470,7 @@ export async function depositIn(tx: PoolClient, paymentId: string, userId: strin
   const ctx = groupId ? await groupContextOf(tx, groupId) : await contextOf(tx, p.reservation_id!);
   if (ctx.status !== "confirmed") return null;
   const stay = groupId ? await groupComposition(tx, groupId) : await stayComposition(tx, p.reservation_id!);
-  if (stay.length === 0) throw new Error(groupId ? "A deposit of the group is taxed like its stays: create the group's reservations first" : "Money before check-in needs a Deposit Invoice: set the Rate Plan's Accommodation Service first (Settings → Rate Plans)");
+  if (stay.length === 0) throw new Error(groupId ? "A deposit of the group is taxed like its stays: set the contract prices of its Held Rooms first" : "Money before check-in needs a Deposit Invoice: set the Rate Plan's Accommodation Service first (Settings → Rate Plans)");
   const amount = Number(p.amount);
   const parts = allocateDeposit(amount, stay);
   const billTo = await billToOf(tx, p.folio_id, ctx.country);

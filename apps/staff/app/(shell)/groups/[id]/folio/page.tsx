@@ -66,11 +66,13 @@ export default async function MasterFolioPage({ params }: { params: Promise<{ id
             ))}
           </ul>
           {can(actor, "take_payments", g.propertyId) ? (
-            <div data-group-payment><ActionForm action={groupPaymentAction} submitLabel={m["group.recordPayment"]} className="flex flex-wrap items-end gap-2">
-              {hidden}
-              <Field label={m["group.depositAmount"]} name="amount" />
-              <Field label={m["group.reference"]} name="reference" />
-            </ActionForm></div>
+            <div data-group-payment>
+              <ActionForm action={groupPaymentAction} submitLabel={m["group.recordPayment"]} className="flex flex-wrap items-end gap-2">
+                {hidden}
+                <Field label={m["group.depositAmount"]} name="amount" />
+                <Field label={m["group.reference"]} name="reference" />
+              </ActionForm>
+            </div>
           ) : null}
         </section>
         <section className={section}>

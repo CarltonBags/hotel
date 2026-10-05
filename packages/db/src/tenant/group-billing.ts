@@ -82,7 +82,24 @@ async function holdingOf(tx: PoolClient, holdingId: string): Promise<HoldingRow 
   return { ...h, group: await groupOf(tx, h.group_id) };
 }
 
-const read = <T>(pool: Pool, schema: string, fn: (tx: PoolClient) => Promise<T>) => withTenant(pool, schema, fn);
+/** Who names a room through the organiser's link (no user account). */
+const ORGANISER = "organiser";
+
+/**
+ * One at a time per holding, across app instances: a session advisory lock on
+ * its own connection while the work runs in transactions of its own (a double
+ * click makes no second set of reservations).
+ */
+async function oneAtATime<T>(pool: Pool, key: string, fn: () => Promise<T>): Promise<T> {
+  const c = await pool.connect();
+  try {
+    await c.query("select pg_advisory_lock(hashtext($1))", [key]);
+    return await fn();
+  } finally {
+    await c.query("select pg_advisory_unlock(hashtext($1))", [key]).catch(() => undefined);
+    c.release();
+  }
+}
 
 // ── Routing Rules ──
 
@@ -153,7 +170,12 @@ async function slotsOf(tx: PoolClient, holdingId: string): Promise<TypeSlots[]> 
  * profile of its own that the rooming list later names.
  */
 export async function createPlaceholderReservations(pool: Pool, schema: string, holdingId: string, viewer: Viewer): Promise<number> {
-  const { h, slots } = await read(pool, schema, async (tx) => {
+  if (!isUuid(holdingId)) throw new Error("Holding not found");
+  return oneAtATime(pool, `${schema}:placeholders:${holdingId}`, () => placeholdersFor(pool, schema, holdingId, viewer));
+}
+
+async function placeholdersFor(pool: Pool, schema: string, holdingId: string, viewer: Viewer): Promise<number> {
+  const { h, slots } = await withTenant(pool, schema, async (tx) => {
     const h = await holdingOf(tx, holdingId);
     need(viewer, "manage_groups", h.group.property_id);
     if (h.released) throw new Error("The Held Rooms are released");
@@ -189,12 +211,12 @@ export interface GuestName {
 }
 
 /**
- * Name a group's reservation (until check-in): a placeholder guest is named
- * in place; a reservation already named gets a new guest profile (the old
- * one may be a real person's), on its guest folio too while nothing is
- * invoiced there.
+ * Name a group's reservation (until check-in): a guest profile only this
+ * stay uses is named in place; one used elsewhere (a real person's) is left
+ * alone and the stay gets a new profile, on its guest folio too while
+ * nothing is invoiced there.
  */
-async function nameIn(tx: PoolClient, reservationId: string, name: GuestName, userId: string, newGuestId: () => Promise<string>): Promise<void> {
+async function nameReservationIn(tx: PoolClient, reservationId: string, name: GuestName, userId: string, newGuestId: () => Promise<string>): Promise<void> {
   const first = name.firstName.trim().slice(0, 100);
   const last = name.lastName.trim().slice(0, 100);
   if (!last) throw new Error("A last name is required");
@@ -206,7 +228,14 @@ async function nameIn(tx: PoolClient, reservationId: string, name: GuestName, us
   if (r.status !== "confirmed") throw new Error("Names change until check-in");
   if (r.first_name === first && r.last_name === last && !r.name_pending) return;
   const email = name.email?.trim() ? name.email.trim().slice(0, 200) : null;
-  if (r.name_pending) {
+  // the guest profile is this stay's own (a placeholder, or made for it from a list): named in place, no profile left behind
+  const own = r.name_pending || !(await tx.query(
+    `select 1 where exists (select 1 from reservations x where x.primary_guest_id = $1 and x.id <> $2)
+        or exists (select 1 from bookings b where b.booker_guest_id = $1)
+        or exists (select 1 from folios f where f.bill_to_guest_id = $1 and (f.reservation_id is distinct from $2 or exists (select 1 from invoices i where i.folio_id = f.id)))`,
+    [r.primary_guest_id, reservationId],
+  )).rows.length;
+  if (own) {
     await tx.query("update guests set first_name = $2, last_name = $3, email = coalesce($4, email), email_normalised = coalesce($5, email_normalised), updated_at = now() where id = $1", [r.primary_guest_id, first, last, email, email ? normaliseEmail(email) : null]);
   } else {
     const guestId = await newGuestId();
@@ -229,13 +258,13 @@ const guestMaker = (pool: Pool, schema: string, name: GuestName, ctx: { userId: 
 /** Staff rename a group's reservation (until check-in). */
 export async function nameGroupReservation(pool: Pool, schema: string, reservationId: string, name: GuestName, viewer: Viewer): Promise<void> {
   if (!isUuid(reservationId)) throw new Error("Reservation not found");
-  const propertyId = await read(pool, schema, async (tx) => {
+  const propertyId = await withTenant(pool, schema, async (tx) => {
     const r = (await tx.query<{ property_id: string; group_holding_id: string | null }>("select property_id, group_holding_id from reservations where id = $1", [reservationId])).rows[0];
     if (!r?.group_holding_id) throw new Error("Not a group's reservation");
     return r.property_id;
   });
   need(viewer, "manage_groups", propertyId);
-  await withTenant(pool, schema, (tx) => nameIn(tx, reservationId, name, viewer.userId, guestMaker(pool, schema, name, { userId: viewer.userId, propertyId })));
+  await withTenant(pool, schema, (tx) => nameReservationIn(tx, reservationId, name, viewer.userId, guestMaker(pool, schema, name, { userId: viewer.userId, propertyId })));
 }
 
 export interface RoomingPreview {
@@ -252,7 +281,7 @@ async function previewIn(tx: PoolClient, holdingId: string, text: string): Promi
 
 /** The mismatch preview of a rooming list: rows whose room type the group does not hold, or beyond the Held Rooms still without a name, are flagged. */
 export async function previewRoomingList(pool: Pool, schema: string, holdingId: string, text: string, viewer: Viewer): Promise<RoomingPreview> {
-  return read(pool, schema, async (tx) => {
+  return withTenant(pool, schema, async (tx) => {
     const h = await holdingOf(tx, holdingId);
     need(viewer, "manage_groups", h.group.property_id);
     const { rows, types } = await previewIn(tx, holdingId, text);
@@ -266,7 +295,7 @@ export async function previewRoomingList(pool: Pool, schema: string, holdingId: 
  * type are left; flagged rows are skipped.
  */
 export async function importRoomingList(pool: Pool, schema: string, holdingId: string, text: string, viewer: Viewer): Promise<{ named: number; booked: number; skipped: number }> {
-  const { h, preview } = await read(pool, schema, async (tx) => {
+  const { h, preview } = await withTenant(pool, schema, async (tx) => {
     const h = await holdingOf(tx, holdingId);
     need(viewer, "manage_groups", h.group.property_id);
     if (h.released) throw new Error("The Held Rooms are released");
@@ -280,7 +309,7 @@ export async function importRoomingList(pool: Pool, schema: string, holdingId: s
     try {
       if (id) {
         const adults = await withTenant(pool, schema, async (tx) => {
-          await nameIn(tx, id, row, viewer.userId, guestMaker(pool, schema, row, { userId: viewer.userId, propertyId: h.group.property_id }));
+          await nameReservationIn(tx, id, row, viewer.userId, guestMaker(pool, schema, row, { userId: viewer.userId, propertyId: h.group.property_id }));
           return (await tx.query<{ adults: number }>("select adults from reservations where id = $1", [id])).rows[0]!.adults;
         });
         // the list's persons per room: the stay is repriced like any change of guests
@@ -313,6 +342,7 @@ export async function roomingLink(pool: Pool, schema: string, groupId: string, v
 }
 
 export interface OrganiserRooming {
+  propertyId: string;
   groupName: string;
   propertyName: string;
   holdings: { arrival: string; departure: string; rooms: { reservationId: string; roomType: string; firstName: string; lastName: string; pending: boolean; open: boolean }[] }[];
@@ -321,14 +351,17 @@ export interface OrganiserRooming {
 async function groupByToken(tx: PoolClient, token: string): Promise<{ id: string; name: string; property: string; property_id: string } | null> {
   if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) return null;
   return (await tx.query<{ id: string; name: string; property: string; property_id: string }>(
-    "select g.id, g.name, p.name as property, g.property_id from groups g join properties p on p.id = g.property_id where g.rooming_token = $1 and g.status in ('tentative', 'definite')",
+    // open until the group's last departure
+    `select g.id, g.name, p.name as property, g.property_id from groups g join properties p on p.id = g.property_id
+     where g.rooming_token = $1 and g.status in ('tentative', 'definite')
+       and exists (select 1 from group_holdings h where h.group_id = g.id and h.departure > coalesce(p.business_date, (now() at time zone p.time_zone)::date))`,
     [token],
   )).rows[0] ?? null;
 }
 
 /** What the organiser sees through the link: the group's reservations per arrival, with names; open until check-in. */
 export async function roomingByToken(pool: Pool, schema: string, token: string): Promise<OrganiserRooming | null> {
-  return read(pool, schema, async (tx) => {
+  return withTenant(pool, schema, async (tx) => {
     const g = await groupByToken(tx, token);
     if (!g) return null;
     const rows = (await tx.query<{ holding_id: string; arrival: string; departure: string; id: string | null; code: string | null; first_name: string | null; last_name: string | null; name_pending: boolean | null; status: string | null }>(
@@ -342,13 +375,13 @@ export async function roomingByToken(pool: Pool, schema: string, token: string):
       if (!holdings.has(r.holding_id)) holdings.set(r.holding_id, { arrival: r.arrival, departure: r.departure, rooms: [] });
       if (r.id) holdings.get(r.holding_id)!.rooms.push({ reservationId: r.id, roomType: r.code!, firstName: r.name_pending ? "" : r.first_name!, lastName: r.name_pending ? "" : r.last_name!, pending: r.name_pending!, open: r.status === "confirmed" });
     }
-    return { groupName: g.name, propertyName: g.property, holdings: [...holdings.values()] };
+    return { propertyId: g.property_id, groupName: g.name, propertyName: g.property, holdings: [...holdings.values()] };
   });
 }
 
 /** The organiser fills in names through the link; a row left empty is skipped, a guest already checked in keeps the name. */
 export async function fillRoomingByToken(pool: Pool, schema: string, token: string, entries: ({ reservationId: string } & GuestName)[]): Promise<number> {
-  const g = await read(pool, schema, (tx) => groupByToken(tx, token));
+  const g = await withTenant(pool, schema, (tx) => groupByToken(tx, token));
   if (!g) throw new Error("The link is no longer valid");
   let n = 0;
   for (const e of entries.slice(0, 500)) {
@@ -356,7 +389,7 @@ export async function fillRoomingByToken(pool: Pool, schema: string, token: stri
     const done = await withTenant(pool, schema, async (tx) => {
       const ok = (await tx.query("select 1 from reservations r join group_holdings h on h.id = r.group_holding_id where r.id = $1 and h.group_id = $2 and r.status = 'confirmed'", [e.reservationId, g.id])).rows.length;
       if (!ok) return false;
-      await nameIn(tx, e.reservationId, e, "organiser", guestMaker(pool, schema, e, { userId: "organiser", propertyId: g.property_id }));
+      await nameReservationIn(tx, e.reservationId, e, ORGANISER, guestMaker(pool, schema, e, { userId: ORGANISER, propertyId: g.property_id }));
       return true;
     });
     if (done) n++;
@@ -381,7 +414,7 @@ export interface MasterFolioView {
 
 /** A group's Master Folio with its Charges per room, payments, invoices and deposit schedule. */
 export async function masterFolio(pool: Pool, schema: string, groupId: string, viewer: Viewer): Promise<MasterFolioView> {
-  return read(pool, schema, async (tx) => {
+  return withTenant(pool, schema, async (tx) => {
     const g = await groupOf(tx, groupId);
     need(viewer, "view_folio", g.property_id);
     const routing = (await tx.query<{ category: RoutingCategory }>("select category from group_routing where group_id = $1 order by category", [g.id])).rows.map((r) => r.category);
@@ -446,7 +479,7 @@ export async function takeGroupPayment(pool: Pool, schema: string, groupId: stri
 
 /** Invoice the Master Folio's open Charges: one invoice listing every room and night, deposits netted. */
 export async function invoiceMasterFolio(pool: Pool, schema: string, groupId: string, viewer: Viewer): Promise<IssuedInvoice> {
-  const folio = await read(pool, schema, async (tx) => {
+  const folio = await withTenant(pool, schema, async (tx) => {
     const g = await groupOf(tx, groupId);
     need(viewer, "issue_invoices", g.property_id);
     const f = (await tx.query<{ id: string }>("select id from folios where group_id = $1", [g.id])).rows[0];
@@ -472,7 +505,7 @@ export async function postGroupFee(pool: Pool, schema: string, groupId: string, 
     need(viewer, "manage_groups", g.property_id);
     const folio = await masterFolioIn(tx, g.id, viewer.userId);
     const s = (await tx.query<{ id: string; tax_code_id: string; revenue_account: string; date: string }>(
-      `select s.id, s.tax_code_id, s.revenue_account, to_char(p.business_date, 'YYYY-MM-DD') as date
+      `select s.id, s.tax_code_id, s.revenue_account, to_char(coalesce(p.business_date, (now() at time zone p.time_zone)::date), 'YYYY-MM-DD') as date
        from rate_plans pl left join rate_plans b on b.id = pl.base_plan_id join services s on s.id = coalesce(pl.accommodation_service_id, b.accommodation_service_id) join properties p on p.id = $2
        where pl.id = $1`,
       [g.rate_plan_id, g.property_id],
@@ -515,7 +548,7 @@ export interface DepositReminder {
   groupName: string;
   dueDate: string;
   open: number;
-  /** The organiser was mailed (an address on file, not in Test Mode). */
+  /** The organiser was mailed (an address on file). */
   mailed: boolean;
 }
 
@@ -530,7 +563,8 @@ export async function remindGroupDeposits(pool: Pool, schema: string): Promise<D
          and exists (select 1 from group_deposits d where d.group_id = g.id and d.reminded_at is null and d.due_date < coalesce(p.business_date, (now() at time zone p.time_zone)::date))
        for update of g`,
     )).rows;
-    const test = await inTestMode(tx);
+    // in Test Mode nothing is due for real: the installments stay unreminded for after go-live
+    if (await inTestMode(tx)) return [];
     const out: DepositReminder[] = [];
     for (const g of groups) {
       const schedule = (await tx.query<{ id: string; due_date: string; amount: string; reminded_at: Date | null }>("select id, to_char(due_date, 'YYYY-MM-DD') as due_date, amount, reminded_at from group_deposits where group_id = $1", [g.id])).rows;
@@ -538,7 +572,7 @@ export async function remindGroupDeposits(pool: Pool, schema: string): Promise<D
       const status = depositStatus(schedule.map((d) => ({ id: d.id, dueDate: d.due_date, amount: Number(d.amount) })), paid, g.today);
       for (const s of status.filter((x) => x.overdue && !schedule.find((d) => d.id === x.id)!.reminded_at)) {
         await tx.query("update group_deposits set reminded_at = now() where id = $1", [s.id]);
-        const mailed = !!g.email && !test;
+        const mailed = !!g.email;
         if (mailed) {
           const amount = `${s.open.toFixed(2)} ${g.currency.trim()}`;
           await tx.query("insert into mail_outbox (to_email, subject, body, property_id, group_id) values ($1, $2, $3, $4, $5)", [
@@ -600,7 +634,7 @@ export interface GroupArrivalView {
 
 /** The group check-in screen: every reservation of the arrival with its room. */
 export async function groupArrival(pool: Pool, schema: string, holdingId: string, viewer: Viewer): Promise<GroupArrivalView> {
-  return read(pool, schema, async (tx) => {
+  return withTenant(pool, schema, async (tx) => {
     const h = await holdingOf(tx, holdingId);
     need(viewer, "view_groups", h.group.property_id);
     const p = (await tx.query<{ country: string; d: string }>("select country, to_char(business_date, 'YYYY-MM-DD') as d from properties where id = $1", [h.group.property_id])).rows[0]!;
@@ -673,7 +707,7 @@ export async function assignGroupRooms(pool: Pool, schema: string, holdingId: st
 
 /** Check in the arrival's reservations, chosen or all: each on its own, so one not ready leaves the others in. */
 export async function checkInGroup(pool: Pool, schema: string, holdingId: string, reservationIds: string[] | null, viewer: Viewer): Promise<{ checkedIn: number; failed: { reservationId: string; guest: string; error: string }[] }> {
-  const list = await read(pool, schema, async (tx) => {
+  const list = await withTenant(pool, schema, async (tx) => {
     const h = await holdingOf(tx, holdingId);
     need(viewer, "check_in", h.group.property_id);
     return (await tx.query<{ id: string; guest: string }>(
