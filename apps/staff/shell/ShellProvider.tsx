@@ -1,5 +1,6 @@
 "use client";
 
+import type { Module, TenantAction } from "@hoteloftware/domain";
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { Language, Theme } from "@hoteloftware/domain";
@@ -22,15 +23,14 @@ export interface ShellProps {
   language: Language;
   theme: Theme;
   accent: { id: string; light: string; dark: string };
-  canManageTenant: boolean;
   /** Property-level actions the user holds at at least one property. */
   propertyActions: string[];
   /** The platform's support staff see the support console (ticket 93). */
   supportStaff?: boolean;
   /** Tenant-level actions the user holds (some are the Owner's alone). */
-  tenantActions?: string[];
+  tenantActions: TenantAction[];
   /** Modules on (or readable) at a property in view: their screens show (ticket 88). */
-  activeModules?: string[];
+  activeModules: Module[];
 }
 
 type Action =

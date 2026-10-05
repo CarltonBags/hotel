@@ -41,9 +41,8 @@ export function moduleState(periods: ModulePeriod[], module: Module, today: stri
   return today <= last.offAt ? "ending" : "readable";
 }
 
-/** Whether a Module's screens show: while on or ending, and read only once off. */
+/** Whether a Module's screens show: while on or ending, and (read only) once off. */
 export const moduleVisible = (s: ModuleState) => s !== "never";
-export const moduleWritable = (s: ModuleState) => s === "on" || s === "ending";
 
 /** Switched off, a Module runs to the end of the month. */
 export function monthEnd(today: string): string {
@@ -63,7 +62,7 @@ export interface PriceList {
   modules: Record<Module, { unit: "room" | "property"; amount: number }>;
   /** Usage billed at cost plus this share. */
   handling: number;
-  /** Discount on base and Modules for yearly prepayment. */
+  /** Discount on the base for yearly prepayment. */
   yearlyDiscount: number;
   /** VAT rate of the invoice, percent. */
   vatRate: number;
@@ -83,27 +82,39 @@ export interface SubscriptionInput {
   /** Usage of the month before, at cost. */
   usage: { kind: string; quantity: number; cost: number }[];
   prices: PriceList;
-  yearly: boolean;
+  /** Yearly prepayment of the base from this month on (a month's 1st): invoiced 12 months ahead each year, with the discount. */
+  yearlyFrom: string | null;
+}
+
+/** Whole months from one month's 1st to another's. */
+function monthsBetween(from: string, to: string): number {
+  return (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5, 7)) - Number(from.slice(5, 7));
 }
 
 const MODULE_LABEL: Record<Module, string> = { channel: "Channel connection", guest_portal: "Guest portal and self check-in", point_of_sale: "Point of sale with spa", groups: "Groups", whatsapp: "WhatsApp" };
 
-/** The invoice lines of one Legal Entity for a month: rooms per property, each Module billed, usage in arrears, the yearly discount. */
+/**
+ * The invoice lines of one Legal Entity for a month: rooms per property (or,
+ * prepaid yearly, twelve months of them once a year with the discount and
+ * none in the months between), each Module billed, usage in arrears.
+ */
 export function subscriptionLines(input: SubscriptionInput): SubscriptionLine[] {
   const lines: SubscriptionLine[] = [];
   const month = input.monthStart.slice(0, 7);
   const line = (description: string, quantity: number, unitNet: number) => lines.push({ description, quantity, unitNet: roundMoney(unitNet), net: roundMoney(quantity * unitNet) });
+  const term = input.yearlyFrom && input.monthStart >= input.yearlyFrom ? monthsBetween(input.yearlyFrom, input.monthStart) % 12 : null;
   for (const p of input.properties) {
-    line(`${p.name}: rooms on ${input.monthStart} · ${month}`, p.rooms, input.prices.base_room);
+    if (term === null) line(`${p.name}: rooms on ${input.monthStart} · ${month}`, p.rooms, input.prices.base_room);
+    // the prepaid year: rooms on its first day, twelve months, the discount on them
+    else if (term === 0) {
+      line(`${p.name}: rooms on ${input.monthStart} · 12 months from ${month}`, p.rooms * 12, input.prices.base_room);
+      if (input.prices.yearlyDiscount > 0) line(`${p.name}: yearly prepayment discount ${input.prices.yearlyDiscount} %`, 1, -roundMoney((p.rooms * 12 * input.prices.base_room * input.prices.yearlyDiscount) / 100));
+    }
     const billed = [...new Set(p.modules.filter((m) => moduleBilled(m, input.monthStart)).map((m) => m.module))];
     for (const m of billed) {
       const price = input.prices.modules[m];
       line(`${p.name}: ${MODULE_LABEL[m]} · ${month}`, price.unit === "room" ? p.rooms : 1, price.amount);
     }
-  }
-  if (input.yearly && input.prices.yearlyDiscount > 0) {
-    const subtotal = lines.reduce((s, l) => s + l.net, 0);
-    line(`Yearly prepayment discount ${input.prices.yearlyDiscount} %`, 1, -roundMoney((subtotal * input.prices.yearlyDiscount) / 100));
   }
   const previous = addDays(input.monthStart, -1).slice(0, 7);
   const byKind = new Map<string, { quantity: number; cost: number }>();

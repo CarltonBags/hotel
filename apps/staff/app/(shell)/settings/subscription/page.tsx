@@ -3,7 +3,7 @@ import { ActionForm } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
-import { paymentDetailsAction } from "./actions";
+import { directDebitAction, yearlyAction } from "./actions";
 
 /** The subscription (ticket 88), the Owner's alone: payment details and the monthly invoices. */
 export default async function SubscriptionPage() {
@@ -19,20 +19,24 @@ export default async function SubscriptionPage() {
         <h2 className="font-medium">{m["sub.payment"]}</h2>
         <p className="text-ink-60">
           {sub.paymentMethod === "sepa" && sub.mandateReference ? `${m["sub.sepa"]} · ${sub.accountHolder} · ${sub.mandateReference}${sub.accountLast4 ? ` · …${sub.accountLast4}` : ""}` : sub.paymentMethod === "transfer" ? m["sub.transfer"] : m["sub.none"]}
-          {sub.yearly ? ` · ${m["sub.yearly"]}` : ""}
+          {sub.yearlyFrom ? ` · ${m["sub.yearly"]}` : ""}
         </p>
-        <ActionForm action={paymentDetailsAction} submitLabel={m["action.save"]} className="grid gap-2">
-          <select name="method" defaultValue={sub.paymentMethod} className={input}>
-            <option value="sepa">{m["sub.sepa"]}</option>
-            <option value="transfer">{m["sub.transfer"]}</option>
-          </select>
-          <input name="accountHolder" defaultValue={sub.accountHolder ?? ""} placeholder={m["sub.holder"]} className={input} />
-          <input name="mandateReference" defaultValue={sub.mandateReference ?? ""} placeholder={m["sub.mandate"]} className={input} />
-          <input name="last4" defaultValue={sub.accountLast4 ?? ""} placeholder={m["sub.last4"]} inputMode="numeric" maxLength={4} className={`${input} w-32`} />
+        {sub.paymentMethod === "transfer" ? (
+          <p>{m["sub.transferSet"]}</p>
+        ) : (
+          <ActionForm action={directDebitAction} submitLabel={m["action.save"]} className="grid gap-2">
+            <input name="accountHolder" defaultValue={sub.accountHolder ?? ""} placeholder={m["sub.holder"]} className={input} />
+            <input name="mandateReference" defaultValue={sub.mandateReference ?? ""} placeholder={m["sub.mandate"]} className={input} />
+            <input name="last4" defaultValue={sub.accountLast4 ?? ""} placeholder={m["sub.last4"]} inputMode="numeric" maxLength={4} className={`${input} w-32`} />
+            <p className="text-xs text-ink-60">{m["sub.cardNote"]}</p>
+          </ActionForm>
+        )}
+        <ActionForm action={yearlyAction} submitLabel={m["action.save"]} className="flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-2">
-            <input type="checkbox" name="yearly" defaultChecked={sub.yearly} /> {m["sub.yearlyChoice"]}
+            <input type="hidden" name="yearly" value="off" />
+            <input type="checkbox" name="yearly" defaultChecked={sub.yearlyFrom !== null} /> {m["sub.yearlyChoice"]}
           </label>
-          <p className="text-xs text-ink-60">{m["sub.cardNote"]}</p>
+          {sub.yearlyFrom ? <span className="text-xs text-ink-60">{m["sub.yearlyFrom"]} {sub.yearlyFrom}</span> : null}
         </ActionForm>
       </section>
       <section className="grid gap-2 rounded-2xl bg-surface-2 p-4 text-sm">

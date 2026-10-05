@@ -25,10 +25,10 @@ export function Shell({ children, banner }: { children: React.ReactNode; banner?
     () =>
       MODULES.filter(
         (m) =>
-          (!m.requires || (tenantActions ?? []).includes(m.requires)) &&
+          (!m.requires || (tenantActions as string[]).includes(m.requires)) &&
           (!m.requiresProperty || propertyActions.includes(m.requiresProperty)) &&
           (!m.requiresSupportStaff || supportStaff) &&
-          (!m.requiresModule || (activeModules ?? []).includes(m.requiresModule)),
+          (!m.requiresModule || activeModules.includes(m.requiresModule)),
       ),
     [tenantActions, propertyActions, supportStaff, activeModules],
   );

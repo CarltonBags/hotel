@@ -64,7 +64,7 @@ export default async function ModulesPage() {
                           </label>
                         </ActionForm>
                       ) : null}
-                      {x.state === "on" && x.checklist.length ? (
+                      {(x.state === "on" || x.state === "ending") && x.checklist.length ? (
                         <ul className="grid gap-1" data-checklist>
                           {x.checklist.map((c) => (
                             <li key={c.step}>

@@ -5,7 +5,7 @@ import { isSupportConsoleUser } from "@/lib/support";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { ActionForm, Field, Select } from "@/components/form-fields";
-import { reportIncidentAction, scheduleMaintenanceAction, setPriceAction, updateIncidentAction } from "./actions";
+import { bankTransferAction, reportIncidentAction, scheduleMaintenanceAction, setPriceAction, updateIncidentAction } from "./actions";
 import { OpenTenant } from "./open-tenant";
 
 /** The support console (ticket 93): open a customer's tenant with a reason; run the status page. */
@@ -54,6 +54,15 @@ export default async function SupportPage() {
           <Select label={m["support.priceUnit"]} name="unit" options={[{ value: "room", label: "room" }, { value: "property", label: "property" }, { value: "percent", label: "percent" }]} />
           <Field label={m["support.priceAmount"]} name="amount" />
           <Field label={m["support.priceFrom"]} name="validFrom" type="date" />
+        </ActionForm>
+      </section>
+      <section aria-label={m["support.transfer"]} className={section}>
+        <h2 className="font-medium">{m["support.transfer"]}</h2>
+        <ActionForm action={bankTransferAction} submitLabel={m["action.save"]} pendingLabel={m["action.saving"]} className="flex flex-wrap items-end gap-2">
+          <Select label={m["support.tenant"]} name="tenantId" options={tenants.map((t) => ({ value: t.id, label: `${t.name} (${t.slug})` }))} />
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="on" /> {m["support.transferOn"]}
+          </label>
         </ActionForm>
       </section>
       <section aria-label={m["support.maintenance"]} className={section}>

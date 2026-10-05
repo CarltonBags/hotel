@@ -1,20 +1,34 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { setPaymentDetails } from "@hoteloftware/db";
+import { setDirectDebit, setYearly } from "@hoteloftware/db";
+import { todayIn } from "@hoteloftware/domain";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { field, formAction, type FormState } from "@/lib/form";
 
-/** The Owner changes how the subscription is paid (ticket 88): SEPA mandate, card at the provider, or transfer by arrangement. */
-export async function paymentDetailsAction(_prev: FormState, formData: FormData): Promise<FormState> {
+async function owner() {
+  const { tenant, session } = await authorize("manage_subscription");
+  if (session.support) throw new Error("Payment details are the Owner's");
+  return { tenant, userId: session.user.id };
+}
+
+/** The Owner's SEPA direct debit (ticket 88): the mandate reference and the last digits; the account stays with the provider. */
+export async function directDebitAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
-    const { tenant, session } = await authorize("manage_subscription");
-    if (session.support) throw new Error("Payment details are the Owner's");
-    // a card is added with the payment provider, not typed in here
-    const method = field(formData, "method") === "transfer" ? "transfer" : "sepa";
+    const { tenant, userId } = await owner();
     const last4 = field(formData, "last4");
-    await setPaymentDetails(pool(), tenant.id, { method, accountHolder: field(formData, "accountHolder"), mandateReference: field(formData, "mandateReference"), ...(last4 ? { last4 } : {}), yearly: formData.get("yearly") === "on" }, session.user.id);
+    await setDirectDebit(pool(), tenant.id, { accountHolder: field(formData, "accountHolder"), mandateReference: field(formData, "mandateReference"), ...(last4 ? { last4 } : {}) }, userId);
+    revalidatePath("/settings/subscription");
+    return { ok: true, message: "Saved." };
+  });
+}
+
+/** Yearly prepayment from next month, or back to monthly at the end of a prepaid year. */
+export async function yearlyAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const { tenant, userId } = await owner();
+    await setYearly(pool(), tenant.id, formData.get("yearly") === "on", todayIn("Europe/Berlin"), userId);
     revalidatePath("/settings/subscription");
     return { ok: true, message: "Saved." };
   });

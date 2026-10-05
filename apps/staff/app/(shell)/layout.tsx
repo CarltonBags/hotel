@@ -111,7 +111,6 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       language={shell.language}
       theme={shell.theme}
       accent={shell.accent}
-      canManageTenant={can(actor, "manage_tenant_settings")}
       propertyActions={propertyActions}
       supportStaff={(await isSupportConsoleUser()) !== null}
       tenantActions={(Object.keys(TENANT_ACTIONS) as TenantAction[]).filter((a) => can(actor, a))}

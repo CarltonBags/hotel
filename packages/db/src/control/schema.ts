@@ -348,6 +348,7 @@ export const priceList = control.table(
     validFrom: date("valid_from").notNull(),
     unit: text("unit").notNull(),
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    setBy: text("set_by"),
   },
   (t) => [primaryKey({ columns: [t.key, t.validFrom] }), check("price_list_unit_check", sql`${t.unit} in ('room', 'property', 'percent')`), check("price_list_amount_check", sql`${t.amount} >= 0`)],
 );
@@ -375,7 +376,7 @@ export const subscriptions = control.table(
   "subscriptions",
   {
     tenantId: uuid("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
-    yearly: boolean("yearly").notNull().default(false),
+    yearlyFrom: date("yearly_from"),
     paymentMethod: text("payment_method").notNull().default("sepa"),
     accountHolder: text("account_holder"),
     mandateReference: text("mandate_reference"),

@@ -38,7 +38,7 @@ describe("the monthly invoice", () => {
       ],
       usage: [{ kind: "SMS", quantity: 100, cost: 7.5 }, { kind: "SMS", quantity: 20, cost: 1.5 }],
       prices,
-      yearly: false,
+      yearlyFrom: null,
     });
     expect(lines.map((l) => [l.description.split(" · ")[0], l.quantity, l.unitNet, l.net])).toEqual([
       ["Berlin: rooms on 2026-11-01", 22, 4, 88],
@@ -48,8 +48,12 @@ describe("the monthly invoice", () => {
     ]);
   });
 
-  it("yearly prepayment: the discount on base and Modules, not on usage", () => {
-    const lines = subscriptionLines({ monthStart: "2026-11-01", properties: [{ name: "Berlin", rooms: 10, modules: [] }], usage: [{ kind: "SMS", quantity: 10, cost: 1 }], prices, yearly: true });
-    expect(lines.map((l) => l.net)).toEqual([40, -4, 1.1]);
+  it("yearly prepayment: twelve months of rooms once a year with the discount, none between; Modules and usage monthly", () => {
+    const run = (monthStart: string) => subscriptionLines({ monthStart, properties: [{ name: "Berlin", rooms: 10, modules: [{ module: "groups", onSince: "2026-01-10", offAt: null }] }], usage: [{ kind: "SMS", quantity: 10, cost: 1 }], prices, yearlyFrom: "2026-11-01" });
+    expect(run("2026-11-01").map((l) => [l.quantity, l.net])).toEqual([[120, 480], [1, -48], [1, 19], [1, 1.1]]);
+    expect(run("2027-03-01").map((l) => l.net)).toEqual([19, 1.1]);
+    expect(run("2027-11-01").map((l) => l.net)).toEqual([480, -48, 19, 1.1]);
+    // before the yearly term: monthly
+    expect(run("2026-10-01")[0]!.net).toBe(40);
   });
 });

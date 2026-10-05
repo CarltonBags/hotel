@@ -6,7 +6,10 @@ import { pool } from "@/lib/db";
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   let tenant;
   try {
-    ({ tenant } = await authorize("manage_subscription"));
+    const p = await authorize("manage_subscription");
+    // the Owner's papers: not for a support access
+    if (p.session.support) throw new Error();
+    tenant = p.tenant;
   } catch {
     return new Response("Not found", { status: 404 });
   }

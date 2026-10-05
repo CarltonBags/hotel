@@ -7,7 +7,7 @@ import { createLegalEntity } from "../src/tenant/legal-entities";
 import { createProperty } from "../src/tenant/properties";
 import { createRoomType, createRooms } from "../src/tenant/rooms";
 import { propertyModules, switchModuleOff, switchModuleOn, setModuleStep } from "../src/tenant/modules";
-import { issueSubscriptionInvoices, listSubscriptionInvoices, recordUsage, setPaymentDetails, setPrice, subscriptionInvoiceFile } from "../src/control/subscription";
+import { issueSubscriptionInvoices, listSubscriptionInvoices, recordUsage, setDirectDebit, setPrice, setYearly, subscriptionInvoiceFile } from "../src/control/subscription";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -37,7 +37,7 @@ describe("Modules and subscription billing", () => {
     }
     await pool.query("insert into control.platform_seller (name, address_line1, postal_code, city, country, vat_id, iban, email, phone) values ('Hoteloftware GmbH', 'Torstraße 1', '10119', 'Berlin', 'DE', 'DE999999999', 'DE89370400440532013000', 'billing@hoteloftware.example', '+49 30 1234567')");
     for (const [key, unit, amount] of [["base_room", "room", 4], ["module:channel", "room", 1.5], ["module:guest_portal", "room", 1], ["module:point_of_sale", "property", 49], ["module:groups", "property", 19], ["module:whatsapp", "property", 29], ["usage_handling", "percent", 10], ["yearly_discount", "percent", 10], ["vat", "percent", 19]] as const) {
-      await setPrice(pool, { key, unit, amount, validFrom: "2026-01-01" });
+      await setPrice(pool, { key, unit, amount, validFrom: "2026-01-01" }, "user_sam", "2026-01-01");
     }
   });
 
@@ -61,7 +61,7 @@ describe("Modules and subscription billing", () => {
 
   it("the monthly invoice of a two-property tenant lists rooms, Modules and usage", async () => {
     await switchModuleOn(pool, s(), zurich, "channel", owner, "2026-10-20");
-    await setPaymentDetails(pool, tenant.id, { method: "sepa", accountHolder: "Alpha GmbH", mandateReference: "HS-MANDATE-1", last4: "3000", yearly: false }, owner);
+    await setDirectDebit(pool, tenant.id, { accountHolder: "Alpha GmbH", mandateReference: "HS-MANDATE-1", last4: "3000" }, owner);
     await recordUsage(pool, tenant.id, "SMS", 120, 9, new Date("2026-10-15T10:00:00Z"));
     await recordUsage(pool, tenant.id, "SMS", 5, 1, new Date("2026-11-02T10:00:00Z"));
     const issued = await issueSubscriptionInvoices(pool, tenant, "2026-11-01");
@@ -84,8 +84,17 @@ describe("Modules and subscription billing", () => {
     expect((await subscriptionInvoiceFile(pool, tenant.id, row!.id, "pdf") as Buffer).subarray(0, 5).toString()).toBe("%PDF-");
   });
 
-  it("card details are a provider token and the last digits, never the number", async () => {
-    await expect(setPaymentDetails(pool, tenant.id, { method: "card", yearly: false }, owner)).rejects.toThrow(/payment provider/);
-    await expect(setPaymentDetails(pool, tenant.id, { method: "card", cardToken: "pm_123", last4: "4242 4242", yearly: false }, owner)).rejects.toThrow(/Last four/);
+  it("prices: unit by kind, an amount, from today on", async () => {
+    await expect(setPrice(pool, { key: "vat", unit: "room", amount: 19, validFrom: "2027-01-01" }, "user_sam", "2026-10-05")).rejects.toThrow(/priced percent/);
+    await expect(setPrice(pool, { key: "base_room", unit: "room", amount: Number.NaN, validFrom: "2027-01-01" }, "user_sam", "2026-10-05")).rejects.toThrow(/amount/);
+    await expect(setPrice(pool, { key: "base_room", unit: "room", amount: 5, validFrom: "2026-09-01" }, "user_sam", "2026-10-05")).rejects.toThrow(/today or later/);
+  });
+
+  it("account details: a mandate and the last digits only; yearly prepayment runs a whole year", async () => {
+    await expect(setDirectDebit(pool, tenant.id, { accountHolder: "Alpha GmbH", mandateReference: "M1", last4: "DE89 3704" }, owner)).rejects.toThrow(/Last four/);
+    await setYearly(pool, tenant.id, true, "2026-11-15", owner);
+    expect((await pool.query("select to_char(yearly_from, 'YYYY-MM-DD') as f from control.subscriptions where tenant_id = $1", [tenant.id])).rows[0].f).toBe("2026-12-01");
+    await expect(setYearly(pool, tenant.id, false, "2027-03-10", owner)).rejects.toThrow(/runs to its end/);
+    await setYearly(pool, tenant.id, false, "2027-11-10", owner);
   });
 });

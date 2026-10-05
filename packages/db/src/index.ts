@@ -459,4 +459,4 @@ export {
 export { getBudget, setBudget } from "./tenant/budget";
 export { BUILDER_ROW_LIMIT, RAW_ROW_LIMIT, deleteSavedReport, listSavedReports, runBuilder, saveReport, type SavedReport } from "./tenant/report-builder";
 export { modulePeriods, propertyModules, setModuleStep, switchModuleOff, switchModuleOn, type PropertyModule } from "./tenant/modules";
-export { getSubscription, issueSubscriptionInvoices, listSubscriptionInvoices, pricesOn, recordUsage, setPaymentDetails, setPrice, subscriptionInvoiceFile, type Subscription, type SubscriptionInvoiceRow } from "./control/subscription";
+export { getSubscription, issueSubscriptionInvoices, listSubscriptionInvoices, pricesOn, recordUsage, setBankTransfer, setDirectDebit, setPrice, setYearly, subscriptionInvoiceFile, type Subscription, type SubscriptionInvoiceRow } from "./control/subscription";

@@ -5,7 +5,9 @@ create table control.price_list (
   primary key (key, valid_from),
   -- per room or per property and month, a percentage, or a VAT rate
   unit text not null constraint price_list_unit_check check (unit in ('room', 'property', 'percent')),
-  amount numeric(12, 2) not null constraint price_list_amount_check check (amount >= 0)
+  amount numeric(12, 2) not null constraint price_list_amount_check check (amount >= 0),
+  -- who of our staff set it (nobody: seeded with the platform)
+  set_by text
 );
 
 -- who invoices the customers: the platform's own company (one row)
@@ -28,7 +30,8 @@ create table control.platform_seller (
 -- the customer's terms and how they pay; account details stay with the payment provider (a mandate or card token and the last digits only)
 create table control.subscriptions (
   tenant_id uuid primary key references control.tenants(id) on delete cascade,
-  yearly boolean not null default false,
+  -- yearly prepayment of the base from this month's 1st on; null pays monthly
+  yearly_from date,
   payment_method text not null default 'sepa' constraint subscriptions_method_check check (payment_method in ('sepa', 'card', 'transfer')),
   account_holder text,
   mandate_reference text,
