@@ -19,7 +19,7 @@ import { assignRoom } from "../src/tenant/reservation-changes";
 import { checkIn, postServiceCharge } from "../src/tenant/folios";
 import { onboardPaymentAccount, refreshPaymentAccount } from "../src/tenant/payments";
 import { portalKeys } from "../src/tenant/portal";
-import { cardGuaranteeOf, chargeStoredCard, expressCheckout, expressCheckoutView, finishCardSetup, finishPortalPayment, startCardSetup, startPortalPayment } from "../src/tenant/portal-payments";
+import { cardGuaranteeOf, chargeStoredCard, claimDeclineNotice, expressCheckout, expressCheckoutView, finishCardSetup, finishPortalPayment, startCardSetup, startPortalPayment } from "../src/tenant/portal-payments";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -84,17 +84,38 @@ describe("Portal payments and express checkout", () => {
     expect((await pool.query(`select status from ${s()}.payments where id = $1`, [left.paymentId])).rows[0].status).toBe("failed");
   });
 
+  it("two payments started at once never both stay open: the guest cannot pay twice", async () => {
+    await Promise.allSettled([startPortalPayment(pool, s(), provider, stayKey, { saveCard: false }), startPortalPayment(pool, s(), provider, stayKey, { saveCard: false })]);
+    const open = await pool.query(`select 1 from ${s()}.payments where reservation_id = $1 and status = 'pending'`, [stayId]);
+    expect(open.rows).toHaveLength(1);
+  });
+
+  it("before arrival the guest pays what the Payment Policy asks ahead, with its Deposit Invoice", async () => {
+    await pool.query(`update ${s()}.payment_policies set kind = 'deposit_percent', deposit_percent = 30`);
+    const p = await startPortalPayment(pool, s(), provider, key, { saveCard: false });
+    expect(p.amount).toBe(60);
+    await provider.simulateOnline(account, (await pool.query(`select provider_intent_id from ${s()}.payments where id = $1`, [p.paymentId])).rows[0].provider_intent_id, "succeed");
+    expect((await finishPortalPayment(pool, s(), provider, key, p.paymentId)).status).toBe("succeeded");
+    const inv = (await pool.query(`select i.kind from ${s()}.payments pa join ${s()}.invoices i on i.id = pa.invoice_id where pa.id = $1`, [p.paymentId])).rows[0];
+    expect(inv?.kind).toBe("deposit");
+    await expect(startPortalPayment(pool, s(), provider, key, { saveCard: false })).rejects.toThrow(/Nothing is due/);
+    await pool.query(`update ${s()}.payment_policies set kind = 'card_guarantee', deposit_percent = null`);
+  });
+
   it("the guest pays the balance with authentication; a decline is told once; a kept card secures the stay", async () => {
     const first = await startPortalPayment(pool, s(), provider, stayKey, { saveCard: true });
     expect(first.clientSecret).toMatch(/_secret$/);
     await provider.simulateOnline(account, (await pool.query(`select provider_intent_id from ${s()}.payments where id = $1`, [first.paymentId])).rows[0].provider_intent_id, "decline");
     const declined = await finishPortalPayment(pool, s(), provider, stayKey, first.paymentId);
-    expect(declined).toMatchObject({ status: "failed", error: "Your card was declined", declinedNow: true });
-    expect((await finishPortalPayment(pool, s(), provider, stayKey, first.paymentId)).declinedNow).toBe(false);
+    expect(declined).toMatchObject({ status: "failed", error: "Your card was declined" });
+    // the desk is told by whoever sees it first, once
+    const told = await Promise.all([claimDeclineNotice(pool, s(), first.paymentId), claimDeclineNotice(pool, s(), first.paymentId)]);
+    expect(told.filter(Boolean)).toHaveLength(1);
+    expect((await finishPortalPayment(pool, s(), provider, stayKey, first.paymentId)).status).toBe("failed");
     const second = await startPortalPayment(pool, s(), provider, stayKey, { saveCard: true });
     await provider.simulateOnline(account, (await pool.query(`select provider_intent_id from ${s()}.payments where id = $1`, [second.paymentId])).rows[0].provider_intent_id, "succeed");
     expect((await finishPortalPayment(pool, s(), provider, stayKey, second.paymentId)).status).toBe("succeeded");
-    expect(await cardGuaranteeOf(pool, s(), stayId)).toMatchObject({ brand: "visa", last4: "4242", source: "portal" });
+    expect(await cardGuaranteeOf(pool, s(), stayId)).toMatchObject({ brand: "visa", last4: "4242" });
   });
 
   it("staff charge the stored card later without the guest", async () => {

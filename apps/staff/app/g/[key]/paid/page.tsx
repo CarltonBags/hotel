@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { finishPortalPayment, listTenantUsers } from "@hoteloftware/db";
-import { can, portalLanguage } from "@hoteloftware/domain";
-import { notifyStaff } from "@hoteloftware/events";
+import { claimDeclineNotice, finishPortalPayment } from "@hoteloftware/db";
+import { portalLanguage } from "@hoteloftware/domain";
+import { notifyPortalDecline } from "@hoteloftware/events";
 import { paymentProvider } from "@hoteloftware/payments";
 import { portalText } from "@/i18n/portal";
 import { pool } from "@/lib/db";
@@ -21,10 +21,9 @@ export default async function PaidPage({ params, searchParams }: { params: Promi
   try {
     const r = await finishPortalPayment(pool(), tenant!.schemaName, paymentProvider(), key, String(q.id ?? ""));
     message = r.status === "succeeded" ? t("paid") : r.status === "failed" ? t("declined", { reason: r.error ?? "" }) : t("pending");
-    if (r.declinedNow && tenant) {
-      const desk = (await listTenantUsers(pool(), tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "take_payments", r.propertyId));
-      await notifyStaff(pool(), tenant, desk, { kind: "payments.portal_declined", title: "Online payment declined in the Guest Portal", body: r.error ?? "", href: `/reservations/${r.reservationId}`, propertyId: r.propertyId }).catch(() => undefined);
-    }
+    // whoever sees the decline first tells the desk (this page or the provider's webhook), once
+    const declined = r.status === "failed" ? await claimDeclineNotice(pool(), tenant!.schemaName, String(q.id)) : null;
+    if (declined) await notifyPortalDecline(pool(), tenant!, { ...declined, reason: declined.error ?? "" }).catch((err) => console.error("decline not told", err));
   } catch {
     message = portalText(language, "notFound");
   }

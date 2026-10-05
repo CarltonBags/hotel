@@ -9,8 +9,8 @@ import { checkoutAction, simulateAction, startCardAction, startPayAction, type P
 
 type StripeJs = {
   elements: (o: { clientSecret: string; appearance?: object }) => { create: (t: string) => { mount: (el: HTMLElement) => void } };
-  confirmPayment: (o: { elements: unknown; confirmParams: { return_url: string } }) => Promise<{ error?: { message?: string } }>;
-  confirmSetup: (o: { elements: unknown; confirmParams: { return_url: string } }) => Promise<{ error?: { message?: string } }>;
+  confirmPayment: (o: { elements: unknown; confirmParams: { return_url: string } }) => Promise<{ error?: { type?: string; message?: string } }>;
+  confirmSetup: (o: { elements: unknown; confirmParams: { return_url: string } }) => Promise<{ error?: { type?: string; message?: string } }>;
 };
 
 /** Stripe.js from Stripe, with the hotel's connected account: card data stays between the guest's browser and Stripe. */
@@ -32,7 +32,7 @@ async function loadStripe(publishableKey: string, accountId: string): Promise<St
 export function PayPanel({ portalKey, language, amountText, due, canStore }: { portalKey: string; language: PortalLanguage; amountText: string; due: boolean; canStore: boolean }) {
   const t = (k: Parameters<typeof portalText>[1], v?: Record<string, string | number>) => portalText(language, k, v);
   const router = useRouter();
-  const [keep, setKeep] = useState(true);
+  const [keep, setKeep] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState<{ kind: "payment" | "setup"; start: Extract<PayStart, { ok: true }>; stripe: StripeJs | null; elements: unknown } | null>(null);
@@ -63,13 +63,15 @@ export function PayPanel({ portalKey, language, amountText, due, canStore }: { p
     const url = back(started.kind, started.start.id);
     const r = started.kind === "payment" ? await started.stripe.confirmPayment({ elements: started.elements, confirmParams: { return_url: url } }) : await started.stripe.confirmSetup({ elements: started.elements, confirmParams: { return_url: url } });
     setBusy(false);
+    // a card the bank refused: the payment is settled as declined (and the desk told) on the result page
+    if (r.error?.type === "card_error" && started.kind === "payment") return router.push(url.replace(window.location.origin, ""));
     if (r.error) setError(r.error.message ?? "The card was not accepted");
   }
 
   async function simulate(outcome: "succeed" | "decline") {
     if (!started) return;
     setBusy(true);
-    await simulateAction(started.start.accountId, started.kind, started.start.clientSecret, outcome);
+    await simulateAction(portalKey, started.kind, started.start.id, outcome);
     router.push(back(started.kind, started.start.id).replace(window.location.origin, ""));
   }
 
@@ -119,31 +121,25 @@ export function PayPanel({ portalKey, language, amountText, due, canStore }: { p
   );
 }
 
-/** Express checkout: with nothing due, check out (alone where the property allows it). */
+/** Express Checkout: with nothing due, check out (alone where the property allows it); the page then shows the outcome. */
 export function CheckoutButton({ portalKey, language }: { portalKey: string; language: PortalLanguage }) {
-  const [result, setResult] = useState<Awaited<ReturnType<typeof checkoutAction>> | null>(null);
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const t = (k: Parameters<typeof portalText>[1]) => portalText(language, k);
-  if (result?.ok) {
-    return result.checkedOut ? (
-      <div className="grid gap-1" data-checked-out>
-        <p>{t("checkedOutDone")}</p>
-        {result.invoices.map((i) => (
-          <a key={i.id} href={`/g/${portalKey}/invoice/${i.id}`} className="underline">
-            {i.number}
-          </a>
-        ))}
-      </div>
-    ) : (
-      <p data-asked-desk>{t("askedDesk")}</p>
-    );
+  async function checkout() {
+    setBusy(true);
+    const r = await checkoutAction(portalKey);
+    setBusy(false);
+    if (r.ok) router.refresh();
+    else setError(r.error);
   }
   return (
     <div className="grid gap-2">
-      <button type="button" disabled={busy} onClick={async () => (setBusy(true), setResult(await checkoutAction(portalKey)), setBusy(false))} className={guestButton} data-checkout>
+      <button type="button" disabled={busy} onClick={() => void checkout()} className={guestButton} data-checkout>
         {t("checkoutNow")}
       </button>
-      {result && !result.ok ? <p className="text-sm text-red-300">{result.error}</p> : null}
+      {error ? <p className="text-sm text-red-300">{error}</p> : null}
     </div>
   );
 }

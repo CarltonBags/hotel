@@ -234,8 +234,13 @@ export class StripePaymentProvider implements PaymentProvider {
       );
       return this.getIntent(accountId, pi.id);
     } catch (err) {
-      // a decline on a saved card comes back as an error carrying the intent
-      if (err instanceof Stripe.errors.StripeCardError && err.payment_intent?.id) return this.getIntent(accountId, err.payment_intent.id);
+      // a decline (or a bank asking for the guest, who is not there) comes back as an error carrying the intent, left
+      // waiting for another card: cancelled, so the charge is final, and told as failed with the bank's reason
+      if (err instanceof Stripe.errors.StripeCardError && err.payment_intent?.id) {
+        const intentId = err.payment_intent.id;
+        await this.call(() => this.stripe.paymentIntents.cancel(intentId, {}, this.on(accountId))).catch(() => undefined);
+        return { ...(await this.getIntent(accountId, intentId)), status: "failed", error: err.message };
+      }
       throw new ProviderError(err instanceof Error ? err.message : "The card could not be charged");
     }
   }

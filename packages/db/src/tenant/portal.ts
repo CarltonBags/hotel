@@ -5,7 +5,7 @@ import { postServiceChargeIn } from "./folios";
 import { loadGuest, updateGuestIn, type Guest } from "./guests";
 import { fileIn, setFileRetention } from "./files";
 import { queueGuestMessageIn, type PortalLinks } from "./messages";
-import { guestBalance } from "./payments";
+import { amountDueIn, cardGuaranteeIn } from "./payments";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -61,8 +61,8 @@ export interface PortalStay {
   extras: { id: string; name: string; price: number }[];
   added: { description: string; quantity: number; amount: number }[];
   emailConsent: boolean | null;
-  /** Open on the guest's own folios. */
-  balance: number;
+  /** What is due now: ahead of arrival by the Payment Policy, in house the open folio balance. */
+  amountDue: number;
   /** The card securing the stay (brand and last digits only). */
   guarantee: { brand: string | null; last4: string | null } | null;
 }
@@ -149,10 +149,10 @@ async function stayOf(tx: PoolClient, reservationId: string): Promise<PortalStay
   const { rows: extras } = await tx.query("select id, name, default_price from services where property_id = $1 and active and bookable_online and default_price > 0 order by name", [r.property_id]);
   const { rows: added } = await tx.query("select description, quantity, amount from charges where reservation_id = $1 and posted_by = $2 and voided_at is null order by posted_at", [reservationId, PORTAL_USER]);
   const { rows: consent } = await tx.query<{ granted: boolean }>("select granted from messaging_consents where guest_id = $1 and transport = 'email' order by at desc limit 1", [r.primary_guest_id]);
-  const { rows: card } = await tx.query<{ brand: string | null; last4: string | null }>("select brand, last4 from card_guarantees where reservation_id = $1 and status = 'secured' order by secured_at desc limit 1", [reservationId]);
+  const card = await cardGuaranteeIn(tx, reservationId);
   return {
-    balance: await guestBalance(tx, reservationId),
-    guarantee: card[0] ?? null,
+    amountDue: await amountDueIn(tx, reservationId),
+    guarantee: card ? { brand: card.brand, last4: card.last4 } : null,
     reservationId: r.id,
     portalKey: r.portal_key,
     confirmationNumber: r.confirmation_number,
@@ -174,10 +174,25 @@ async function stayOf(tx: PoolClient, reservationId: string): Promise<PortalStay
   };
 }
 
-async function reservationByKey(tx: PoolClient, key: string, opts: { lock?: boolean } = {}): Promise<{ id: string; property_id: string; primary_guest_id: string; status: string; arrival: string; departure: string; time_zone: string; country: string }> {
+export interface StayByKey {
+  id: string;
+  property_id: string;
+  primary_guest_id: string;
+  status: string;
+  arrival: string;
+  departure: string;
+  time_zone: string;
+  country: string;
+  business_date: string;
+  express_checkout_auto: boolean;
+}
+
+/** The stay a Portal Link opens, while the link is open; locked for a change with `lock`. */
+export async function reservationByKey(tx: PoolClient, key: string, opts: { lock?: boolean } = {}): Promise<StayByKey> {
   if (!KEY.test(key)) throw new Error("This link does not open anything");
-  const { rows } = await tx.query(
-    `select r.id, r.property_id, r.primary_guest_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, p.time_zone, p.country
+  const { rows } = await tx.query<StayByKey>(
+    `select r.id, r.property_id, r.primary_guest_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, p.time_zone, p.country,
+            to_char(coalesce(p.business_date, (now() at time zone p.time_zone)::date), 'YYYY-MM-DD') as business_date, p.express_checkout_auto
      from reservations r join properties p on p.id = r.property_id where r.portal_key = $1 ${opts.lock ? "for update of r" : ""}`,
     [key],
   );

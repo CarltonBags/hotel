@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { MAX_COMPANIONS, expressCheckoutView, portalView } from "@hoteloftware/db";
-import { extrasOpen, portalLanguage, type PortalLanguage } from "@hoteloftware/domain";
+import { cardLabel, extrasOpen, portalLanguage, type PortalLanguage } from "@hoteloftware/domain";
 import { headers } from "next/headers";
 import { portalText, type PortalKey } from "@/i18n/portal";
 import { pool } from "@/lib/db";
@@ -146,11 +146,11 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
         </Glass>
       ) : null}
 
-      {payable && (s.balance > 0 || !s.guarantee) ? (
+      {payable && (s.amountDue > 0 || !s.guarantee) ? (
         <Glass data-section="pay">
           <h2 className="text-xl font-semibold">{t("payTitle")}</h2>
-          {s.guarantee ? <p className="text-sm text-white/70">{t("cardOnFile", { card: [s.guarantee.brand, s.guarantee.last4 ? `•••• ${s.guarantee.last4}` : ""].filter(Boolean).join(" ") })}</p> : null}
-          <PayPanel portalKey={key} language={language} amountText={money(s.balance)} due={s.balance > 0} canStore={!s.guarantee} />
+          {s.guarantee ? <p className="text-sm text-white/70">{t("cardGuarantee", { card: cardLabel(s.guarantee.brand, s.guarantee.last4) })}</p> : null}
+          <PayPanel portalKey={key} language={language} amountText={money(s.amountDue)} due={s.amountDue > 0} canStore={!s.guarantee} />
         </Glass>
       ) : null}
 

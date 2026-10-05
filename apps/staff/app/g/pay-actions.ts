@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { expressCheckout, startCardSetup, startPortalPayment } from "@hoteloftware/db";
+import { expressCheckout, portalProviderRef, startCardSetup, startPortalPayment } from "@hoteloftware/db";
 import { FakePaymentProvider, paymentProvider } from "@hoteloftware/payments";
 import { pool } from "@/lib/db";
 import { currentTenant } from "@/lib/tenant";
@@ -37,22 +37,24 @@ export async function startCardAction(key: string): Promise<PayStart> {
   }
 }
 
-/** Development only (the stand-in provider): the guest's card answers, as the provider's form would. */
-export async function simulateAction(accountId: string, kind: "payment" | "setup", clientSecret: string, outcome: "succeed" | "decline"): Promise<void> {
+/** Development only (the stand-in provider): the guest's card answers, as the provider's form would; only for this stay's own payment or card. */
+export async function simulateAction(key: string, kind: "payment" | "setup", id: string, outcome: "succeed" | "decline"): Promise<void> {
   const provider = paymentProvider();
   if (!(provider instanceof FakePaymentProvider) || process.env.NODE_ENV === "production") throw new Error("Not available");
-  // the stand-in's client secret is its id with "_secret"
-  const id = clientSecret.replace(/_secret$/, "");
-  if (kind === "setup") await provider.simulateSetup(accountId, id, outcome);
-  else await provider.simulateOnline(accountId, id, outcome);
+  const t = await tenant();
+  const found = await portalProviderRef(pool(), t.schemaName, provider, key, kind, id);
+  if (!found) throw new Error("Not found");
+  if (kind === "setup") await provider.simulateSetup(found.accountId, found.ref, outcome);
+  else await provider.simulateOnline(found.accountId, found.ref, outcome);
 }
 
-export async function checkoutAction(key: string): Promise<{ ok: true; checkedOut: boolean; invoices: { id: string; number: string }[] } | { ok: false; error: string }> {
+/** Express Checkout; the page shows the outcome (the desk asked, or checked out with the invoices). */
+export async function checkoutAction(key: string): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const t = await tenant();
-    const r = await expressCheckout(pool(), t.schemaName, paymentProvider(), key);
+    await expressCheckout(pool(), t.schemaName, paymentProvider(), key);
     revalidatePath(`/g/${key}`);
-    return { ok: true, checkedOut: r.checkedOut, invoices: r.invoices.map((i) => ({ id: i.id, number: i.number })) };
+    return { ok: true };
   } catch (err) {
     return fail(err);
   }

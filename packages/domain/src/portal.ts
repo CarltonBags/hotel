@@ -1,3 +1,5 @@
+import { roundMoney } from "./money";
+import type { PaymentKind } from "./rates";
 import { addDays } from "./rates-grid";
 
 /**
@@ -37,4 +39,26 @@ export type PortalLanguage = (typeof PORTAL_LANGUAGES)[number];
 export function portalLanguage(asked: string | null | undefined, guest: string | null | undefined): PortalLanguage {
   for (const l of [asked, guest]) if (l && (PORTAL_LANGUAGES as readonly string[]).includes(l.slice(0, 2).toLowerCase())) return l.slice(0, 2).toLowerCase() as PortalLanguage;
   return "en";
+}
+
+/**
+ * Paying in the portal before arrival (ticket 41): what the stay's Payment
+ * Policy asks ahead (the whole stay, a share, or the first night), less what
+ * was received; a Card Guarantee or no policy asks for nothing ahead.
+ */
+export function depositDue(policy: { kind: PaymentKind; depositPercent: number | null }, nightTotals: number[], received: number): number {
+  const stay = nightTotals.reduce((s, n) => s + n, 0);
+  const ahead =
+    policy.kind === "full" ? stay : policy.kind === "deposit_percent" ? (stay * (policy.depositPercent ?? 0)) / 100 : policy.kind === "deposit_first_night" ? (nightTotals[0] ?? 0) : 0;
+  return Math.max(0, roundMoney(ahead - received));
+}
+
+/** Express Checkout opens on the departure eve and stays open on the departure day (by the Business Date), while the guest is checked in. */
+export function expressCheckoutOpen(status: string, departure: string, businessDate: string): boolean {
+  return status === "checked_in" && businessDate >= addDays(departure, -1) && businessDate <= departure;
+}
+
+/** A stored card as guests and staff see it: brand and last four digits, never more. */
+export function cardLabel(brand: string | null, last4: string | null): string {
+  return [brand, last4 ? `•••• ${last4}` : ""].filter(Boolean).join(" ");
 }

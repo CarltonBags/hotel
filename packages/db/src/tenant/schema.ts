@@ -911,6 +911,7 @@ export const payments = pgTable(
     settledAt: timestamp("settled_at", { withTimezone: true }),
     businessDate: date("business_date").notNull(),
     saveCard: boolean("save_card").notNull().default(false),
+    declineNoticedAt: timestamp("decline_noticed_at", { withTimezone: true }),
   },
   (t) => [
     index("payments_folio_idx").on(t.folioId),
@@ -2030,15 +2031,13 @@ export const cardGuarantees = pgTable(
     paymentMethodId: text("payment_method_id").notNull(),
     brand: text("brand"),
     last4: char("last4", { length: 4 }),
-    source: text("source").notNull(),
     status: text("status").notNull().default("secured"),
     securedAt: timestamp("secured_at", { withTimezone: true }).notNull().defaultNow(),
     createdBy: text("created_by").notNull(),
   },
   (t) => [
-    check("card_guarantees_source_check", sql`${t.source} in ('portal', 'desk', 'channel')`),
     check("card_guarantees_status_check", sql`${t.status} in ('secured', 'removed')`),
-    index("card_guarantees_reservation_idx").on(t.reservationId).where(sql`${t.status} = 'secured'`),
+    uniqueIndex("card_guarantees_secured_key").on(t.reservationId).where(sql`${t.status} = 'secured'`),
   ],
 );
 
@@ -2048,8 +2047,8 @@ export const cardSetups = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
-    providerSetupId: text("provider_setup_id").notNull().unique(),
-    customerId: text("customer_id").notNull(),
+    providerSetupId: text("provider_setup_id").unique(),
+    customerId: text("customer_id"),
     status: text("status").notNull().default("waiting"),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

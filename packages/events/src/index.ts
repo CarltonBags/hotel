@@ -155,4 +155,4 @@ export function verifyEventsToken(token: string, secret: string): VerifiedEvents
     return null;
   }
 }
-export { notifyStaff, type StaffNotification } from "./staff";
+export { notifyPortalDecline, notifyStaff, notifyWithRight, type StaffNotification } from "./staff";

@@ -68,7 +68,7 @@ const T = {
   keepCard: { de: "Karte für Extras während des Aufenthalts hinterlegen", en: "Keep my card for extras during the stay" },
   storeCard: { de: "Karte hinterlegen", en: "Store a card" },
   storeCardHelp: { de: "Für Extras während des Aufenthalts; belastet wird erst, wenn etwas anfällt.", en: "For extras during your stay; nothing is charged until something is due." },
-  cardOnFile: { de: "Hinterlegte Karte: {card}", en: "Card on file: {card}" },
+  cardGuarantee: { de: "Ihre Karte sichert den Aufenthalt: {card}", en: "Your card secures the stay: {card}" },
   confirm: { de: "Bestätigen", en: "Confirm" },
   testPay: { de: "Testkarte: bezahlen", en: "Test card: pay" },
   testDecline: { de: "Testkarte: ablehnen", en: "Test card: decline" },
