@@ -15,6 +15,8 @@ interface Props {
   due: number;
   /** A card payment still waiting at the device (after a reload). */
   pendingPaymentId: string | null;
+  /** The hotel guest to charge by default (a spa appointment's stay). */
+  suggested: RoomChargeGuest | null;
   readers: { readerId: string; label: string; kind: "reader" | "phone" }[];
   companies: { id: string; name: string }[];
   testMode: boolean;
@@ -47,9 +49,9 @@ export function ApprovalPrompt({ summary, onApprove, m }: { summary: string; onA
 }
 
 /** Close a bill: cash, card on a reader or tap to pay, Voucher, Room Charge, or on account to a Company (ticket 61). */
-export function PayPanel({ outletId, billId, due, pendingPaymentId, readers, companies, testMode, rights, money, m }: Props) {
+export function PayPanel({ outletId, billId, due, pendingPaymentId, suggested, readers, companies, testMode, rights, money, m }: Props) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>(pendingPaymentId ? "card" : "cash");
+  const [tab, setTab] = useState<Tab>(pendingPaymentId ? "card" : suggested?.allowed ? "room" : "cash");
   const [pending, start] = useTransition();
   const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
   const [customer, setCustomer] = useState("");
@@ -58,8 +60,8 @@ export function PayPanel({ outletId, billId, due, pendingPaymentId, readers, com
   const [waiting, setWaiting] = useState<string | null>(pendingPaymentId);
   const [code, setCode] = useState("");
   const [query, setQuery] = useState("");
-  const [guests, setGuests] = useState<RoomChargeGuest[]>([]);
-  const [guest, setGuest] = useState<RoomChargeGuest | null>(null);
+  const [guests, setGuests] = useState<RoomChargeGuest[]>(suggested ? [suggested] : []);
+  const [guest, setGuest] = useState<RoomChargeGuest | null>(suggested?.allowed ? suggested : null);
   const [company, setCompany] = useState("");
   const [approval, setApproval] = useState<{ summary: string; retry: (mode: ApprovalMode) => void } | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);

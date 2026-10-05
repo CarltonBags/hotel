@@ -36,7 +36,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
   if (!v) notFound();
   const { r, property, m, language, rights, today, names, fmt, money, guestName } = v;
   // the guest's spa appointments (ticket 63)
-  const spa = await appointmentsOfReservation(pool(), tenant.schemaName, r.id);
+  const spa = await appointmentsOfReservation(pool(), tenant.schemaName, r.id, { userId: session.user.id, actor });
   // calendar dates: format at noon UTC so no zone shifts the day
   const date = (d: string) => formatDate(new Date(`${d}T12:00:00Z`), language, property.country, "UTC");
   const guestLinks = rights.guests;

@@ -5,12 +5,12 @@ import { useRouter } from "next/navigation";
 import type { SpaDay } from "@hoteloftware/db";
 import { instantAt } from "@hoteloftware/domain";
 import type { Messages } from "@/i18n/messages";
-import { billAppointmentAction, bookAppointmentAction, cancelAppointmentAction, spaGuestsAction, spaHoursAction } from "./actions";
+import { billAppointmentAction, bookAppointmentAction, cancelAppointmentAction, changeSpaHoursAction, noShowAction, spaGuestsAction, spaHoursAction } from "./actions";
 
 type Guest = Awaited<ReturnType<typeof spaGuestsAction>>[number];
 
 /** The day's book per therapist, a new appointment, the therapists' hours (ticket 63). */
-export function SpaBook({ outletId, date, timeZone, day, m }: { outletId: string; date: string; timeZone: string; day: SpaDay; m: Messages }) {
+export function SpaBook({ outletId, date, timeZone, language, day, m }: { outletId: string; date: string; timeZone: string; language: string; day: SpaDay; m: Messages }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
@@ -22,7 +22,7 @@ export function SpaBook({ outletId, date, timeZone, day, m }: { outletId: string
   const [guest, setGuest] = useState<Guest | null>(null);
   const [visitor, setVisitor] = useState("");
   const [hours, setHours] = useState({ therapistId: day.therapists[0]?.id ?? "", from: "09:00", to: "17:00", released: true });
-  const clock = (iso: string) => new Intl.DateTimeFormat("de-DE", { timeStyle: "short", timeZone }).format(new Date(iso));
+  const clock = (iso: string) => new Intl.DateTimeFormat(language, { timeStyle: "short", timeZone }).format(new Date(iso));
   const done = (r: { error?: string; message?: string }) => {
     setNote(r.error ? { error: true, text: r.error } : { error: false, text: r.message ?? "" });
     if (!r.error) router.refresh();
@@ -40,9 +40,23 @@ export function SpaBook({ outletId, date, timeZone, day, m }: { outletId: string
         {day.therapists.map((t) => (
           <section key={t.id} className="grid content-start gap-2 rounded-2xl bg-surface-2 p-3 text-sm" data-therapist={t.name}>
             <h2 className="font-medium">{t.name}</h2>
-            <p className="text-xs text-ink-60">
-              {t.hours.map((h) => `${clock(h.startsAt)}–${clock(h.endsAt)}${h.released ? " ✓" : ""}`).join(" · ") || "–"}
-            </p>
+            <ul className="grid gap-1 text-xs text-ink-60">
+              {t.hours.length ? null : <li>–</li>}
+              {t.hours.map((h) => (
+                <li key={h.id} className="flex flex-wrap items-center gap-2" data-hours={clock(h.startsAt)}>
+                  <span>
+                    {clock(h.startsAt)}–{clock(h.endsAt)}
+                    {h.released ? ` · ${m["spa.released"]}` : ""}
+                  </span>
+                  <button type="button" disabled={pending} onClick={() => start(async () => done(await changeSpaHoursAction(outletId, h.id, { released: !h.released })))} className="text-accent underline">
+                    {h.released ? m["spa.withhold"] : m["spa.release"]}
+                  </button>
+                  <button type="button" disabled={pending} onClick={() => start(async () => done(await changeSpaHoursAction(outletId, h.id, "remove")))} className="text-danger underline" data-remove-hours>
+                    {m["spa.removeHours"]}
+                  </button>
+                </li>
+              ))}
+            </ul>
             {day.appointments
               .filter((a) => a.therapistId === t.id && a.status !== "cancelled")
               .map((a) => (
@@ -53,7 +67,7 @@ export function SpaBook({ outletId, date, timeZone, day, m }: { outletId: string
                   <span>
                     {a.guest}
                     {a.room ? ` · ${a.room}` : ""} · {m[`spa.status.${a.status}`]}
-                    {a.bookedVia === "portal" ? " · Portal" : ""}
+                    {a.bookedVia === "portal" ? ` · ${m["spa.portal"]}` : ""}
                   </span>
                   {a.status === "booked" ? (
                     <span className="flex gap-2">
@@ -71,6 +85,9 @@ export function SpaBook({ outletId, date, timeZone, day, m }: { outletId: string
                         data-bill-appointment
                       >
                         {m["spa.bill"]}
+                      </button>
+                      <button type="button" disabled={pending} onClick={() => start(async () => done(await noShowAction(outletId, a.id)))} className="text-ink-60 underline" data-no-show>
+                        {m["spa.noShow"]}
                       </button>
                       <button type="button" disabled={pending} onClick={() => start(async () => done(await cancelAppointmentAction(outletId, a.id)))} className="text-danger underline">
                         {m["spa.cancel"]}
@@ -92,7 +109,7 @@ export function SpaBook({ outletId, date, timeZone, day, m }: { outletId: string
           <select value={treatment} onChange={(e) => setTreatment(e.target.value)} aria-label={m["spa.treatment"]} className={input}>
             {day.treatments.map((x) => (
               <option key={x.id} value={x.id}>
-                {x.name} · {x.minutes} min
+                {x.name} · {x.minutes} {m["spa.min"]}
               </option>
             ))}
           </select>
@@ -111,7 +128,7 @@ export function SpaBook({ outletId, date, timeZone, day, m }: { outletId: string
             const q = e.target.value;
             setQuery(q);
             setGuest(null);
-            if (q.trim()) start(async () => setGuests(await spaGuestsAction(outletId, q)));
+            if (q.trim().length >= 2) start(async () => setGuests(await spaGuestsAction(outletId, q)));
           }}
           placeholder={m["spa.hotelGuest"]}
           aria-label={m["spa.hotelGuest"]}

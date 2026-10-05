@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { findProperty, outletProperty, spaDay } from "@hoteloftware/db";
 import { addDays, todayIn } from "@hoteloftware/domain";
 import { pool } from "@/lib/db";
-import { deviceMessages } from "@/lib/device";
+import { deviceLanguage, deviceMessages } from "@/lib/device";
 import { outletAppContext, outletsModuleOn } from "@/lib/outlets";
 import { SpaBook } from "./spa-book";
 
@@ -42,7 +42,7 @@ export default async function SpaBookPage({ params, searchParams }: { params: Pr
           </Link>
         </nav>
       </header>
-      <SpaBook outletId={id} date={date} timeZone={tz} day={day} m={m} />
+      <SpaBook outletId={id} date={date} timeZone={tz} language={await deviceLanguage()} day={day} m={m} />
     </main>
   );
 }

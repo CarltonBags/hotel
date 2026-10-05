@@ -21,7 +21,7 @@ export default async function OutletSetupPage({ params }: { params: Promise<{ id
   if (!setup.canManage || !(await outletsModuleOn(tenant.schemaName, o.propertyId))) redirect("/not-allowed");
   const services = await listServices(pool(), tenant.schemaName, o.propertyId);
   // a spa keeps therapists, treatment rooms and treatments too (ticket 63)
-  const spa = o.kind === "spa" ? await spaSetup(pool(), tenant.schemaName, o.id) : null;
+  const spa = o.kind === "spa" ? await spaSetup(pool(), tenant.schemaName, o.id, { userId: session.user.id, actor }) : null;
   const svc = services.map((x) => ({ value: x.id, label: `${x.code} · ${x.name} (${x.taxCodeCode})` }));
   const printers = [{ value: "", label: m["outlet.none"] }, ...setup.printers.map((p) => ({ value: p.id, label: p.name }))];
   const kinds = PRINTER_KINDS.map((k) => ({ value: k, label: m[`outlet.printerKind.${k}`] }));

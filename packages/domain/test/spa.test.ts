@@ -12,6 +12,8 @@ describe("spa appointments", () => {
     expect(appointmentProblem(iv("10:30", "11:30"), { hours, therapistBusy: [iv("11:00", "12:00")], roomBusy: [] })).toBe("therapist_busy");
     expect(appointmentProblem(iv("12:30", "13:30"), { hours, therapistBusy: [], roomBusy: [] })).toBe("outside_hours");
     expect(appointmentProblem(iv("15:00", "16:00"), { hours, therapistBusy: [], roomBusy: [iv("15:30", "16:30")] })).toBe("room_busy");
+    // hours that touch are one stretch
+    expect(appointmentProblem(iv("11:30", "12:30"), { hours: [iv("09:00", "12:00"), iv("12:00", "17:00")], therapistBusy: [], roomBusy: [] })).toBeNull();
   });
 
   it("open slots: released hours, in steps, where the therapist and some room are free", () => {
@@ -31,5 +33,9 @@ describe("spa times", () => {
     expect(instantAt("2026-07-01", "10:00", "Europe/Berlin").toISOString()).toBe("2026-07-01T08:00:00.000Z");
     expect(instantAt("2026-12-01", "10:00", "Europe/Berlin").toISOString()).toBe("2026-12-01T09:00:00.000Z");
     expect(instantAt("2026-12-01", "10:00", "Europe/Zurich").toISOString()).toBe("2026-12-01T09:00:00.000Z");
+    // around the changes: before the spring change still winter time, after the autumn one winter again
+    expect(instantAt("2026-03-29", "01:30", "Europe/Berlin").toISOString()).toBe("2026-03-29T00:30:00.000Z");
+    expect(instantAt("2026-03-29", "03:30", "Europe/Berlin").toISOString()).toBe("2026-03-29T01:30:00.000Z");
+    expect(instantAt("2026-10-25", "04:00", "Europe/Berlin").toISOString()).toBe("2026-10-25T03:00:00.000Z");
   });
 });

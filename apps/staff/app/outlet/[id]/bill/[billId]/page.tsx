@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { findProperty, listCompanyNames, listTerminalReaders, outletBill, outletSetup } from "@hoteloftware/db";
+import { findProperty, listCompanyNames, listTerminalReaders, outletBill, outletSetup, servesAt } from "@hoteloftware/db";
 import { paymentProvider } from "@hoteloftware/payments";
 import { can } from "@hoteloftware/domain";
 import { pool } from "@/lib/db";
@@ -32,7 +32,7 @@ export default async function OutletBillPage({ params }: { params: Promise<{ id:
       tables={setup.tables.filter((t) => t.active).map((t) => ({ id: t.id, name: t.name }))}
       companies={companies.filter((c) => c.active).map((c) => ({ id: c.id, name: c.name }))}
       currency={{ code: property?.currency ?? "EUR", country: property?.country ?? "DE" }}
-      rights={{ serve: can(ctx.actor, "serve_outlet", bill.outlet.propertyId), cash: can(ctx.actor, "outlet_cash", bill.outlet.propertyId) }}
+      rights={{ serve: servesAt(viewer, bill.outlet), cash: can(ctx.actor, "outlet_cash", bill.outlet.propertyId) }}
       readers={readers.map((r) => ({ readerId: r.readerId, label: r.label, kind: r.kind }))}
       testMode={paymentProvider().testMode}
       m={m}

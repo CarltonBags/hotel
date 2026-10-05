@@ -18,8 +18,8 @@ import { createBooking } from "../src/tenant/reservations";
 import { assignRoom } from "../src/tenant/reservation-changes";
 import { checkIn, loadFolios } from "../src/tenant/folios";
 import { createCashRegister, openShift, receiptByToken, setCashDesk } from "../src/tenant/cash";
-import { chargeBillToRoom, createOutlet, payOutletBillCash, saveMenuItem } from "../src/tenant/outlets";
-import { addSpaHours, appointmentsOfReservation, billAppointment, bookAppointment, cancelAppointment, saveSpaRoom, saveTherapist, saveTreatment, spaDay } from "../src/tenant/spa";
+import { chargeBillToRoom, createOutlet, openOutletBill, payOutletBillCash, saveMenuItem } from "../src/tenant/outlets";
+import { addSpaHours, appointmentsOfReservation, billAppointment, bookAppointment, cancelAppointment, changeSpaHours, markNoShow, saveSpaRoom, saveTherapist, saveTreatment, spaDay } from "../src/tenant/spa";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -100,13 +100,13 @@ describe("Spa", () => {
   });
 
   it("a hotel guest's treatment is charged to the room within the limit; it shows on the reservation", async () => {
-    const [a] = await appointmentsOfReservation(pool, s(), reservation);
+    const [a] = await appointmentsOfReservation(pool, s(), reservation, pm);
     expect(a).toMatchObject({ treatment: "Massage 60", room: "Raum 1", status: "booked" });
     const bill = await billAppointment(pool, s(), a!.id, sp);
     await chargeBillToRoom(pool, s(), bill, { reservationId: reservation, signature: null }, sp);
     const charges = (await loadFolios(pool, s(), reservation)).folios.flatMap((f) => f.charges).filter((c) => c.origin === "outlet");
     expect(charges.map((c) => [c.amount, c.taxRate, c.detail])).toEqual([[89, 19, [{ description: "Massage 60", quantity: 1, amount: 89 }]]]);
-    expect((await appointmentsOfReservation(pool, s(), reservation))[0]).toMatchObject({ status: "done", billId: bill });
+    expect((await appointmentsOfReservation(pool, s(), reservation, pm))[0]).toMatchObject({ status: "done", billId: bill });
   });
 
   it("a day visitor pays directly with a Receipt; a cancelled appointment frees the slot", async () => {
@@ -117,5 +117,25 @@ describe("Spa", () => {
     const later = await bookAppointment(pool, s(), spa, { treatmentId: massage, therapistId: anna, startsAt: at("15:00"), guestName: "Herr Groß" }, sp);
     await cancelAppointment(pool, s(), later, sp);
     await bookAppointment(pool, s(), spa, { treatmentId: massage, therapistId: anna, startsAt: at("15:00"), guestName: "Frau Hahn" }, sp);
+  });
+
+  it("an appointment is billed once however often it is asked; a no-show closes it; hours with bookings stay", async () => {
+    const id = await bookAppointment(pool, s(), spa, { treatmentId: massage, therapistId: anna, startsAt: at("16:00"), guestName: "Herr Weiß" }, sp);
+    const [one, two] = await Promise.all([billAppointment(pool, s(), id, sp), billAppointment(pool, s(), id, sp)]);
+    expect(two).toBe(one);
+    const gone = await bookAppointment(pool, s(), spa, { treatmentId: massage, therapistId: anna, startsAt: at("09:00"), guestName: "Frau Roth" }, sp);
+    await markNoShow(pool, s(), gone, sp);
+    const d = await spaDay(pool, s(), spa, day, sp);
+    expect(d.appointments.find((a) => a.id === gone)?.status).toBe("no_show");
+    const hours = d.therapists.find((t) => t.id === anna)!.hours[0]!;
+    await expect(changeSpaHours(pool, s(), hours.id, "remove", sp)).rejects.toThrow(/booked/);
+    await changeSpaHours(pool, s(), hours.id, { released: false }, sp);
+    expect((await spaDay(pool, s(), spa, day, sp)).therapists.find((t) => t.id === anna)!.hours[0]!.released).toBe(false);
+  });
+
+  it("at the spa Spa Staff sell, not Service", async () => {
+    const waiter = { userId: "user_tom", actor: { propertyRoles: [{ propertyId, role: "service" as const }] }, name: "Tom" };
+    await expect(openOutletBill(pool, s(), spa, { tableId: null, label: "x" }, waiter)).rejects.toThrow(/Not allowed/);
+    await expect(bookAppointment(pool, s(), spa, { treatmentId: massage, therapistId: anna, startsAt: new Date(Date.now() - 3_600_000), guestName: "Spät" }, sp)).rejects.toThrow(/passed/);
   });
 });

@@ -15,8 +15,19 @@ const inside = (a: Interval, b: Interval) => a.start >= b.start && a.end <= b.en
 
 export type AppointmentProblem = "outside_hours" | "therapist_busy" | "room_busy";
 
+/** Hours that touch or overlap are one stretch (09–12 and 12–17 hold a treatment at 11:30). */
+function merged(hours: Interval[]): Interval[] {
+  const out: Interval[] = [];
+  for (const h of [...hours].sort((x, y) => x.start.getTime() - y.start.getTime())) {
+    const last = out.at(-1);
+    if (last && h.start <= last.end) last.end = h.end > last.end ? h.end : last.end;
+    else out.push({ start: h.start, end: h.end });
+  }
+  return out;
+}
+
 export function appointmentProblem(a: Interval, around: { hours: Interval[]; therapistBusy: Interval[]; roomBusy: Interval[] }): AppointmentProblem | null {
-  if (!around.hours.some((h) => inside(a, h))) return "outside_hours";
+  if (!merged(around.hours).some((h) => inside(a, h))) return "outside_hours";
   if (around.therapistBusy.some((b) => overlaps(a, b))) return "therapist_busy";
   if (around.roomBusy.some((b) => overlaps(a, b))) return "room_busy";
   return null;
@@ -46,10 +57,16 @@ export function openSpaSlots(around: { hours: Interval[]; therapistBusy: Interva
 
 /** A wall-clock time on a date at the property (its time zone) as an instant: what a spa's time fields mean. */
 export function instantAt(date: string, hhmm: string, timeZone: string): Date {
-  const guess = new Date(`${date}T${hhmm}:00Z`);
-  // the zone's offset at that moment, read back from how the zone shows the guess
-  const shown = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(guess);
-  const part = (t: string) => shown.find((p) => p.type === t)!.value;
-  const asLocal = Date.UTC(Number(part("year")), Number(part("month")) - 1, Number(part("day")), Number(part("hour")), Number(part("minute")));
-  return new Date(guess.getTime() - (asLocal - guess.getTime()));
+  const wanted = Date.parse(`${date}T${hhmm}:00Z`);
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  // the zone's offset at an instant: how far its wall clock is from UTC there
+  const offset = (at: number) => {
+    const p = fmt.formatToParts(new Date(at));
+    const part = (t: string) => Number(p.find((x) => x.type === t)!.value);
+    return Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute")) - at;
+  };
+  // the offset read at the first guess may be the other side of a change: read again where that lands
+  let at = wanted - offset(wanted);
+  at = wanted - offset(at);
+  return new Date(at);
 }

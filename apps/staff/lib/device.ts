@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { DEVICE_COOKIE, deviceByToken, type DeviceInfo } from "@hoteloftware/auth";
-import { isLanguage } from "@hoteloftware/domain";
+import { isLanguage, type Language } from "@hoteloftware/domain";
 import { messagesFor, type Messages } from "@/i18n/messages";
 import { pool } from "./db";
 import { LANGUAGE_COOKIE } from "./shell";
@@ -24,6 +24,11 @@ export async function keepDeviceToken(token: string): Promise<void> {
 
 /** Messages for the Device pages, which render before anyone signs in: the language last used in this browser. */
 export async function deviceMessages(): Promise<Messages> {
+  return messagesFor(await deviceLanguage());
+}
+
+/** The language the outlet app speaks on this browser (the user's choice, else English). Server only. */
+export async function deviceLanguage(): Promise<Language> {
   const lang = (await cookies()).get(LANGUAGE_COOKIE)?.value ?? "";
-  return messagesFor(isLanguage(lang) ? lang : "en");
+  return isLanguage(lang) ? lang : "en";
 }

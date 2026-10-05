@@ -86,9 +86,9 @@ async function outletIn(tx: PoolClient, outletId: string): Promise<Outlet> {
   return toOutlet(o);
 }
 
-/** Opens bills and takes orders at the outlet: Service (and the managers), and at a spa its Spa Staff (ticket 63). */
+/** Opens bills and takes orders at the outlet: Service (and the managers); at a spa its Spa Staff instead (matrix "Spa appointment book, spa sales"). */
 export function servesAt(viewer: Viewer, o: { propertyId: string; kind: string }): boolean {
-  return can(viewer.actor, "serve_outlet", o.propertyId) || (o.kind === "spa" && can(viewer.actor, "spa_book", o.propertyId));
+  return o.kind === "spa" ? can(viewer.actor, "spa_book", o.propertyId) : can(viewer.actor, "serve_outlet", o.propertyId);
 }
 
 /** Sees the outlet's tables and bills: serves them or takes their money. */
@@ -346,7 +346,9 @@ async function billIn(tx: PoolClient, billId: string, lock = false): Promise<Bil
 async function openBillIn(tx: PoolClient, billId: string, viewer: Viewer, action: PropertyAction = "serve_outlet"): Promise<BillRow & { outlet: Outlet }> {
   const b = await billIn(tx, billId, true);
   // at the spa, Spa Staff sell (ticket 63)
-  if (!(action === "serve_outlet" && servesAt(viewer, b.outlet))) need(viewer, action, b.property_id);
+  if (action === "serve_outlet") {
+    if (!servesAt(viewer, b.outlet)) throw new Error("Not allowed at this outlet");
+  } else need(viewer, action, b.property_id);
   if (b.status !== "open") throw new Error("The bill is closed");
   return b;
 }
@@ -420,6 +422,8 @@ export interface OutletBillView {
   /** The Receipt of a bill paid on the spot. */
   receiptToken: string | null;
   invoiceId: string | null;
+  /** The stay to charge by default: the hotel guest of the spa appointment the bill is for (ticket 63). */
+  suggestedGuest: RoomChargeGuest | null;
 }
 
 export async function outletBill(pool: Pool, schema: string, billId: string, viewer: Viewer): Promise<OutletBillView> {
@@ -464,6 +468,7 @@ export async function outletBill(pool: Pool, schema: string, billId: string, vie
       payments,
       receiptToken: head.receipt,
       invoiceId: head.invoice,
+      suggestedGuest: b.status === "open" ? await suggestedGuestIn(tx, b.id, b.property_id) : null,
     };
   });
 }
@@ -878,6 +883,15 @@ async function roomChargeFactsIn(tx: PoolClient, propertyId: string, reservation
   )).rows[0];
   if (!r) throw new Error("Reservation not found at this property");
   return { status: r.status, blocked: r.blocked, covered: r.covered, chargedTonight: Number(r.charged), limit: Number(r.limit), lastName: r.last_name, room: r.room };
+}
+
+/** A spa bill's hotel guest, in house: offered first for the Room Charge. */
+async function suggestedGuestIn(tx: PoolClient, billId: string, propertyId: string): Promise<RoomChargeGuest | null> {
+  const r = (await tx.query<{ id: string }>("select r.id from spa_appointments a join reservations r on r.id = a.reservation_id where a.bill_id = $1 and r.status = 'checked_in' limit 1", [billId])).rows[0];
+  if (!r) return null;
+  const f = await roomChargeFactsIn(tx, propertyId, r.id);
+  const c = roomChargeCheck({ ...f, amount: 0 });
+  return { reservationId: r.id, room: f.room, lastName: f.lastName, allowed: c.allowed, remaining: c.remaining };
 }
 
 /** The guests in house to charge to: room, surname, yes or no and what is left of tonight's limit; never card data. */

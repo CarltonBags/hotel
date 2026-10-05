@@ -2,6 +2,8 @@ import type { Pool, PoolClient } from "pg";
 import { appointmentProblem, can, mayManageOutlet, rolesAt, type AppointmentProblem, type Interval } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
 import { addBillItem, openOutletBill, type Outlet } from "./outlets";
+
+type SpaOutlet = Outlet;
 import type { Viewer } from "./room-state";
 import { withTenant } from "./with-tenant";
 
@@ -19,8 +21,6 @@ const PROBLEM_TEXT: Record<AppointmentProblem, string> = {
   therapist_busy: "The therapist has another appointment then",
   room_busy: "No treatment room is free then",
 };
-
-type SpaOutlet = Outlet;
 
 async function spaIn(tx: PoolClient, outletId: string): Promise<SpaOutlet> {
   if (!isUuid(outletId)) throw new Error("Spa not found");
@@ -98,7 +98,8 @@ export async function addSpaHours(pool: Pool, schema: string, therapistId: strin
   if (!isUuid(therapistId)) throw new Error("Therapist not found");
   if (!(input.endsAt > input.startsAt) || input.endsAt.getTime() - input.startsAt.getTime() > 16 * 3600_000) throw new Error("Hours end after they start, within 16 hours");
   return withTenant(pool, schema, async (tx) => {
-    const t = (await tx.query<{ outlet_id: string }>("select outlet_id from spa_therapists where id = $1", [therapistId])).rows[0];
+    // the therapist locked: two overlapping hours never both go in
+    const t = (await tx.query<{ outlet_id: string }>("select outlet_id from spa_therapists where id = $1 for update", [therapistId])).rows[0];
     if (!t) throw new Error("Therapist not found");
     needBook(viewer, await spaIn(tx, t.outlet_id));
     const clash = await tx.query("select 1 from spa_hours where therapist_id = $1 and starts_at < $3 and ends_at > $2", [therapistId, input.startsAt, input.endsAt]);
@@ -218,21 +219,32 @@ export async function bookAppointmentIn(tx: PoolClient, outletId: string, input:
   const hours = (await tx.query<{ starts_at: Date; ends_at: Date }>(`select starts_at, ends_at from spa_hours where therapist_id = $1${by.via === "portal" ? " and released" : ""}`, [input.therapistId])).rows.map((h) => ({ start: h.starts_at, end: h.ends_at }));
   const busy = async (column: "therapist_id" | "room_id", id: string) =>
     (await tx.query<{ starts_at: Date; ends_at: Date }>(`select starts_at, ends_at from spa_appointments where ${column} = $1 and status <> 'cancelled' and starts_at < $3 and ends_at > $2`, [id, slot.start, slot.end])).rows.map((a) => ({ start: a.starts_at, end: a.ends_at }));
+  // not in the past (a quarter of an hour's grace for the one being entered now)
+  if (slot.start.getTime() < Date.now() - 15 * 60_000) throw new Error("The time has passed");
   let roomId: string | null = null;
   if (t.needs_room) {
-    const rooms = (await tx.query<{ id: string }>("select id from spa_rooms where outlet_id = $1 and active and ($2::uuid is null or id = $2) order by name for update", [outletId, input.roomId && isUuid(input.roomId) ? input.roomId : null])).rows;
-    for (const r of rooms) if (!(await busy("room_id", r.id)).length) (roomId ??= r.id);
-    const problem = appointmentProblem(slot, { hours, therapistBusy: await busy("therapist_id", input.therapistId), roomBusy: roomId ? [] : [slot] });
-    if (problem) throw new Error(PROBLEM_TEXT[problem]);
-  } else {
-    const problem = appointmentProblem(slot, { hours, therapistBusy: await busy("therapist_id", input.therapistId), roomBusy: [] });
-    if (problem) throw new Error(PROBLEM_TEXT[problem]);
+    if (input.roomId && !isUuid(input.roomId)) throw new Error("Treatment room not found");
+    const rooms = (await tx.query<{ id: string }>("select id from spa_rooms where outlet_id = $1 and active and ($2::uuid is null or id = $2) order by name for update", [outletId, input.roomId ?? null])).rows;
+    if (input.roomId && !rooms.length) throw new Error("Treatment room not found");
+    for (const r of rooms) {
+      if (!(await busy("room_id", r.id)).length) {
+        roomId = r.id;
+        break;
+      }
+    }
   }
+  const problem = appointmentProblem(slot, { hours, therapistBusy: await busy("therapist_id", input.therapistId), roomBusy: t.needs_room && !roomId ? [slot] : [] });
+  if (problem) throw new Error(PROBLEM_TEXT[problem]);
   const reservationId = input.reservationId && isUuid(input.reservationId) ? input.reservationId : null;
   const guestName = (input.guestName ?? "").trim().slice(0, 100);
   if (reservationId) {
-    const ok = (await tx.query("select 1 from reservations r join outlets o on o.property_id = r.property_id where r.id = $1 and o.id = $2 and r.status in ('confirmed', 'checked_in')", [reservationId, outletId])).rows.length;
-    if (!ok) throw new Error("The stay is not at this property, or not current");
+    // a current stay of the property, the treatment within its days
+    const ok = (await tx.query(
+      `select 1 from reservations r join outlets o on o.property_id = r.property_id join properties p on p.id = r.property_id
+       where r.id = $1 and o.id = $2 and r.status in ('confirmed', 'checked_in') and ($3::timestamptz at time zone p.time_zone)::date between r.arrival and r.departure`,
+      [reservationId, outletId, slot.start],
+    )).rows.length;
+    if (!ok) throw new Error("The stay is not at this property, not current, or not on that day");
   } else if (!guestName) throw new Error("Name the day visitor, or choose a hotel guest");
   return (await tx.query<{ id: string }>(
     `insert into spa_appointments (outlet_id, treatment_id, therapist_id, room_id, starts_at, ends_at, reservation_id, guest_name, note, booked_via, booked_by)
@@ -263,54 +275,104 @@ export async function cancelAppointment(pool: Pool, schema: string, appointmentI
 /**
  * The treatment given: a bill of the spa with it (more items, products, may
  * follow), to pay or charge to the room like any outlet's; the appointment
- * is done. For a hotel guest the bill is labelled with room and surname.
+ * is done. One bill per appointment: a second call (a double click) waits
+ * for the first and gets its bill. For a hotel guest the bill is labelled
+ * with room and surname and charged to that stay by default.
  */
 export async function billAppointment(pool: Pool, schema: string, appointmentId: string, viewer: Viewer): Promise<string> {
   if (!isUuid(appointmentId)) throw new Error("Appointment not found");
-  const a = await withTenant(pool, schema, async (tx) => {
-    const row = (await tx.query(`${APPOINTMENT_SELECT} where a.id = $1`, [appointmentId])).rows[0];
-    if (!row) throw new Error("Appointment not found");
-    const o = (await tx.query<{ outlet_id: string; menu_item_id: string }>("select a.outlet_id, t.menu_item_id from spa_appointments a join spa_treatments t on t.id = a.treatment_id where a.id = $1", [appointmentId])).rows[0]!;
-    needBook(viewer, await spaIn(tx, o.outlet_id));
-    return { ...toAppointment(row), outletId: o.outlet_id, menuItemId: o.menu_item_id };
-  });
-  if (a.billId) return a.billId;
-  if (a.status !== "booked") throw new Error(`The appointment is ${a.status.replace("_", " ")}`);
-  const billId = await openOutletBill(pool, schema, a.outletId, { tableId: null, label: a.guest }, viewer);
-  await addBillItem(pool, schema, billId, { menuItemId: a.menuItemId, quantity: 1, modifiers: [], note: "" }, viewer);
-  await withTenant(pool, schema, (tx) => tx.query("update spa_appointments set bill_id = $2, status = 'done' where id = $1 and bill_id is null", [appointmentId, billId]));
-  return billId;
+  const c = await pool.connect();
+  try {
+    await c.query("select pg_advisory_lock(hashtext($1))", [`${schema}:spa-bill:${appointmentId}`]);
+    const a = await withTenant(pool, schema, async (tx) => {
+      const row = (await tx.query(`${APPOINTMENT_SELECT} where a.id = $1`, [appointmentId])).rows[0];
+      if (!row) throw new Error("Appointment not found");
+      const o = (await tx.query<{ outlet_id: string; menu_item_id: string }>("select a.outlet_id, t.menu_item_id from spa_appointments a join spa_treatments t on t.id = a.treatment_id where a.id = $1", [appointmentId])).rows[0]!;
+      needBook(viewer, await spaIn(tx, o.outlet_id));
+      return { ...toAppointment(row), outletId: o.outlet_id, menuItemId: o.menu_item_id };
+    });
+    if (a.billId) return a.billId;
+    if (a.status !== "booked") throw new Error(`The appointment is ${a.status.replace("_", " ")}`);
+    const billId = await openOutletBill(pool, schema, a.outletId, { tableId: null, label: a.guest }, viewer);
+    try {
+      await addBillItem(pool, schema, billId, { menuItemId: a.menuItemId, quantity: 1, modifiers: [], note: "" }, viewer);
+    } catch (err) {
+      // nothing left behind: the empty bill goes again
+      await withTenant(pool, schema, (tx) => tx.query("delete from outlet_bills b where id = $1 and not exists (select 1 from outlet_bill_lines l where l.bill_id = b.id)", [billId]));
+      throw err;
+    }
+    await withTenant(pool, schema, (tx) => tx.query("update spa_appointments set bill_id = $2, status = 'done' where id = $1 and bill_id is null", [appointmentId, billId]));
+    return billId;
+  } finally {
+    await c.query("select pg_advisory_unlock(hashtext($1))", [`${schema}:spa-bill:${appointmentId}`]).catch(() => undefined);
+    c.release();
+  }
 }
 
-/** A stay's spa appointments, for its reservation tab. */
-export async function appointmentsOfReservation(pool: Pool, schema: string, reservationId: string): Promise<SpaAppointment[]> {
+/** The guest did not come: the appointment is closed as a no-show (its time is free again). */
+export async function markNoShow(pool: Pool, schema: string, appointmentId: string, viewer: Viewer): Promise<void> {
+  if (!isUuid(appointmentId)) throw new Error("Appointment not found");
+  await withTenant(pool, schema, async (tx) => {
+    const a = (await tx.query<{ outlet_id: string; status: string }>("select outlet_id, status from spa_appointments where id = $1 for update", [appointmentId])).rows[0];
+    if (!a) throw new Error("Appointment not found");
+    needBook(viewer, await spaIn(tx, a.outlet_id));
+    if (a.status !== "booked") throw new Error("Only a booked appointment is a no-show");
+    await tx.query("update spa_appointments set status = 'no_show' where id = $1", [appointmentId]);
+  });
+}
+
+/** Hours taken back (a therapist off) or released to guests or not; hours with appointments booked in them stay. */
+export async function changeSpaHours(pool: Pool, schema: string, hoursId: string, change: { released: boolean } | "remove", viewer: Viewer): Promise<void> {
+  if (!isUuid(hoursId)) throw new Error("Hours not found");
+  await withTenant(pool, schema, async (tx) => {
+    const h = (await tx.query<{ outlet_id: string; therapist_id: string; starts_at: Date; ends_at: Date }>("select t.outlet_id, h.therapist_id, h.starts_at, h.ends_at from spa_hours h join spa_therapists t on t.id = h.therapist_id where h.id = $1 for update of h", [hoursId])).rows[0];
+    if (!h) throw new Error("Hours not found");
+    needBook(viewer, await spaIn(tx, h.outlet_id));
+    if (change === "remove") {
+      const booked = await tx.query("select 1 from spa_appointments where therapist_id = $1 and status = 'booked' and starts_at < $3 and ends_at > $2", [h.therapist_id, h.starts_at, h.ends_at]);
+      if (booked.rows.length) throw new Error("Appointments are booked in these hours: move or cancel them first");
+      await tx.query("delete from spa_hours where id = $1", [hoursId]);
+    } else await tx.query("update spa_hours set released = $2 where id = $1", [hoursId, change.released]);
+  });
+}
+
+/** A stay's spa appointments, for its reservation tab (who sees the reservation). */
+export async function appointmentsOfReservation(pool: Pool, schema: string, reservationId: string, viewer: Viewer): Promise<SpaAppointment[]> {
   if (!isUuid(reservationId)) return [];
-  return withTenant(pool, schema, async (tx) => (await tx.query(`${APPOINTMENT_SELECT} where a.reservation_id = $1 and a.status <> 'cancelled' order by a.starts_at`, [reservationId])).rows.map(toAppointment));
+  return withTenant(pool, schema, async (tx) => {
+    const r = (await tx.query<{ property_id: string }>("select property_id from reservations where id = $1", [reservationId])).rows[0];
+    if (!r || !can(viewer.actor, "view_reservations", r.property_id)) return [];
+    return (await tx.query(`${APPOINTMENT_SELECT} where a.reservation_id = $1 and a.status <> 'cancelled' order by a.starts_at`, [reservationId])).rows.map(toAppointment);
+  });
 }
 
 /** Hotel guests to book a treatment for: stays at the spa's property, in house or still to come, by surname or room. */
 export async function spaGuests(pool: Pool, schema: string, outletId: string, query: string, viewer: Viewer): Promise<{ reservationId: string; lastName: string; room: string | null; arrival: string; departure: string }[]> {
+  // two letters at least; stays from today to two months ahead only
   const q = query.trim().slice(0, 40);
-  if (!q) return [];
+  if (q.length < 2) return [];
   return withTenant(pool, schema, async (tx) => {
     const o = await spaIn(tx, outletId);
     needBook(viewer, o);
     return (await tx.query<{ id: string; last_name: string; room: string | null; arrival: string; departure: string }>(
       `select r.id, g.last_name, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
-         (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = r.id order by a.from_date desc limit 1) as room
+         (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = r.id order by a.to_date desc limit 1) as room
        from reservations r join guests g on g.id = r.primary_guest_id
+       join properties p on p.id = r.property_id
        where r.property_id = $1 and r.status in ('confirmed', 'checked_in')
+         and r.departure >= p.business_date and r.arrival <= p.business_date + 60
          and (g.last_name ilike $2 || '%' or exists (select 1 from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = r.id and m.number = $3))
        order by r.arrival, g.last_name limit 10`,
-      [o.propertyId, q.replace(/[%_]/g, ""), q],
+      [o.propertyId, q.replace(/[\\%_]/g, ""), q],
     )).rows.map((r) => ({ reservationId: r.id, lastName: r.last_name, room: r.room, arrival: r.arrival, departure: r.departure }));
   });
 }
 
 /** The spa's therapists, treatment rooms and treatments, for its setup page (whoever may see the outlet's setup). */
-export async function spaSetup(pool: Pool, schema: string, outletId: string): Promise<{ therapists: { id: string; name: string; active: boolean }[]; rooms: { id: string; name: string; active: boolean }[]; treatments: { menuItemId: string; minutes: number; needsRoom: boolean; active: boolean }[] }> {
+export async function spaSetup(pool: Pool, schema: string, outletId: string, viewer: Viewer): Promise<{ therapists: { id: string; name: string; active: boolean }[]; rooms: { id: string; name: string; active: boolean }[]; treatments: { menuItemId: string; minutes: number; needsRoom: boolean; active: boolean }[] }> {
   return withTenant(pool, schema, async (tx) => {
     const o = await spaIn(tx, outletId);
+    needManage(viewer, o);
     return {
       therapists: (await tx.query<{ id: string; name: string; active: boolean }>("select id, name, active from spa_therapists where outlet_id = $1 order by name", [o.id])).rows,
       rooms: (await tx.query<{ id: string; name: string; active: boolean }>("select id, name, active from spa_rooms where outlet_id = $1 order by name", [o.id])).rows,
