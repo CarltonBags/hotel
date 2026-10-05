@@ -43,6 +43,11 @@ export default async function OutletFloorPage({ params }: { params: Promise<{ id
               {m["outlet.setup"]}
             </Link>
           ) : null}
+          {floor.outlet.kind === "spa" ? (
+            <Link href={`/outlet/${floor.outlet.id}/spa`} className="text-accent underline" data-spa-link>
+              {m["spa.book"]}
+            </Link>
+          ) : null}
           <Link href={`/outlet/${floor.outlet.id}/offline-sales`} className="text-accent underline" data-offline-link>
             {m["outlet.offlineSales"]}
           </Link>

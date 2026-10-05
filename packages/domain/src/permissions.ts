@@ -177,6 +177,8 @@ export const PROPERTY_ACTIONS = {
   serve_outlet: ["property_manager", "service", "outlet_manager"],
   /** Matrix rows "Room Charge above limit", "Discount", "Void a signed order, refund": done without an Approval, and approved for Service and Spa Staff on the device (ticket 61). */
   approve_outlet_requests: ["property_manager", "outlet_manager"],
+  /** Matrix "Spa appointment book, spa sales" (ticket 63): Spa Staff, an Outlet Manager for own outlets. */
+  spa_book: ["property_manager", "spa_staff", "outlet_manager"],
   /** Matrix "Outlet reports": an Outlet Manager for own outlets (see outletReport). */
   view_outlet_reports: ["property_manager", "accounting", "outlet_manager"],
   /** Matrix "Open and close a Shift at an outlet register" and "Take card, cash, voucher; tips". */

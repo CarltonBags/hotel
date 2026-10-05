@@ -2818,6 +2818,85 @@ export const outletSyncOps = pgTable("outlet_sync_ops", {
   appliedBy: text("applied_by").notNull(),
 });
 
+export const spaTherapists = pgTable(
+  "spa_therapists",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    active: boolean("active").notNull().default(true),
+  },
+  (t) => [check("spa_therapists_name_check", sql`length(trim(${t.name})) between 1 and 60`), unique("spa_therapists_outlet_id_name_key").on(t.outletId, t.name)],
+);
+
+export const spaRooms = pgTable(
+  "spa_rooms",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    active: boolean("active").notNull().default(true),
+  },
+  (t) => [check("spa_rooms_name_check", sql`length(trim(${t.name})) between 1 and 60`), unique("spa_rooms_outlet_id_name_key").on(t.outletId, t.name)],
+);
+
+export const spaTreatments = pgTable(
+  "spa_treatments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id, { onDelete: "cascade" }),
+    menuItemId: uuid("menu_item_id").notNull().references(() => outletMenuItems.id),
+    minutes: integer("minutes").notNull(),
+    needsRoom: boolean("needs_room").notNull().default(true),
+    active: boolean("active").notNull().default(true),
+  },
+  (t) => [check("spa_treatments_minutes_check", sql`${t.minutes} between 5 and 480`), unique("spa_treatments_menu_item_key").on(t.menuItemId)],
+);
+
+export const spaHours = pgTable(
+  "spa_hours",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    therapistId: uuid("therapist_id").notNull().references(() => spaTherapists.id, { onDelete: "cascade" }),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    released: boolean("released").notNull().default(false),
+  },
+  (t) => [check("spa_hours_range_check", sql`${t.endsAt} > ${t.startsAt}`), index("spa_hours_therapist_idx").on(t.therapistId, t.startsAt)],
+);
+
+export const spaAppointments = pgTable(
+  "spa_appointments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id").notNull().references(() => outlets.id),
+    treatmentId: uuid("treatment_id").notNull().references(() => spaTreatments.id),
+    therapistId: uuid("therapist_id").notNull().references(() => spaTherapists.id),
+    roomId: uuid("room_id").references(() => spaRooms.id),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    reservationId: uuid("reservation_id").references(() => reservations.id),
+    guestName: text("guest_name").notNull().default(""),
+    note: text("note").notNull().default(""),
+    status: text("status").notNull().default("booked"),
+    billId: uuid("bill_id").references(() => outletBills.id),
+    bookedVia: text("booked_via").notNull().default("staff"),
+    bookedBy: text("booked_by").notNull(),
+    bookedAt: timestamp("booked_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledBy: text("cancelled_by"),
+  },
+  (t) => [
+    check("spa_appointments_status_check", sql`${t.status} in ('booked', 'done', 'cancelled', 'no_show')`),
+    check("spa_appointments_via_check", sql`${t.bookedVia} in ('staff', 'portal')`),
+    check("spa_appointments_range_check", sql`${t.endsAt} > ${t.startsAt}`),
+    check("spa_appointments_who_check", sql`${t.reservationId} is not null or length(trim(${t.guestName})) > 0`),
+    index("spa_appointments_therapist_idx").on(t.therapistId, t.startsAt).where(sql`${t.status} <> 'cancelled'`),
+    index("spa_appointments_room_idx").on(t.roomId, t.startsAt).where(sql`${t.status} <> 'cancelled' and ${t.roomId} is not null`),
+    index("spa_appointments_reservation_idx").on(t.reservationId).where(sql`${t.reservationId} is not null`),
+  ],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -2954,4 +3033,9 @@ export const tenantSchema = {
   printJobs,
   fiscalOrders,
   outletSyncOps,
+  spaTherapists,
+  spaRooms,
+  spaTreatments,
+  spaHours,
+  spaAppointments,
 };

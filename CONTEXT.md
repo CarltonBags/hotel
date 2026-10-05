@@ -621,6 +621,18 @@ _Avoid_: Point of sale (for the place), venue, department
 A sale at an outlet to someone without a reservation, paid on the spot or invoiced to a company.
 _Avoid_: Walk-in sale, cash sale
 
+**Treatment**:
+A service the spa gives a person, sold from its menu, taking a set time with a therapist and, for most, a treatment room.
+_Avoid_: Service (the catalogue's word), session
+
+**Appointment**:
+A treatment booked for a time with a therapist (and room), for a hotel guest's stay or a day visitor; sold as an outlet bill when given.
+_Avoid_: Booking (reserved for rooms), slot
+
+**Released Slot**:
+A time in a therapist's hours the spa has opened for guests to book treatments themselves.
+_Avoid_: Online slot, free slot
+
 **Room Charge**:
 Posting an outlet bill to a checked-in guest's folio, allowed within the reservation's spending limit.
 _Avoid_: Charge to room, transfer, city ledger

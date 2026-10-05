@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createOutlet, saveMenuItem, savePrinter, saveTable, setOutletManagers, setSpendingLimit, updateOutlet } from "@hoteloftware/db";
+import { createOutlet, saveMenuItem, savePrinter, saveSpaRoom, saveTable, saveTherapist, saveTreatment, setOutletManagers, setSpendingLimit, updateOutlet } from "@hoteloftware/db";
 import { authorizeOutlet } from "@/lib/outlets";
 import { field, flag, formAction, type FormState } from "@/lib/form";
 import { pool } from "@/lib/db";
@@ -101,6 +101,38 @@ export async function saveMenuItemAction(_prev: FormState, formData: FormData): 
       },
       viewer,
     );
+    revalidatePath(setupPath(outletId));
+    return { ok: true, message: "Saved." };
+  });
+}
+
+// ── the spa (ticket 63): therapists, treatment rooms, treatments ──
+
+export async function saveTherapistAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const outletId = field(formData, "outletId");
+    const { tenant, viewer } = await authorizeOutlet("manage_own_outlets", { outletId });
+    await saveTherapist(pool(), tenant.schemaName, outletId, { id: field(formData, "id") || undefined, name: field(formData, "name"), active: flag(formData, "active") }, viewer);
+    revalidatePath(setupPath(outletId));
+    return { ok: true, message: "Saved." };
+  });
+}
+
+export async function saveSpaRoomAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const outletId = field(formData, "outletId");
+    const { tenant, viewer } = await authorizeOutlet("manage_own_outlets", { outletId });
+    await saveSpaRoom(pool(), tenant.schemaName, outletId, { id: field(formData, "id") || undefined, name: field(formData, "name"), active: flag(formData, "active") }, viewer);
+    revalidatePath(setupPath(outletId));
+    return { ok: true, message: "Saved." };
+  });
+}
+
+export async function saveTreatmentAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const outletId = field(formData, "outletId");
+    const { tenant, viewer } = await authorizeOutlet("manage_own_outlets", { outletId });
+    await saveTreatment(pool(), tenant.schemaName, outletId, { menuItemId: field(formData, "menuItemId"), minutes: Number(field(formData, "minutes")), needsRoom: flag(formData, "needsRoom"), active: flag(formData, "active") }, viewer);
     revalidatePath(setupPath(outletId));
     return { ok: true, message: "Saved." };
   });

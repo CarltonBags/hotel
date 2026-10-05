@@ -86,6 +86,11 @@ async function outletIn(tx: PoolClient, outletId: string): Promise<Outlet> {
   return toOutlet(o);
 }
 
+/** Opens bills and takes orders at the outlet: Service (and the managers), and at a spa its Spa Staff (ticket 63). */
+export function servesAt(viewer: Viewer, o: { propertyId: string; kind: string }): boolean {
+  return can(viewer.actor, "serve_outlet", o.propertyId) || (o.kind === "spa" && can(viewer.actor, "spa_book", o.propertyId));
+}
+
 /** Sees the outlet's tables and bills: serves them or takes their money. */
 function needWork(viewer: Viewer, propertyId: string): void {
   if (!can(viewer.actor, "serve_outlet", propertyId) && !can(viewer.actor, "outlet_cash", propertyId)) throw new Error("Not allowed at this outlet");
@@ -340,7 +345,8 @@ async function billIn(tx: PoolClient, billId: string, lock = false): Promise<Bil
 
 async function openBillIn(tx: PoolClient, billId: string, viewer: Viewer, action: PropertyAction = "serve_outlet"): Promise<BillRow & { outlet: Outlet }> {
   const b = await billIn(tx, billId, true);
-  need(viewer, action, b.property_id);
+  // at the spa, Spa Staff sell (ticket 63)
+  if (!(action === "serve_outlet" && servesAt(viewer, b.outlet))) need(viewer, action, b.property_id);
   if (b.status !== "open") throw new Error("The bill is closed");
   return b;
 }
@@ -365,7 +371,7 @@ async function newBillIn(tx: PoolClient, o: Outlet, input: { tableId: string | n
 export async function openOutletBill(pool: Pool, schema: string, outletId: string, input: { tableId: string | null; label: string; id?: string | undefined }, viewer: Viewer): Promise<string> {
   return withTenant(pool, schema, async (tx) => {
     const o = await outletIn(tx, outletId);
-    need(viewer, "serve_outlet", o.propertyId);
+    if (!servesAt(viewer, o)) throw new Error("Not allowed at this outlet");
     if (!o.active) throw new Error("The outlet is closed");
     // a device that sold offline brings its own id (applied once, ticket 62)
     return newBillIn(tx, o, { tableId: await tableOf(tx, o.id, input.tableId), label: input.label, id: input.id }, viewer.userId);
