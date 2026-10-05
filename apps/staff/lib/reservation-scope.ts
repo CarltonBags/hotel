@@ -17,6 +17,7 @@ export async function reservationScope(reservationId: string, action: PropertyAc
   return {
     schema: tenant.schemaName,
     tenantId: tenant.id,
+    tenantSlug: tenant.slug,
     reservation: r,
     userId,
     actor,

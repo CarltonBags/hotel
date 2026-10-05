@@ -59,6 +59,8 @@ const CHANNEL_SWITCH = "channel_confirmation";
 /** How far back the scan looks: documents of a longer worker outage are still sent. */
 const SCAN_DAYS = 7;
 const MAX_ATTEMPTS = OUTBOX_MAX_ATTEMPTS;
+const CODE_MASK = "••••••";
+const withCode = (text: string, code: string | null) => (code ? text.split(CODE_MASK).join(code) : text);
 
 function enabledTypes(switched: Record<string, boolean>): Record<MessageType, boolean> {
   return Object.fromEntries(MESSAGE_TYPES.map((t) => [t, MESSAGE_TYPE_INFO[t].switchable ? (switched[t] ?? MESSAGE_TYPE_INFO[t].defaultOn) : true])) as Record<MessageType, boolean>;
@@ -287,23 +289,43 @@ interface ReservationFacts {
   language: string | null;
   email_bounced: string | null;
   email_complained: string | null;
+  portal_key: string;
 }
 
 async function factsOf(tx: PoolClient, reservationId: string): Promise<ReservationFacts | null> {
   const { rows } = await tx.query<ReservationFacts>(
     `select r.property_id, b.confirmation_number, b.source = 'channel' as channel,
             (select cs.send_confirmation from channel_settings cs where cs.property_id = r.property_id and cs.channel = b.channel_name) as channel_confirmation, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
-            g.first_name, g.last_name, nullif(trim(g.email), '') as email, g.language, g.email_bounced, g.email_complained
+            g.first_name, g.last_name, nullif(trim(g.email), '') as email, g.language, g.email_bounced, g.email_complained, r.portal_key
      from reservations r join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id where r.id = $1`,
     [reservationId],
   );
   return rows[0] ?? null;
 }
 
+/** Where the Guest Portal answers for this tenant (https://<slug>.<domain>); links in messages start with it. */
+export interface PortalLinks {
+  base: string;
+}
+
 /** Render and queue one message; nothing when it went already for this trigger. Returns its id, or null. */
-async function queueIn(
+export async function queueGuestMessageIn(
   tx: PoolClient,
-  input: { reservationId: string; type: MessageType; triggerKey: string; invoiceId: string | null; documentNumber: string | null; amount: number | null; userId: string | null; now: Date },
+  input: {
+    reservationId: string;
+    type: MessageType;
+    triggerKey: string;
+    invoiceId: string | null;
+    documentNumber: string | null;
+    amount: number | null;
+    userId: string | null;
+    now: Date;
+    links: PortalLinks | null;
+    /** Another recipient than the guest (the Booker invites a room's guest). */
+    toEmail?: string;
+    /** The one-time code (only in the mail; the stored copy is blanked once sent). */
+    code?: string;
+  },
 ): Promise<string | null> {
   const f = await factsOf(tx, input.reservationId);
   if (!f) throw new Error("No such reservation");
@@ -322,23 +344,27 @@ async function queueIn(
     departure: dateText(f.departure, language),
     amount: input.amount === null ? "" : formatCurrency(input.amount, look.currency, language, look.country),
     document_number: input.documentNumber ?? "",
-    // wired with the Guest Portal (ticket 40) and Conversations (ticket 43); types needing them wait (messageSendable)
-    portal_link: "",
+    portal_link: input.links ? `${input.links.base}/g/${f.portal_key}` : "",
+    // wired with Conversations (ticket 43)
     reply_address: "",
     checkout_time: look.checkoutTime,
+    // the stored copy shows dots; the code goes in when the mail is sent
+    code: input.code ? CODE_MASK : "",
   };
   const rendered = renderMessage(await textIn(tx, f.property_id, input.type, language), values, { hotelName: look.name, accent: look.accent }, look.footer);
   const info = MESSAGE_TYPE_INFO[input.type];
-  const email = f.email?.toLowerCase() ?? null;
+  const email = (input.toEmail ?? f.email)?.toLowerCase() ?? null;
   // kept, not sent: no address, an address that bounced, a complaint (non-essential only), our confirmation switched off for booking sites
   // the channel's own setting (ticket 38) before the property's switch for all booking sites
   const channelOff = f.channel && !(f.channel_confirmation ?? s.switched[CHANNEL_SWITCH] ?? true) && (input.type === "confirmation" || input.type === "cancellation");
-  const reason = channelOff ? "channel" : !email ? "no_email" : email === f.email_bounced ? "bounced" : email === f.email_complained && !info.essential ? "complained" : null;
+  // a message with a Portal Link but no address of the portal to put in it is not sent
+  const noLink = info.needsPortal && !input.links;
+  const reason = noLink ? "no_portal" : channelOff ? "channel" : !email ? "no_email" : email === f.email_bounced ? "bounced" : email === f.email_complained && !info.essential ? "complained" : null;
   const { rows } = await tx.query<{ id: string }>(
-    `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, greatest(($13::date + $14::time) at time zone $15, $16::timestamptz), $17)
+    `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by, secret_code)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, greatest(($13::date + $14::time) at time zone $15, $16::timestamptz), $17, $18)
      on conflict (reservation_id, type, trigger_key) do nothing returning id`,
-    [f.property_id, input.reservationId, input.type, input.triggerKey, language, email, rendered.subject, rendered.html, rendered.text, input.invoiceId, reason ? "suppressed" : "queued", reason, ...sendMoment(look, info.timing, input.now), input.now, input.userId],
+    [f.property_id, input.reservationId, input.type, input.triggerKey, language, email, rendered.subject, rendered.html, rendered.text, input.invoiceId, reason ? "suppressed" : "queued", reason, ...sendMoment(look, info.timing, input.now), input.now, input.userId, reason ? null : (input.code ?? null)],
   );
   return rows[0]?.id ?? null;
 }
@@ -349,7 +375,7 @@ async function queueIn(
  * up). Each type goes once per reservation and trigger; a switched-off type,
  * or one whose Portal Link does not exist yet, is not queued.
  */
-export async function scanGuestMessages(pool: Pool, schema: string, now = new Date()): Promise<number> {
+export async function scanGuestMessages(pool: Pool, schema: string, now = new Date(), links: PortalLinks | null = null): Promise<number> {
   return withTenant(pool, schema, async (tx) => {
     await tx.query("insert into property_messaging (property_id, started_at) select id, created_at from properties on conflict do nothing");
     const { rows: settings } = await tx.query<{ property_id: string; switched: Record<string, boolean> }>("select property_id, switched from property_messaging");
@@ -407,7 +433,7 @@ export async function scanGuestMessages(pool: Pool, schema: string, now = new Da
       if (!enabled.get(c.property_id)?.[c.type] || !messageSendable(c.type)) continue;
       // a non-repeatable type goes once per reservation, whatever triggered it
       const key = MESSAGE_TYPE_INFO[c.type].repeatable ? c.trigger_key : "";
-      const id = await queueIn(tx, { reservationId: c.reservation_id, type: c.type, triggerKey: key, invoiceId: c.invoice_id, documentNumber: c.document_number, amount: c.amount === null ? null : Number(c.amount), userId: null, now });
+      const id = await queueGuestMessageIn(tx, { reservationId: c.reservation_id, type: c.type, triggerKey: key, invoiceId: c.invoice_id, documentNumber: c.document_number, amount: c.amount === null ? null : Number(c.amount), userId: null, now, links });
       if (id) n++;
     }
     return n;
@@ -415,10 +441,10 @@ export async function scanGuestMessages(pool: Pool, schema: string, now = new Da
 }
 
 /** Staff send a message by hand (a card or balance request, the confirmation again): it goes at once, a new one each time. */
-export async function sendGuestMessage(pool: Pool, schema: string, input: { reservationId: string; type: ManualMessageType; amount?: number | null }, userId: string, now = new Date()): Promise<string> {
+export async function sendGuestMessage(pool: Pool, schema: string, input: { reservationId: string; type: ManualMessageType; amount?: number | null; links: PortalLinks | null }, userId: string, now = new Date()): Promise<string> {
   if (!messageSendable(input.type)) throw new Error("This message needs the Portal Link of the Guest Portal, which is not available yet");
   return withTenant(pool, schema, async (tx) => {
-    const id = await queueIn(tx, { reservationId: input.reservationId, type: input.type, triggerKey: `manual:${now.toISOString()}`, invoiceId: null, documentNumber: null, amount: input.amount ?? null, userId, now });
+    const id = await queueGuestMessageIn(tx, { reservationId: input.reservationId, type: input.type, triggerKey: `manual:${now.toISOString()}`, invoiceId: null, documentNumber: null, amount: input.amount ?? null, userId, now, links: input.links });
     if (!id) throw new Error("This message was just sent");
     return id;
   });
@@ -492,10 +518,10 @@ export async function dispatchMessages(pool: Pool, schema: string, tenantId: str
       `update guest_messages gm set status = 'sending', attempts = attempts + 1, claimed_at = $1
        from (select id from guest_messages where status = 'queued' and send_after <= $1 order by send_after limit 50 for update skip locked) d
        where gm.id = d.id
-       returning gm.id, gm.property_id, gm.type, gm.to_email, gm.subject, gm.html, gm.body_text, gm.invoice_id, gm.attempts`,
+       returning gm.id, gm.property_id, gm.type, gm.to_email, gm.subject, gm.html, gm.body_text, gm.invoice_id, gm.attempts, gm.secret_code`,
       [now],
     );
-    return rows as { id: string; property_id: string; type: MessageType; to_email: string; subject: string; html: string; body_text: string; invoice_id: string | null; attempts: number }[];
+    return rows as { id: string; property_id: string; type: MessageType; to_email: string; subject: string; html: string; body_text: string; invoice_id: string | null; attempts: number; secret_code: string | null }[];
   });
   for (const m of due) {
     const { sender, document } = await withTenant(pool, schema, async (tx) => ({
@@ -511,9 +537,9 @@ export async function dispatchMessages(pool: Pool, schema: string, tenantId: str
           ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
           ...(sender.sendingDomain ? { sendingDomain: sender.sendingDomain } : {}),
           to: m.to_email,
-          subject: m.subject,
-          html: m.html,
-          text: m.body_text,
+          subject: withCode(m.subject, m.secret_code),
+          html: withCode(m.html, m.secret_code),
+          text: withCode(m.body_text, m.secret_code),
           attachments: document?.pdf ? [{ name: `${document.number}.pdf`, type: "application/pdf", bytes: new Uint8Array(document.pdf) }] : [],
           tags: { tenantId, messageId: m.id },
         })
@@ -534,6 +560,8 @@ export async function dispatchMessages(pool: Pool, schema: string, tenantId: str
     await withTenant(pool, schema, (tx) =>
       tx.query("update guest_messages set status = case when status = 'delivered' then status else 'sent' end, sent_at = now(), provider_id = $2, reason = null where id = $1", [m.id, providerId]),
     );
+    // a one-time code is not kept once it went out
+    if (m.secret_code) await withTenant(pool, schema, (tx) => tx.query("update guest_messages set secret_code = null where id = $1", [m.id]));
     sent++;
   }
   const r2 = await dispatchOutboxes(pool, schema, tenantId, providers, options);
@@ -605,6 +633,7 @@ export async function previewMessage(pool: Pool, schema: string, propertyId: str
       portal_link: "https://portal.example/…",
       reply_address: "reply@example",
       checkout_time: look.checkoutTime,
+      code: "482913",
     };
     return renderMessage(await textIn(tx, propertyId, type, language), values, { hotelName: look.name, accent: look.accent }, look.footer);
   });

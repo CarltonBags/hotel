@@ -95,7 +95,7 @@ export default async function GuestPage({ params, searchParams }: { params: Prom
           <ul className="mt-2 grid gap-1 text-sm">
             {history.map((h, i) => (
               <li key={i}>
-                <span className="text-ink-60">{fmt.format(h.at)}</span> · {names.get(h.userId) ?? h.userId} · {h.field}: {h.oldValue ?? "—"} → {h.newValue ?? "—"}
+                <span className="text-ink-60">{fmt.format(h.at)}</span> · {h.userId === "guest-portal" ? m["guests.enteredByGuest"] : h.userId === "channel" ? m["guests.fromChannel"] : (names.get(h.userId) ?? h.userId)} · {h.field}: {h.oldValue ?? "—"} → {h.newValue ?? "—"}
               </li>
             ))}
           </ul>

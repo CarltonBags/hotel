@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { checkSenderDomain, findProperty, resetMessageText, sendTestMessage, setMessageText, setMessagingSettings, setSenderDomain } from "@hoteloftware/db";
+import { checkSenderDomain, findProperty, resetMessageText, setPortalSettings, sendTestMessage, setMessageText, setMessagingSettings, setSenderDomain } from "@hoteloftware/db";
 import { MESSAGE_TYPES, MESSAGE_TYPE_INFO, isMessageLanguage, isMessageType, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
 import { mailProvider } from "@hoteloftware/messaging";
 import { authorize } from "@/lib/authorize";
@@ -88,5 +88,14 @@ export async function testMessageAction(_prev: FormState, formData: FormData): P
     const { type, language } = typeAndLanguage(formData);
     await sendTestMessage(pool(), c.schema, { tenantId: c.tenantId, propertyId: c.propertyId, type, language, userId: c.userId });
     return { ok: true, message: "Test sent to your own address." };
+  });
+}
+
+/** What the Guest Portal tells guests, and whether they may upload a document picture (ticket 40). */
+export async function portalSettingsAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const c = await scope(formData);
+    await setPortalSettings(pool(), c.schema, c.propertyId, { info: { de: field(formData, "info_de"), en: field(formData, "info_en") }, documentImages: flag(formData, "documentImages") });
+    revalidatePath("/settings/messages");
   });
 }

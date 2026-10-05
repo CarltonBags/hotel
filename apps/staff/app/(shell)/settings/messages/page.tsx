@@ -1,11 +1,12 @@
-import { messageText, messagingSettings, previewMessage } from "@hoteloftware/db";
+import { messageText, messagingSettings, portalSettings, previewMessage } from "@hoteloftware/db";
 import { MESSAGE_LANGUAGES, MESSAGE_TYPES, MESSAGE_TYPE_INFO, PLACEHOLDERS, isMessageLanguage, isMessageType, messageSendable, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
 import Link from "next/link";
 import { ActionForm, Field } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
-import { messageTextAction, messagingSettingsAction, resetMessageTextAction, senderDomainAction, testMessageAction } from "./actions";
+import { fill } from "@/i18n/messages";
+import { messageTextAction, messagingSettingsAction, portalSettingsAction, resetMessageTextAction, senderDomainAction, testMessageAction } from "./actions";
 
 /** Guest messages of the property in the navbar (ticket 39): Sending Hours, languages, which types go, the sender, and the texts with preview, test send and reset. */
 export default async function MessagesSettingsPage({ searchParams }: { searchParams: Promise<{ type?: string; lang?: string }> }) {
@@ -27,6 +28,7 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
   const s = await messagingSettings(pool(), tenant.schemaName, property.id);
   const text = await messageText(pool(), tenant.schemaName, property.id, type, lang);
   const preview = await previewMessage(pool(), tenant.schemaName, property.id, type, lang);
+  const portal = await portalSettings(pool(), tenant.schemaName, property.id);
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
   const which = (
     <>
@@ -92,6 +94,24 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
               </label>
             ))}
           </fieldset>
+        </ActionForm>
+      </section>
+
+      <section className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm" data-portal-settings>
+        <h2 className="font-medium">{m["portal.settings"]}</h2>
+        <p className="text-ink-60">{m["portal.infoHelp"]}</p>
+        <ActionForm action={portalSettingsAction} submitLabel={m["action.save"]} pendingLabel={m["action.saving"]} className="grid gap-2">
+          {hidden}
+          {(["de", "en"] as const).map((l) => (
+            <label key={l} className="grid gap-1">
+              <span>{fill(m["portal.info"], { lang: l.toUpperCase() })}</span>
+              <textarea name={`info_${l}`} rows={4} defaultValue={portal.info[l] ?? ""} className="rounded-xl border border-ink-10 bg-surface p-2" />
+            </label>
+          ))}
+          <label className="flex items-center gap-2">
+            <input type="hidden" name="documentImages" value="off" />
+            <input type="checkbox" name="documentImages" defaultChecked={portal.documentImages} /> {m["portal.documentImages"]}
+          </label>
         </ActionForm>
       </section>
 
