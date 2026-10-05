@@ -1,9 +1,11 @@
 import type { Pool, PoolClient } from "pg";
-import { deskMinutesBetween, deskNight, isMessageLanguage, messageLanguage, portalLinkOpen, todayIn, type DeskHours, type MessageLanguage, type QuickReplyValues } from "@hoteloftware/domain";
+import { can, conversationExpired, deskMinutesBetween, deskNight, isMessageLanguage, messageLanguage, portalLinkOpen, todayIn, type DeskHours, type MessageLanguage, type QuickReplyValues } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
 import { fileIn, setFileRetention, type StoredFile } from "./files";
 import { ENSURE_MESSAGING, dateText, enabledTypes, queueGuestMessageIn, type PortalLinks } from "./messages";
+import { reportIssueIn } from "./maintenance";
 import { PORTAL_USER, reservationByKey } from "./portal";
+import type { Viewer } from "./room-state";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -189,16 +191,37 @@ export async function postGuestMessage(pool: Pool, schema: string, key: string, 
     await assertGuestPace(tx, owner);
     const c = await conversationIn(tx, owner);
     const fileId = await attachIn(tx, input.fileId, PORTAL_USER);
-    const { rows: who } = await tx.query<{ name: string }>(
-      `select ${GUEST_NAME} as name from bookings b left join reservations r on r.id = $1 left join guests g on g.id = coalesce(r.primary_guest_id, b.booker_guest_id)
-       left join companies co on co.id = b.booker_company_id where b.id = coalesce($2, r.booking_id)`,
-      [c.reservation_id, c.booking_id],
-    );
-    const guestName = who[0]?.name ?? "";
+    const posted = await guestMessagesIn(tx, c, { body, fileIds: fileId ? [fileId] : [], via: "portal" }, links, now);
+    return { conversationId: c.id, propertyId: c.property_id, ...posted };
+  });
+}
+
+/**
+ * The guest's message(s) in the thread, from the portal or by email (one per
+ * attachment past the first): waiting and unread from the first; outside Desk
+ * Hours one automatic reply a night, where the property has it on.
+ */
+async function guestMessagesIn(
+  tx: PoolClient,
+  c: ConversationRow,
+  input: { body: string; fileIds: string[]; via: "portal" | "email" },
+  links: PortalLinks | null,
+  now: Date,
+): Promise<{ messageId: string; guestName: string; autoReplied: boolean }> {
+  const { rows: who } = await tx.query<{ name: string }>(
+    `select ${GUEST_NAME} as name from bookings b left join reservations r on r.id = $1 left join guests g on g.id = coalesce(r.primary_guest_id, b.booker_guest_id)
+     left join companies co on co.id = b.booker_company_id where b.id = coalesce($2, r.booking_id)`,
+    [c.reservation_id, c.booking_id],
+  );
+  const guestName = who[0]?.name ?? "";
+  const parts = input.fileIds.length ? input.fileIds.map((fileId, i) => ({ body: i === 0 ? input.body : "", fileId })) : [{ body: input.body, fileId: null }];
+  let first = "";
+  for (const part of parts) {
     const { rows } = await tx.query<{ id: string }>(
-      "insert into conversation_messages (conversation_id, kind, user_id, author_name, body, file_id) values ($1, 'guest', $2, $3, $4, $5) returning id",
-      [c.id, PORTAL_USER, guestName, body, fileId],
+      "insert into conversation_messages (conversation_id, kind, user_id, author_name, body, file_id, via) values ($1, 'guest', $2, $3, $4, $5, $6) returning id",
+      [c.id, PORTAL_USER, guestName, part.body, part.fileId, input.via],
     );
+    first ||= rows[0]!.id;
     // times as stored, never through the app's milliseconds
     await tx.query(
       `update conversations c set last_message_at = m.created_at, last_guest_message_at = m.created_at, waiting_since = coalesce(c.waiting_since, m.created_at),
@@ -206,19 +229,66 @@ export async function postGuestMessage(pool: Pool, schema: string, key: string, 
        from conversation_messages m where m.id = $2 and c.id = $1`,
       [c.id, rows[0]!.id],
     );
-    // outside Desk Hours: one automatic reply a night, where the property has it on
-    const facts = await factsIn(tx, c.property_id);
-    const night = deskNight(now, { opens: facts.desk_opens, closes: facts.desk_closes }, facts.time_zone);
-    let autoReplied = false;
-    if (night && c.desk_closed_night !== night && enabledTypes(facts.switched).desk_closed) {
-      const to = await recipientIn(tx, c);
-      if (to) {
-        await queueGuestMessageIn(tx, { reservationId: to.reservationId, type: "desk_closed", triggerKey: `${c.id}:${night}`, now, links, ...toOf(c, to) });
-        await tx.query("update conversations set desk_closed_night = $2 where id = $1", [c.id, night]);
-        autoReplied = true;
-      }
+  }
+  const facts = await factsIn(tx, c.property_id);
+  const night = deskNight(now, { opens: facts.desk_opens, closes: facts.desk_closes }, facts.time_zone);
+  let autoReplied = false;
+  if (night && c.desk_closed_night !== night && enabledTypes(facts.switched).desk_closed) {
+    const to = await recipientIn(tx, c);
+    if (to) {
+      await queueGuestMessageIn(tx, { reservationId: to.reservationId, type: "desk_closed", triggerKey: `${c.id}:${night}`, now, links, ...toOf(c, to) });
+      await tx.query("update conversations set desk_closed_night = $2 where id = $1", [c.id, night]);
+      autoReplied = true;
     }
-    return { conversationId: c.id, propertyId: c.property_id, messageId: rows[0]!.id, guestName, autoReplied };
+  }
+  return { messageId: first, guestName, autoReplied };
+}
+
+/** Where an email reply goes: the Conversation of its reply address (null when the token is not ours). */
+export async function conversationByReplyToken(pool: Pool, schema: string, token: string): Promise<{ conversationId: string; propertyId: string } | null> {
+  if (!/^[0-9a-f]{20,64}$/.test(token)) return null;
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<{ id: string; property_id: string }>("select id, property_id from conversations where reply_token = $1", [token]);
+    return rows[0] ? { conversationId: rows[0].id, propertyId: rows[0].property_id } : null;
+  });
+}
+
+export interface InboundGuestMail {
+  /** The provider's id of the mail: each is taken once. */
+  providerId: string;
+  token: string | null;
+  sender: string;
+  subject: string;
+  /** The reply as written, quoted history stripped by the provider. */
+  text: string;
+  autoReply: boolean;
+  /** Everything the provider told us, kept as received. */
+  raw: unknown;
+  /** Attachments already checked and stored (images and PDFs up to 10 MB). */
+  fileIds: string[];
+}
+
+/**
+ * A guest's email reply (ticket 43): kept as received; unless it is an
+ * automatic reply (out of office), its text and attachments land in the
+ * Conversation as the guest's message, as if written in the portal. Null when
+ * the mail was taken before or found no Conversation.
+ */
+export async function receiveGuestEmail(pool: Pool, schema: string, mail: InboundGuestMail, links: PortalLinks | null, now = new Date()): Promise<(GuestPost & { conversationId: string }) | null> {
+  return withTenant(pool, schema, async (tx) => {
+    const target = mail.token ? (await tx.query<{ id: string }>("select id from conversations where reply_token = $1", [mail.token])).rows[0] : undefined;
+    const { rows: kept } = await tx.query(
+      "insert into inbound_mails (provider_id, conversation_id, sender, subject, auto_reply, raw) values ($1, $2, $3, $4, $5, $6) on conflict (provider_id) do nothing returning id",
+      [mail.providerId, target?.id ?? null, mail.sender.slice(0, 500), mail.subject.slice(0, 500), mail.autoReply, JSON.stringify(mail.raw)],
+    );
+    if (!kept.length || !target || mail.autoReply) return null;
+    const body = mail.text.trim().slice(0, 5000);
+    const fileIds = [];
+    for (const f of mail.fileIds) fileIds.push((await attachIn(tx, f, PORTAL_USER))!);
+    if (!body && !fileIds.length) return null;
+    const c = (await tx.query<ConversationRow>(`select ${ROW} from conversations where id = $1 for update`, [target.id])).rows[0]!;
+    const posted = await guestMessagesIn(tx, c, { body, fileIds, via: "email" }, links, now);
+    return { conversationId: c.id, propertyId: c.property_id, ...posted };
   });
 }
 
@@ -300,6 +370,10 @@ export async function claimConversation(pool: Pool, schema: string, propertyId: 
 export interface ConversationListRow {
   id: string;
   propertyId: string;
+  /** With several properties in view the hotel is named. */
+  propertyName: string;
+  /** Kept past its retention for a dispute. */
+  disputed: boolean;
   reservationId: string | null;
   bookingId: string | null;
   guestName: string;
@@ -315,7 +389,7 @@ export interface ConversationListRow {
   lastText: string;
 }
 
-const LIST_COLUMNS = `c.id, c.property_id, c.reservation_id, c.booking_id, c.unread_since, c.waiting_since, c.claimed_by, c.claimed_name, c.last_message_at,
+const LIST_COLUMNS = `c.id, c.property_id, (select p.name from properties p where p.id = c.property_id) as property_name, c.disputed_at, c.reservation_id, c.booking_id, c.unread_since, c.waiting_since, c.claimed_by, c.claimed_name, c.last_message_at,
   ${GUEST_NAME} as guest_name, b.confirmation_number, coalesce(r.primary_guest_id, b.booker_guest_id) as guest_id,
   to_char(coalesce(r.arrival, (select min(x.arrival) from reservations x where x.booking_id = c.booking_id)), 'YYYY-MM-DD') as arrival,
   to_char(coalesce(r.departure, (select max(x.departure) from reservations x where x.booking_id = c.booking_id)), 'YYYY-MM-DD') as departure,
@@ -325,10 +399,12 @@ const LIST_FROM = `conversations c left join reservations r on r.id = c.reservat
   join bookings b on b.id = coalesce(c.booking_id, r.booking_id)
   left join guests g on g.id = coalesce(r.primary_guest_id, b.booker_guest_id) left join companies co on co.id = b.booker_company_id`;
 
-type ListRow = { id: string; guest_id: string | null; property_id: string; reservation_id: string | null; booking_id: string | null; unread_since: Date | null; waiting_since: Date | null; claimed_by: string | null; claimed_name: string | null; last_message_at: Date | null; guest_name: string; confirmation_number: string; arrival: string; departure: string; room: string | null; last_text: string };
+type ListRow = { id: string; guest_id: string | null; property_id: string; property_name: string; disputed_at: Date | null; reservation_id: string | null; booking_id: string | null; unread_since: Date | null; waiting_since: Date | null; claimed_by: string | null; claimed_name: string | null; last_message_at: Date | null; guest_name: string; confirmation_number: string; arrival: string; departure: string; room: string | null; last_text: string };
 const toListRow = (r: ListRow): ConversationListRow => ({
   id: r.id,
   propertyId: r.property_id,
+  propertyName: r.property_name,
+  disputed: r.disputed_at !== null,
   reservationId: r.reservation_id,
   bookingId: r.booking_id,
   guestName: r.guest_name,
@@ -344,12 +420,19 @@ const toListRow = (r: ListRow): ConversationListRow => ({
   lastText: r.last_text.slice(0, 140),
 });
 
-/** The Guest Inbox of a property: unread first, then the newest; Conversations with a message only. */
-export async function listConversations(pool: Pool, schema: string, propertyId: string): Promise<ConversationListRow[]> {
-  if (!isUuid(propertyId)) return [];
+/** The Guest Inbox of a property, or combined over several (ticket 43): unread first, then the newest; Conversations with a message only. */
+export async function listConversations(pool: Pool, schema: string, propertyIds: string[]): Promise<ConversationListRow[]> {
+  const ids = propertyIds.filter(isUuid);
+  if (!ids.length) return [];
   return withTenant(pool, schema, async (tx) =>
-    (await tx.query<ListRow>(`select ${LIST_COLUMNS} from ${LIST_FROM} where c.property_id = $1 and c.last_message_at is not null order by (c.unread_since is null), c.last_message_at desc limit 300`, [propertyId])).rows.map(toListRow),
+    (await tx.query<ListRow>(`select ${LIST_COLUMNS} from ${LIST_FROM} where c.property_id = any($1::uuid[]) and c.last_message_at is not null order by (c.unread_since is null), c.last_message_at desc limit 300`, [ids])).rows.map(toListRow),
   );
+}
+
+/** The property a Conversation belongs to, among those given (the combined inbox opens it at its own property). */
+export async function conversationProperty(pool: Pool, schema: string, conversationId: string, propertyIds: string[]): Promise<string | null> {
+  if (!isUuid(conversationId)) return null;
+  return withTenant(pool, schema, async (tx) => (await tx.query<{ property_id: string }>("select property_id from conversations where id = $1 and property_id = any($2::uuid[])", [conversationId, propertyIds.filter(isUuid)])).rows[0]?.property_id ?? null);
 }
 
 /** Unread Conversations at the properties (the navbar badge). */
@@ -370,6 +453,11 @@ export interface ThreadMessage {
   at: Date;
   /** An automatic message not sent (no address, bounced, failed): staff see it marked. */
   notSent: boolean;
+  /** A guest's message replied by email rather than written in the portal. */
+  byEmail: boolean;
+  /** Work made from it (ticket 43), linked back. */
+  issueId: string | null;
+  taskId: string | null;
 }
 
 interface ThreadOwner {
@@ -385,11 +473,12 @@ interface ThreadOwner {
  * Booker's. The guest sees only what was sent (or kept for the portal).
  */
 async function threadIn(tx: PoolClient, c: ThreadOwner, forStaff: boolean): Promise<ThreadMessage[]> {
-  const { rows } = await tx.query<{ id: string; kind: ThreadMessage["kind"]; author_name: string; body: string; subject: string | null; file_id: string | null; file_type: string | null; at: Date; not_sent: boolean }>(
-    `select m.id, m.kind, m.author_name, m.body, null as subject, m.file_id, f.content_type as file_type, m.created_at as at, false as not_sent
+  const { rows } = await tx.query<{ id: string; kind: ThreadMessage["kind"]; author_name: string; body: string; subject: string | null; file_id: string | null; file_type: string | null; at: Date; not_sent: boolean; by_email: boolean; issue_id: string | null; task_id: string | null }>(
+    `select m.id, m.kind, m.author_name, m.body, null as subject, m.file_id, f.content_type as file_type, m.created_at as at, false as not_sent, m.via = 'email' as by_email,
+            (select i.id from maintenance_issues i where i.conversation_message_id = m.id limit 1) as issue_id, (select t.id from housekeeping_tasks t where t.conversation_message_id = m.id limit 1) as task_id
      from conversation_messages m left join stored_files f on f.id = m.file_id where m.conversation_id = $1 and ($4 or m.kind <> 'note')
      union all
-     select gm.id, 'auto', '', gm.body_text, gm.subject, null, null, gm.send_after, gm.status in ('failed', 'suppressed')
+     select gm.id, 'auto', '', gm.body_text, gm.subject, null, null, gm.send_after, gm.status in ('failed', 'suppressed'), false, null, null
      from guest_messages gm
      where gm.type <> 'inbox_reply' and gm.send_after <= now()
        and (gm.conversation_id = $1
@@ -400,7 +489,7 @@ async function threadIn(tx: PoolClient, c: ThreadOwner, forStaff: boolean): Prom
      order by at`,
     [c.id, c.reservation_id, c.booking_id, forStaff],
   );
-  return rows.map((r) => ({ id: r.id, kind: r.kind, authorName: r.author_name, body: r.body, subject: r.subject, fileId: r.file_id, fileType: r.file_type, at: r.at, notSent: r.not_sent }));
+  return rows.map((r) => ({ id: r.id, kind: r.kind, authorName: r.author_name, body: r.body, subject: r.subject, fileId: r.file_id, fileType: r.file_type, at: r.at, notSent: r.not_sent, byEmail: r.by_email, issueId: forStaff ? r.issue_id : null, taskId: forStaff ? r.task_id : null }));
 }
 
 export interface ConversationView {
@@ -527,6 +616,8 @@ export interface InboxSettings {
   deskCloses: string;
   /** From when guests can check in, for Quick Replies. */
   checkinTime: string;
+  /** Conversations and their files are deleted this many months after the stay (1–12). */
+  conversationMonths: number;
   emergencyPhone: string | null;
   escalationMinutes: number;
 }
@@ -535,11 +626,11 @@ export async function inboxSettings(pool: Pool, schema: string, propertyId: stri
   if (!isUuid(propertyId)) throw new Error("Property not found");
   return withTenant(pool, schema, async (tx) => {
     await tx.query(ENSURE_MESSAGING, [propertyId]);
-    const r = (await tx.query<{ desk_opens: string; desk_closes: string; checkin_time: string; emergency_phone: string | null; escalation_minutes: number }>(
-      "select to_char(desk_opens, 'HH24:MI') as desk_opens, to_char(desk_closes, 'HH24:MI') as desk_closes, to_char(checkin_time, 'HH24:MI') as checkin_time, emergency_phone, escalation_minutes from property_messaging where property_id = $1",
+    const r = (await tx.query<{ desk_opens: string; desk_closes: string; checkin_time: string; emergency_phone: string | null; escalation_minutes: number; conversation_months: number }>(
+      "select to_char(desk_opens, 'HH24:MI') as desk_opens, to_char(desk_closes, 'HH24:MI') as desk_closes, to_char(checkin_time, 'HH24:MI') as checkin_time, emergency_phone, escalation_minutes, conversation_months from property_messaging where property_id = $1",
       [propertyId],
     )).rows[0]!;
-    return { deskOpens: r.desk_opens, deskCloses: r.desk_closes, checkinTime: r.checkin_time, emergencyPhone: r.emergency_phone, escalationMinutes: r.escalation_minutes };
+    return { deskOpens: r.desk_opens, deskCloses: r.desk_closes, checkinTime: r.checkin_time, emergencyPhone: r.emergency_phone, escalationMinutes: r.escalation_minutes, conversationMonths: r.conversation_months };
   });
 }
 
@@ -548,11 +639,12 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 export async function setInboxSettings(pool: Pool, schema: string, propertyId: string, input: InboxSettings, userId: string): Promise<void> {
   if (!HHMM.test(input.deskOpens) || !HHMM.test(input.deskCloses) || !HHMM.test(input.checkinTime)) throw new Error("Give the times as HH:MM");
   if (!Number.isInteger(input.escalationMinutes) || input.escalationMinutes < 5 || input.escalationMinutes > 240) throw new Error("Escalation after 5 to 240 minutes");
+  if (!Number.isInteger(input.conversationMonths) || input.conversationMonths < 1 || input.conversationMonths > 12) throw new Error("Keep Conversations for 1 to 12 months");
   const phone = input.emergencyPhone?.trim() || null;
   if (phone && !/^\+?[0-9 ()/-]{5,25}$/.test(phone)) throw new Error("The emergency number has digits, spaces and a leading + only");
   await withTenant(pool, schema, async (tx) => {
     await tx.query(ENSURE_MESSAGING, [propertyId]);
-    await tx.query("update property_messaging set desk_opens = $2, desk_closes = $3, emergency_phone = $4, escalation_minutes = $5, checkin_time = $7, updated_at = now(), updated_by = $6 where property_id = $1", [
+    await tx.query("update property_messaging set desk_opens = $2, desk_closes = $3, emergency_phone = $4, escalation_minutes = $5, checkin_time = $7, conversation_months = $8, updated_at = now(), updated_by = $6 where property_id = $1", [
       propertyId,
       input.deskOpens,
       input.deskCloses,
@@ -560,6 +652,7 @@ export async function setInboxSettings(pool: Pool, schema: string, propertyId: s
       input.escalationMinutes,
       userId,
       input.checkinTime,
+      input.conversationMonths,
     ]);
   });
 }
@@ -589,4 +682,86 @@ export async function saveQuickReply(pool: Pool, schema: string, propertyId: str
 export async function deleteQuickReply(pool: Pool, schema: string, propertyId: string, id: string): Promise<void> {
   if (!isUuid(id)) return;
   await withTenant(pool, schema, (tx) => tx.query("delete from quick_replies where id = $1 and property_id = $2", [id, propertyId]));
+}
+
+/** Kept past retention while a dispute is open, or released again (ticket 43). */
+export async function setConversationDisputed(pool: Pool, schema: string, propertyId: string, conversationId: string, disputed: boolean, userId: string): Promise<void> {
+  await withTenant(pool, schema, async (tx) => {
+    const c = await lockConversation(tx, conversationId, propertyId);
+    await tx.query("update conversations set disputed_at = case when $2 then coalesce(disputed_at, now()) end, disputed_by = case when $2 then coalesce(disputed_by, $3) end where id = $1", [c.id, disputed, userId]);
+  });
+}
+
+/**
+ * The retention job (ticket 43): Conversations whose stay ended more than
+ * the property's months ago (12 unless shortened) go with their messages,
+ * received mails and automatic copies; their files are handed to the file
+ * retention (deleted from storage today). One kept for a dispute stays.
+ * Mails that found no Conversation go after 30 days.
+ */
+export async function deleteExpiredConversations(pool: Pool, schema: string, today: string): Promise<number> {
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<{ id: string; stay_end: string; months: number; disputed: boolean }>(
+      `select c.id, to_char(coalesce(r.departure, (select max(x.departure) from reservations x where x.booking_id = c.booking_id)), 'YYYY-MM-DD') as stay_end,
+              coalesce(pm.conversation_months, 12) as months, c.disputed_at is not null as disputed
+       from conversations c left join reservations r on r.id = c.reservation_id left join property_messaging pm on pm.property_id = c.property_id
+       where c.disputed_at is null and coalesce(r.departure, (select max(x.departure) from reservations x where x.booking_id = c.booking_id)) < $1::date - interval '1 month'`,
+      [today],
+    );
+    const gone = rows.filter((r) => r.stay_end && conversationExpired(r.stay_end, r.months, today, r.disputed)).map((r) => r.id);
+    if (gone.length) {
+      await tx.query("update stored_files set delete_after = $2 where id in (select file_id from conversation_messages where conversation_id = any($1::uuid[]) and file_id is not null)", [gone, today]);
+      await tx.query("delete from conversations where id = any($1::uuid[])", [gone]);
+    }
+    await tx.query("delete from inbound_mails where conversation_id is null and received_at < $1::date - interval '30 days'", [today]);
+    return gone.length;
+  });
+}
+
+export type TaskFromMessage = "maintenance" | "housekeeping";
+
+/**
+ * A guest's message becomes work for the guest's room (ticket 43): a
+ * Maintenance Issue, or a Housekeeping Task for today's Business Date (added
+ * to the room's open hand-made task if there is one), linked back to the
+ * message. The stay needs a room.
+ */
+export async function messageToTask(pool: Pool, schema: string, propertyId: string, messageId: string, kind: TaskFromMessage, viewer: Viewer): Promise<string> {
+  if (!isUuid(messageId)) throw new Error("Message not found");
+  if (!can(viewer.actor, "use_guest_inbox", propertyId)) throw new Error("Not allowed");
+  return withTenant(pool, schema, async (tx) => {
+    const { rows } = await tx.query<{ id: string; body: string; conversation_id: string; reservation_id: string | null; booking_id: string | null; business_date: string }>(
+      `select m.id, m.body, m.conversation_id, c.reservation_id, c.booking_id, to_char(p.business_date, 'YYYY-MM-DD') as business_date
+       from conversation_messages m join conversations c on c.id = m.conversation_id join properties p on p.id = c.property_id
+       where m.id = $1 and m.kind = 'guest' and c.property_id = $2 for update of m`,
+      [messageId, propertyId],
+    );
+    const m = rows[0];
+    if (!m) throw new Error("Message not found");
+    const done = (await tx.query<{ id: string }>(`select id from ${kind === "maintenance" ? "maintenance_issues" : "housekeeping_tasks"} where conversation_message_id = $1`, [m.id])).rows[0];
+    if (done) return done.id;
+    // the guest's room tonight; before arrival the room they get first; after, the last one (for a booking, its rooms')
+    const { rows: room } = await tx.query<{ room_id: string; reservation_id: string }>(
+      `select a.room_id, a.reservation_id from room_assignments a join reservations r on r.id = a.reservation_id
+       where (r.id = $1 or r.booking_id = $2)
+       order by case when a.from_date <= $3::date and a.to_date > $3::date then 0 when a.from_date > $3::date then 1 else 2 end, abs(a.from_date - $3::date) limit 1`,
+      [m.reservation_id, m.booking_id, m.business_date],
+    );
+    if (!room[0]) throw new Error("The stay has no room yet");
+    const note = `Guest: ${m.body}`.slice(0, 1000);
+    if (kind === "maintenance") {
+      const issue = await reportIssueIn(tx, { propertyId, roomId: room[0].room_id, place: "", pick: "other", urgency: "today", note, photoFileId: null, block: null }, viewer);
+      await tx.query("update maintenance_issues set conversation_message_id = $2 where id = $1", [issue.id, m.id]);
+      return issue.id;
+    }
+    const { rows: task } = await tx.query<{ id: string }>(
+      `insert into housekeeping_tasks (property_id, room_id, business_date, kind, reservation_id, note, minutes, created_by, conversation_message_id)
+       values ($1, $2, $3, 'clean', $4, $5, 10, $6, $7)
+       on conflict (room_id, business_date, kind) do update set note = case when housekeeping_tasks.note = '' then excluded.note else housekeeping_tasks.note || E'\n' || excluded.note end,
+         conversation_message_id = coalesce(housekeeping_tasks.conversation_message_id, excluded.conversation_message_id), changed = true
+       returning id`,
+      [propertyId, room[0].room_id, m.business_date, room[0].reservation_id, note, viewer.userId, m.id],
+    );
+    return task[0]!.id;
+  });
 }

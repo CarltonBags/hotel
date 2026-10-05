@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import {
+  replyAddress,
   ACCENTS,
   MESSAGE_TYPE_INFO,
   MESSAGE_TYPES,
@@ -309,6 +310,23 @@ async function factsOf(tx: PoolClient, reservationId: string): Promise<Reservati
 /** Where the Guest Portal answers for this tenant (https://<slug>.<domain>); links in messages start with it. */
 export interface PortalLinks {
   base: string;
+  /** Where guests' email replies come in (ticket 43); none: no reply address, replies go to the property's Reply-to. */
+  replyDomain?: string | null;
+}
+
+/**
+ * The reply address of a message: its Conversation's (the stay's, made on
+ * first use), so the guest's email answer lands in the thread (ticket 43).
+ */
+async function replyAddressIn(tx: PoolClient, conversationId: string | null, reservationId: string, domain: string): Promise<string | null> {
+  if (!conversationId) {
+    await tx.query("insert into conversations (property_id, reservation_id) select property_id, id from reservations where id = $1 on conflict do nothing", [reservationId]);
+  }
+  const { rows } = await tx.query<{ reply_token: string; slug: string }>(
+    `select c.reply_token, (select t.slug from control.tenants t where t.schema_name = current_schema()) as slug from conversations c where ${conversationId ? "c.id" : "c.reservation_id"} = $1`,
+    [conversationId ?? reservationId],
+  );
+  return rows[0]?.slug ? replyAddress(rows[0].slug, rows[0].reply_token, domain) : null;
 }
 
 /** Render and queue one message; nothing when it went already for this trigger. Returns its id, or null. */
@@ -347,6 +365,7 @@ export async function queueGuestMessageIn(
   );
   const s = setting[0]!;
   const language = messageLanguage(f.language, s.use_guest_language, s.fallback_language);
+  const replyTo = input.links?.replyDomain ? await replyAddressIn(tx, input.conversationId ?? null, input.reservationId, input.links.replyDomain) : null;
   const values: Partial<Record<Placeholder, string>> = {
     guest_name: input.greetName ?? [f.first_name, f.last_name].filter(Boolean).join(" "),
     hotel_name: look.name,
@@ -356,8 +375,7 @@ export async function queueGuestMessageIn(
     amount: input.amount == null ? "" : formatCurrency(input.amount, look.currency, language, look.country),
     document_number: input.documentNumber ?? "",
     portal_link: input.links ? `${input.links.base}/g/${input.linkKey ?? (input.toEmail ? f.portal_key : (f.booking_key ?? f.portal_key))}` : "",
-    // wired with Conversations (ticket 43)
-    reply_address: "",
+    reply_address: replyTo ?? "",
     checkout_time: look.checkoutTime,
     // the stored copy shows dots; the code goes in when the mail is sent
     code: input.code ? CODE_MASK : "",
@@ -378,10 +396,10 @@ export async function queueGuestMessageIn(
   const channelOff = f.channel && !(f.channel_confirmation ?? s.switched[CHANNEL_SWITCH] ?? true) && (input.type === "confirmation" || input.type === "cancellation");
   const reason = channelOff ? "channel" : !email ? "no_email" : email === f.email_bounced ? "bounced" : email === f.email_complained && !info.essential ? "complained" : null;
   const { rows } = await tx.query<{ id: string }>(
-    `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by, secret_code, conversation_id)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, greatest(($13::date + $14::time) at time zone $15, $16::timestamptz), $17, $18, $19)
+    `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by, secret_code, conversation_id, reply_to)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, greatest(($13::date + $14::time) at time zone $15, $16::timestamptz), $17, $18, $19, $20)
      on conflict (reservation_id, type, trigger_key) do nothing returning id`,
-    [f.property_id, input.reservationId, input.type, input.triggerKey, language, email, rendered.subject, rendered.html, rendered.text, input.invoiceId ?? null, reason ? "suppressed" : "queued", reason, ...sendMoment(look, info.timing, input.now), input.now, input.userId ?? null, reason ? null : (input.code ?? null), input.conversationId ?? null],
+    [f.property_id, input.reservationId, input.type, input.triggerKey, language, email, rendered.subject, rendered.html, rendered.text, input.invoiceId ?? null, reason ? "suppressed" : "queued", reason, ...sendMoment(look, info.timing, input.now), input.now, input.userId ?? null, reason ? null : (input.code ?? null), input.conversationId ?? null, replyTo],
   );
   return rows[0]?.id ?? null;
 }
@@ -537,10 +555,10 @@ export async function dispatchMessages(pool: Pool, schema: string, tenantId: str
       `update guest_messages gm set status = 'sending', attempts = attempts + 1, claimed_at = $1
        from (select id from guest_messages where status = 'queued' and send_after <= $1 order by send_after limit 50 for update skip locked) d
        where gm.id = d.id
-       returning gm.id, gm.property_id, gm.type, gm.to_email, gm.subject, gm.html, gm.body_text, gm.invoice_id, gm.attempts, gm.secret_code`,
+       returning gm.id, gm.property_id, gm.type, gm.to_email, gm.subject, gm.html, gm.body_text, gm.invoice_id, gm.attempts, gm.secret_code, gm.reply_to`,
       [now],
     );
-    return rows as { id: string; property_id: string; type: MessageType; to_email: string; subject: string; html: string; body_text: string; invoice_id: string | null; attempts: number; secret_code: string | null }[];
+    return rows as { id: string; property_id: string; type: MessageType; to_email: string; subject: string; html: string; body_text: string; invoice_id: string | null; attempts: number; secret_code: string | null; reply_to: string | null }[];
   });
   for (const m of due) {
     const { sender, document } = await withTenant(pool, schema, async (tx) => ({
@@ -553,7 +571,8 @@ export async function dispatchMessages(pool: Pool, schema: string, tenantId: str
         await providers.mail.send({
           from: sender.from,
           fromName: sender.fromName,
-          ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
+          // the Conversation's address, so the answer lands in the thread; else the property's Reply-to
+          ...(m.reply_to || sender.replyTo ? { replyTo: m.reply_to ?? sender.replyTo! } : {}),
           ...(sender.sendingDomain ? { sendingDomain: sender.sendingDomain } : {}),
           to: m.to_email,
           subject: withCode(m.subject, m.secret_code),

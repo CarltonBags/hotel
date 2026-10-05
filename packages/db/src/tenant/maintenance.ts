@@ -157,6 +157,8 @@ export interface IssueRow {
   /** The issue's Room Block; `notOver` while it is in force or still to begin. */
   block: { id: string; kind: RoomBlockKind; until: string; notOver: boolean } | null;
   blockDecision: "ended" | "kept" | null;
+  /** Made from a guest's message (ticket 43): its Conversation. */
+  conversationId: string | null;
 }
 
 /** The queue of a property: open and in progress by urgency, or the last 100 done. */
@@ -166,6 +168,7 @@ export async function listIssues(pool: Pool, schema: string, propertyId: string,
     const { rows } = await tx.query(
       `select i.id, i.room_id, m.number, i.place, i.pick, i.urgency, i.note, i.status, i.reported_by, i.reported_at, i.taken_by, i.fixed_by, i.fixed_at, i.fix_note,
               i.photo_file_id, i.fix_photo_file_id, i.photo is not null as legacy_photo, i.block_decision,
+              (select cm.conversation_id from conversation_messages cm where cm.id = i.conversation_message_id) as conversation_id,
               b.id as block_id, b.kind as block_kind, to_char(b.to_date, 'YYYY-MM-DD') as block_until, ${blockNotOver("b", "p.business_date")} as block_not_over
        from maintenance_issues i join properties p on p.id = i.property_id left join rooms m on m.id = i.room_id left join room_blocks b on b.id = i.block_id
        where i.property_id = $1 and ${which === "open" ? "i.status <> 'done'" : "i.status = 'done'"}
@@ -193,6 +196,7 @@ export async function listIssues(pool: Pool, schema: string, propertyId: string,
       legacyPhoto: r.legacy_photo,
       block: r.block_id ? { id: r.block_id, kind: r.block_kind, until: r.block_until, notOver: r.block_not_over } : null,
       blockDecision: r.block_decision,
+      conversationId: r.conversation_id,
     }));
   });
 }

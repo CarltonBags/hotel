@@ -10,8 +10,7 @@ import { useShell } from "./ShellProvider";
 export function InboxButton() {
   const { t, scope, openModule, propertyActions, activeModules } = useShell();
   const [unread, setUnread] = useState(0);
-  // the inbox works one property at a time (the combined view comes with ticket 43)
-  const shown = propertyActions.includes("use_guest_inbox") && activeModules.includes("guest_portal") && !!scope && scope !== "all";
+  const shown = propertyActions.includes("use_guest_inbox") && activeModules.includes("guest_portal");
   useEffect(() => {
     if (!shown) return;
     let current = true;
@@ -23,7 +22,8 @@ export function InboxButton() {
     load();
     const onData = (e: Event) => {
       const d = (e as CustomEvent<{ kind: string; propertyId: string }>).detail;
-      if (d.kind === DATA_KINDS.conversations && d.propertyId === scope) load();
+      // a change at a property in view: with "All properties" any
+      if (d.kind === DATA_KINDS.conversations && (!scope || scope === "all" || d.propertyId === scope)) load();
     };
     window.addEventListener(DATA_EVENT, onData);
     return () => {

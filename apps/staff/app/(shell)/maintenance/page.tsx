@@ -95,6 +95,14 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
                 <p>
                   {m[`mi.pick.${i.pick}`]}
                   {i.note ? ` · ${i.note}` : ""}
+                  {i.conversationId ? (
+                    <>
+                      {" · "}
+                      <Link href={`/inbox?c=${i.conversationId}`} className="underline" data-from-conversation>
+                        {m["inbox.open"]}
+                      </Link>
+                    </>
+                  ) : null}
                 </p>
                 <p className="text-xs text-ink-60">
                   {m["mi.reported"]} {name.get(i.reportedBy) ?? "?"} · {when(i.reportedAt)}

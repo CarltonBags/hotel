@@ -7,7 +7,7 @@ import { portalLanguage } from "@hoteloftware/domain";
 import { portalText } from "@/i18n/portal";
 import { fileServices } from "@hoteloftware/storage";
 import { pool } from "@/lib/db";
-import { portalBaseUrl } from "@/lib/env";
+import { guestLinks } from "@/lib/env";
 import { field, flag, formAction, type FormState } from "@/lib/form";
 import { currentTenant } from "@/lib/tenant";
 
@@ -21,7 +21,7 @@ async function tenant() {
   return t;
 }
 
-const links = (slug: string) => ({ base: portalBaseUrl(slug) });
+const links = (slug: string) => guestLinks(slug);
 const country = (v: string) => (/^[A-Za-z]{2}$/.test(v) ? v.toUpperCase() : null);
 const day = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 

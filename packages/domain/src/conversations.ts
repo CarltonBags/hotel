@@ -67,3 +67,37 @@ export function fillQuickReply(text: string, values: QuickReplyValues): string {
 export function isConversationFile(contentType: string, bytes: number): boolean {
   return (CONVERSATION_FILE_TYPES as readonly string[]).includes(contentType) && bytes <= CONVERSATION_FILE_BYTES;
 }
+
+/**
+ * Replies by email (ticket 43): guest messages carry a reply address of
+ * their Conversation, `<tenant slug>.<token>@<inbound domain>`; the token is
+ * random per Conversation, so the address cannot be guessed from another.
+ */
+export function replyAddress(slug: string, token: string, domain: string): string {
+  return `${slug}.${token}@${domain}`;
+}
+
+/** The tenant and token of a reply address (also inside "Name <address>"); null for any other address. */
+export function parseReplyAddress(address: string): { slug: string; token: string } | null {
+  const m = /([a-z0-9-]+)\.([0-9a-f]{20,64})@/i.exec(address);
+  return m ? { slug: m[1]!.toLowerCase(), token: m[2]!.toLowerCase() } : null;
+}
+
+const AUTO_SUBJECT = /^\s*(out of (the )?office|automatic reply|auto(matische)?[ -]?(reply|antwort)|autoreply|abwesenheit(snotiz)?|absence|vacation|urlaub|r[ée]ponse automatique|absent)\b/i;
+
+/** An automatic answer (out of office and the like): kept, never counted as a guest message. Headers by lower-case name. */
+export function isAutoReply(headers: Record<string, string>, subject: string): boolean {
+  const submitted = headers["auto-submitted"]?.trim().toLowerCase();
+  if (submitted && submitted !== "no") return true;
+  if (headers["x-autoreply"] || headers["x-autorespond"] || headers["x-auto-response-suppress"]?.toLowerCase().includes("all")) return true;
+  if (["bulk", "auto_reply", "junk", "list"].includes(headers["precedence"]?.trim().toLowerCase() ?? "")) return true;
+  return AUTO_SUBJECT.test(subject);
+}
+
+/** Conversations and their files go a number of months after the stay ended (12, a property may shorten it); one kept for a dispute stays. */
+export function conversationExpired(stayEnd: string, months: number, today: string, disputed: boolean): boolean {
+  if (disputed) return false;
+  const d = new Date(`${stayEnd}T12:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return today > d.toISOString().slice(0, 10);
+}

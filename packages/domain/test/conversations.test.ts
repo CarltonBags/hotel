@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deskMinutesBetween, deskNight, fillQuickReply, inDeskHours, isConversationFile } from "../src/conversations";
+import { conversationExpired, deskMinutesBetween, deskNight, fillQuickReply, inDeskHours, isAutoReply, isConversationFile, parseReplyAddress, replyAddress } from "../src/conversations";
 
 const TZ = "Europe/Berlin";
 // 2026-10-05 is summer time in Berlin: UTC+2
@@ -43,5 +43,32 @@ describe("quick replies and attachments", () => {
     expect(isConversationFile("application/pdf", 10 * 1024 * 1024 + 1)).toBe(false);
     expect(isConversationFile("image/png", 1000)).toBe(true);
     expect(isConversationFile("application/zip", 1000)).toBe(false);
+  });
+});
+
+describe("replies by email and retention (ticket 43)", () => {
+  it("a reply address names the tenant and the Conversation's token, and reads back", () => {
+    const a = replyAddress("alpha", "0123456789abcdef0123", "replies.example.com");
+    expect(a).toBe("alpha.0123456789abcdef0123@replies.example.com");
+    expect(parseReplyAddress(`"Guest" <${a.toUpperCase()}>`)).toEqual({ slug: "alpha", token: "0123456789abcdef0123" });
+    expect(parseReplyAddress("someone@example.com")).toBeNull();
+  });
+
+  it("recognises out-of-office and other automatic replies", () => {
+    expect(isAutoReply({ "auto-submitted": "auto-replied" }, "Re: your stay")).toBe(true);
+    expect(isAutoReply({ "auto-submitted": "no" }, "Re: your stay")).toBe(false);
+    expect(isAutoReply({ "x-autoreply": "yes" }, "Hello")).toBe(true);
+    expect(isAutoReply({ precedence: "bulk" }, "Hello")).toBe(true);
+    expect(isAutoReply({}, "Abwesenheitsnotiz: Re: Ihre Buchung")).toBe(true);
+    expect(isAutoReply({}, "Out of Office: Re: Your booking")).toBe(true);
+    expect(isAutoReply({}, "Automatic reply: Re: Your booking")).toBe(true);
+    expect(isAutoReply({}, "Re: Your booking")).toBe(false);
+  });
+
+  it("a Conversation goes after its months past departure, unless kept for a dispute", () => {
+    expect(conversationExpired("2025-09-01", 12, "2026-09-01", false)).toBe(false);
+    expect(conversationExpired("2025-09-01", 12, "2026-09-02", false)).toBe(true);
+    expect(conversationExpired("2025-09-01", 6, "2026-03-02", false)).toBe(true);
+    expect(conversationExpired("2025-09-01", 12, "2026-11-01", true)).toBe(false);
   });
 });

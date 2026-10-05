@@ -112,7 +112,7 @@ export async function portalSettingsAction(_prev: FormState, formData: FormData)
 export async function inboxSettingsAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const c = await scope(formData);
-    await setInboxSettings(pool(), c.schema, c.propertyId, { deskOpens: field(formData, "deskOpens"), deskCloses: field(formData, "deskCloses"), checkinTime: field(formData, "checkinTime"), emergencyPhone: field(formData, "emergencyPhone") || null, escalationMinutes: Number(field(formData, "escalationMinutes")) }, c.userId);
+    await setInboxSettings(pool(), c.schema, c.propertyId, { deskOpens: field(formData, "deskOpens"), deskCloses: field(formData, "deskCloses"), checkinTime: field(formData, "checkinTime"), emergencyPhone: field(formData, "emergencyPhone") || null, escalationMinutes: Number(field(formData, "escalationMinutes")), conversationMonths: Number(field(formData, "conversationMonths")) }, c.userId);
     revalidatePath("/settings/messages");
   });
 }

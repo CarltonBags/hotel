@@ -54,7 +54,8 @@ export async function receiveWebhook(
   if (!source.verify(input.headers, input.rawBody)) return { status: 401, duplicate: false };
   let body: unknown = null;
   try {
-    body = input.rawBody ? JSON.parse(input.rawBody) : null;
+    // JSON, or form fields (an email provider's notice of an incoming mail)
+    body = !input.rawBody ? null : (input.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded") ? Object.fromEntries(new URLSearchParams(input.rawBody)) : JSON.parse(input.rawBody);
   } catch {
     body = null;
   }

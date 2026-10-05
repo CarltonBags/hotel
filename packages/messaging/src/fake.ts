@@ -1,5 +1,6 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import type { DomainStatus, MailEvent, MailMessage, MailProvider, SmsProvider } from "./provider";
+import type { DomainStatus, InboundMail, MailEvent, MailMessage, MailProvider, SmsProvider } from "./provider";
+import { inboundFromFields } from "./inbound";
 
 /** In-memory mail for tests and development without provider keys: keeps what was sent; events carry a shared secret. */
 export class FakeMailProvider implements MailProvider {
@@ -28,6 +29,24 @@ export class FakeMailProvider implements MailProvider {
     const e = raw as Partial<MailEvent> | null;
     if (!e?.id || !e.type) return null;
     return { id: e.id, type: e.type, severity: e.severity ?? null, tenantId: e.tenantId ?? null, messageId: e.messageId ?? null, recipient: e.recipient ?? "", detail: e.detail ?? "" };
+  }
+
+  /** Incoming mail notices carry the test secret as a field. */
+  verifyInbound(fields: Record<string, string>): boolean {
+    const given = Buffer.from(fields.secret ?? "");
+    const expected = Buffer.from(this.webhookSecret);
+    return expected.length > 0 && given.length === expected.length && timingSafeEqual(given, expected);
+  }
+
+  parseInbound(fields: Record<string, string>): InboundMail | null {
+    return inboundFromFields(fields);
+  }
+
+  /** The stand-in keeps attachments as data: addresses. */
+  async fetchInboundAttachment(url: string): Promise<Uint8Array> {
+    const m = /^data:[^;,]+;base64,(.*)$/.exec(url);
+    if (!m) throw new Error("Not a stored attachment");
+    return new Uint8Array(Buffer.from(m[1]!, "base64"));
   }
 
   async domainStatus(domain: string): Promise<DomainStatus> {

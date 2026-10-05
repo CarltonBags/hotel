@@ -108,6 +108,7 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
           <Field label={m["inbox.deskCloses"]} name="deskCloses" type="time" defaultValue={inbox.deskCloses} required />
           <Field label={m["inbox.checkin"]} name="checkinTime" type="time" defaultValue={inbox.checkinTime} required />
           <Field label={m["inbox.emergency"]} name="emergencyPhone" type="tel" defaultValue={inbox.emergencyPhone ?? ""} />
+          <Field label={m["inbox.months"]} name="conversationMonths" type="number" step="1" defaultValue={String(inbox.conversationMonths)} required />
           <Field label={m["inbox.escalation"]} name="escalationMinutes" type="number" step="1" defaultValue={String(inbox.escalationMinutes)} required />
         </ActionForm>
         <h3 className="mt-2 font-medium">{m["inbox.quickReplies"]}</h3>

@@ -4,7 +4,7 @@ import { createPool } from "@hoteloftware/db";
 import { paymentProvider } from "@hoteloftware/payments";
 import { mailProvider, smsProvider } from "@hoteloftware/messaging";
 import { channelManager } from "@hoteloftware/channels";
-import { mailProcessor, mailWebhookSource, MAIL_SOURCE } from "./messaging";
+import { inboundProcessor, inboundWebhookSource, INBOUND_SOURCE, mailProcessor, mailWebhookSource, MAIL_SOURCE } from "./messaging";
 import { channelBookingProcessor, channelWebhookSource } from "./channels";
 import { paymentProcessor, paymentWebhookSource } from "./payments";
 import { queueHealthy, startQueue } from "./queue";
@@ -39,7 +39,7 @@ const workerUrl = process.env.WORKER_PUBLIC_URL?.replace(/\/$/, "");
 const platformDomain = process.env.MAIL_FROM_DOMAIN ?? process.env.MAILGUN_DOMAIN ?? "mail.hoteloftware.test";
 const boss = await startQueue(pool, directUrl, {
   tenantCheckCron: process.env.TENANT_CHECK_CRON ?? null,
-  providerProcessors: { [provider.name]: paymentProcessor(provider), [MAIL_SOURCE]: mailProcessor(mail), [channels.name]: channelBookingProcessor(channels) },
+  providerProcessors: { [provider.name]: paymentProcessor(provider), [MAIL_SOURCE]: mailProcessor(mail), [INBOUND_SOURCE]: inboundProcessor(mail), [channels.name]: channelBookingProcessor(channels) },
   paymentProvider: provider,
   messaging: { mail, sms, platformDomain },
   // Channex with CHANNEX_API_KEY (staging unless CHANNEX_URL says otherwise), else the in-memory fake
@@ -58,7 +58,7 @@ const server = await startWorkerServer({
   allowOrigin,
   testWebhookSecret: process.env.WEBHOOK_TEST_SECRET,
   // the channel manager's webhooks carry our secret (CHANNEX_WEBHOOK_SECRET, set when the webhook is registered); the test secret only outside production
-  sources: [paymentWebhookSource(provider), mailWebhookSource(mail), channelWebhookSource(channels, channelWebhookSecret)],
+  sources: [paymentWebhookSource(provider), mailWebhookSource(mail), inboundWebhookSource(mail), channelWebhookSource(channels, channelWebhookSecret)],
 });
 console.log(`worker up on :${server.port} (health /health, events /events, webhooks /webhooks/<source>)`);
 
