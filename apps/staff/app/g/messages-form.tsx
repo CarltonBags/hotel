@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import type { PortalLanguage } from "@hoteloftware/domain";
+import { isConversationFile, type PortalLanguage } from "@hoteloftware/domain";
 import type { FormState } from "@/lib/form";
 import { portalText } from "@/i18n/portal";
 import { guestButton, guestInput } from "./glass";
@@ -20,7 +20,17 @@ export function GuestMessageForm({ action, language }: { action: (prev: FormStat
       <textarea name="body" rows={3} maxLength={5000} placeholder={t("messagePlaceholder")} className={`${guestInput} h-auto py-2`} />
       <label className="grid gap-1 text-sm text-white/70">
         <span>{t("messageAttach")}</span>
-        <input type="file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" />
+        <input
+          type="file"
+          name="file"
+          accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+          onChange={(e) => {
+            // too large or another type: refused here already (the upload would fail before the server's check)
+            const f = e.currentTarget.files?.[0];
+            e.currentTarget.setCustomValidity(f && !isConversationFile(f.type, f.size) ? t("messageAttach") : "");
+            e.currentTarget.reportValidity();
+          }}
+        />
       </label>
       <button type="submit" disabled={pending} className={guestButton}>
         {t("messageSend")}

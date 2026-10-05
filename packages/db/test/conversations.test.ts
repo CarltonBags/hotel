@@ -80,7 +80,7 @@ describe("Guest Inbox and Conversations", () => {
     // an earlier stay of the same guest, with its own Conversation
     const earlierKey = await book(0, 1);
     await pool.query(`update ${s()}.reservations set arrival = $2, departure = $3 where portal_key = $1`, [earlierKey, addDays(today, -3), addDays(today, -1)]);
-    await setInboxSettings(pool, s(), propertyId, { deskOpens: "00:00", deskCloses: "00:00", emergencyPhone: "+49 30 123456", escalationMinutes: 15 }, fd.userId);
+    await setInboxSettings(pool, s(), propertyId, { deskOpens: "00:00", deskCloses: "00:00", checkinTime: "15:00", emergencyPhone: "+49 30 123456", escalationMinutes: 15 }, fd.userId);
     await postGuestMessage(pool, s(), earlierKey, { body: "Is there parking?", fileId: null }, links);
   });
   afterAll(() => pool.end());
@@ -100,9 +100,10 @@ describe("Guest Inbox and Conversations", () => {
   });
 
   it("staff answer by email with the Portal Link; an Internal Note stays with staff; earlier stays show read-only", async () => {
-    const c = (await listConversations(pool, s(), propertyId)).find((x) => x.arrival === addDays(today, 2))!;
-    await postStaffMessage(pool, s(), propertyId, c.id, fd, { body: "Yes, the night porter will let you in.", note: false, fileId: null }, links);
-    await postStaffMessage(pool, s(), propertyId, c.id, fd, { body: "Guest sounded unsure about the date.", note: true, fileId: null }, links);
+    const c = (await listConversations(pool, s(), propertyId)).find((x) => x.lastText === "And is breakfast included?")!;
+    const onScreen = (await conversationView(pool, s(), propertyId, c.id))!;
+    await postStaffMessage(pool, s(), propertyId, c.id, fd, { body: "Yes, the night porter will let you in.", note: false, fileId: null, seenUpTo: onScreen.latestGuestMessageId }, links);
+    await postStaffMessage(pool, s(), propertyId, c.id, fd, { body: "Guest sounded unsure about the date.", note: true, fileId: null, seenUpTo: null }, links);
     const mail = (await pool.query(`select type, to_email, body_text from ${s()}.guest_messages where type = 'inbox_reply'`)).rows[0];
     expect(mail.to_email).toBe("aiko@example.com");
     expect(mail.body_text).toContain("night porter");
@@ -114,9 +115,34 @@ describe("Guest Inbox and Conversations", () => {
     expect(view.conversation.waitingSince).toBeNull();
     expect(view.earlier).toHaveLength(1);
     expect(view.earlier[0]!.messages[0]!.body).toBe("Is there parking?");
-    expect(view.values).toMatchObject({ firstName: "Aiko", property: "Haus am Ring" });
+    expect(view.values).toMatchObject({ firstName: "Aiko", property: "Haus am Ring", checkInTime: "15:00" });
     await claimConversation(pool, s(), propertyId, c.id, fd);
     expect((await listConversations(pool, s(), propertyId)).find((x) => x.id === c.id)?.claimedName).toBe("Frida Desk");
+  });
+
+  it("an answer clears only what was on screen: a guest message that came in meanwhile stays unread and waiting", async () => {
+    const c = (await listConversations(pool, s(), propertyId)).find((x) => x.arrival === addDays(today, 2))!;
+    const onScreen = (await conversationView(pool, s(), propertyId, c.id))!;
+    await postGuestMessage(pool, s(), key, { body: "One more thing", fileId: null }, links);
+    await postStaffMessage(pool, s(), propertyId, c.id, fd, { body: "Noted.", note: false, fileId: null, seenUpTo: onScreen.latestGuestMessageId }, links);
+    const after = (await listConversations(pool, s(), propertyId)).find((x) => x.id === c.id)!;
+    expect(after.unread).toBe(true);
+    expect(after.waitingSince).not.toBeNull();
+    const latest = (await conversationView(pool, s(), propertyId, c.id))!.latestGuestMessageId!;
+    await markConversationSeen(pool, s(), propertyId, c.id, latest);
+  });
+
+  it("earlier stays come from this property only, and another property's staff cannot open the Conversation", async () => {
+    const le = (await pool.query(`select legal_entity_id from ${s()}.properties where id = $1`, [propertyId])).rows[0].legal_entity_id;
+    const other = (await createProperty(pool, s(), { name: "Haus am See", legalEntityId: le, country: "DE", timeZone: "Europe/Berlin", currency: "EUR" })).id;
+    const c = (await listConversations(pool, s(), propertyId)).find((x) => x.arrival === addDays(today, 2))!;
+    expect(await conversationView(pool, s(), other, c.id)).toBeNull();
+    await expect(postStaffMessage(pool, s(), other, c.id, fd, { body: "x", note: false, fileId: null, seenUpTo: null }, links)).rejects.toThrow(/not found/);
+    // a Conversation of the same guest at the other hotel stays out of this one's earlier stays
+    expect((await conversationView(pool, s(), propertyId, c.id))!.earlier).toHaveLength(1);
+    await pool.query(`update ${s()}.conversations set property_id = $1 where reservation_id = (select id from ${s()}.reservations where arrival = $2)`, [other, addDays(today, -3)]);
+    expect((await conversationView(pool, s(), propertyId, c.id))!.earlier).toHaveLength(0);
+    await pool.query(`update ${s()}.conversations set property_id = $1 where property_id = $2`, [propertyId, other]);
   });
 
   it("escalates an unopened message after 15 minutes during Desk Hours, once", async () => {
@@ -129,7 +155,7 @@ describe("Guest Inbox and Conversations", () => {
 
   it("outside Desk Hours: no escalation, the timer pauses; one automatic reply a night", async () => {
     // the desk opens in three hours, for an hour
-    await setInboxSettings(pool, s(), propertyId, { deskOpens: at(hour + 3), deskCloses: at(hour + 4), emergencyPhone: "+49 30 123456", escalationMinutes: 15 }, fd.userId);
+    await setInboxSettings(pool, s(), propertyId, { deskOpens: at(hour + 3), deskCloses: at(hour + 4), checkinTime: "15:00", emergencyPhone: "+49 30 123456", escalationMinutes: 15 }, fd.userId);
     const p = await postGuestMessage(pool, s(), nightKey, { body: "The heating is off", fileId: null }, links);
     expect(p.autoReplied).toBe(true);
     expect((await postGuestMessage(pool, s(), nightKey, { body: "Still cold", fileId: null }, links)).autoReplied).toBe(false);
@@ -139,7 +165,7 @@ describe("Guest Inbox and Conversations", () => {
     expect(auto[0]!.body).toContain("+49 30 123456");
     // the desk opened: fifteen minutes later it goes to the Property Manager
     expect(await escalateConversations(pool, s(), later(3 * 60 + 16))).toHaveLength(1);
-    await setInboxSettings(pool, s(), propertyId, { deskOpens: "00:00", deskCloses: "00:00", emergencyPhone: null, escalationMinutes: 15 }, fd.userId);
+    await setInboxSettings(pool, s(), propertyId, { deskOpens: "00:00", deskCloses: "00:00", checkinTime: "15:00", emergencyPhone: null, escalationMinutes: 15 }, fd.userId);
   });
 
   it("images and PDFs up to 10 MB both ways; the guest and staff open them", async () => {

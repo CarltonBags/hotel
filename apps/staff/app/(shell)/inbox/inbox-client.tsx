@@ -1,16 +1,25 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
-import { fillQuickReply, type QuickReplyValues } from "@hoteloftware/domain";
+import { DATA_KINDS, fillQuickReply, isConversationFile, type QuickReplyValues } from "@hoteloftware/domain";
 import type { FormState } from "@/lib/form";
 import { DATA_EVENT } from "@/shell/LiveRefresh";
 import { useShell } from "@/shell/ShellProvider";
 import { seenAction, sendMessageAction, typingAction } from "./actions";
 
-/** Opening the Conversation up to its latest guest message clears unread (ticket 42). */
+/**
+ * Opening the Conversation up to its latest guest message clears unread
+ * (ticket 42): only while the page is in front of someone, so a tab left open
+ * in the background does not swallow new messages (or their escalation).
+ */
 export function SeenMarker({ propertyId, conversationId, messageId }: { propertyId: string; conversationId: string; messageId: string }) {
   useEffect(() => {
-    void seenAction(propertyId, conversationId, messageId);
+    const mark = () => {
+      if (document.visibilityState === "visible") void seenAction(propertyId, conversationId, messageId);
+    };
+    mark();
+    document.addEventListener("visibilitychange", mark);
+    return () => document.removeEventListener("visibilitychange", mark);
   }, [propertyId, conversationId, messageId]);
   return null;
 }
@@ -23,7 +32,7 @@ export function TypingIndicator({ conversationId }: { conversationId: string }) 
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onData = (e: Event) => {
       const d = (e as CustomEvent<{ kind: string; title?: string }>).detail;
-      if (d.kind !== "data.typing" || !d.title) return;
+      if (d.kind !== DATA_KINDS.typing || !d.title) return;
       try {
         const x = JSON.parse(d.title) as { c: string; u: string; n: string };
         if (x.c !== conversationId || x.u === user.id) return;
@@ -47,15 +56,25 @@ export function TypingIndicator({ conversationId }: { conversationId: string }) 
   ) : null;
 }
 
+/** A file too large or of another type is refused in the browser already (the upload would fail before our check). */
+export function checkFile(input: HTMLInputElement, message: string): void {
+  const f = input.files?.[0];
+  input.setCustomValidity(f && !isConversationFile(f.type, f.size) ? message : "");
+  input.reportValidity();
+}
+
 /** Write to the guest or an Internal Note; a Quick Reply fills in what is known; colleagues see that one is writing. */
 export function Composer({
   propertyId,
   conversationId,
+  seenUpTo,
   quickReplies,
   values,
 }: {
   propertyId: string;
   conversationId: string;
+  /** The latest guest message on screen: answering clears what came up to it. */
+  seenUpTo: string | null;
   quickReplies: { id: string; title: string; body: string }[];
   values: QuickReplyValues;
 }) {
@@ -77,6 +96,7 @@ export function Composer({
     <form ref={form} action={run} className="grid gap-2 border-t border-ink-10 pt-3" data-composer>
       <input type="hidden" name="propertyId" value={propertyId} />
       <input type="hidden" name="conversationId" value={conversationId} />
+      <input type="hidden" name="seenUpTo" value={seenUpTo ?? ""} />
       {quickReplies.length ? (
         <select
           aria-label={t("inbox.quickReply")}
@@ -105,7 +125,7 @@ export function Composer({
         </label>
         <label className="flex items-center gap-2 text-ink-60">
           <span>{t("inbox.attach")}</span>
-          <input type="file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" />
+          <input type="file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" onChange={(e) => checkFile(e.currentTarget, t("inbox.attach"))} />
         </label>
         <button type="submit" disabled={pending} className="ml-auto h-10 rounded-full bg-accent px-5 font-medium text-white disabled:opacity-50">
           {t("inbox.send")}

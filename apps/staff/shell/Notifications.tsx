@@ -17,10 +17,11 @@ interface Toast {
 const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL ?? "";
 const TOAST_MS = 8000;
 
-/** A short two-note chime, made in the browser (no sound file). */
+/** A short two-note chime, made in the browser (no sound file); one audio context for the page. */
+let audio: AudioContext | null = null;
 function chime(): void {
   try {
-    const ctx = new AudioContext();
+    const ctx = (audio ??= new AudioContext());
     [880, 1320].forEach((f, i) => {
       const o = ctx.createOscillator();
       const g = ctx.createGain();

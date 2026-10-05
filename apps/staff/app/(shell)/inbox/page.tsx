@@ -125,7 +125,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
               <Thread messages={view.messages} m={m} when={when} file={file} />
             </div>
             <TypingIndicator conversationId={view.conversation.id} />
-            <Composer propertyId={property.id} conversationId={view.conversation.id} quickReplies={languageReplies} values={view.values} />
+            <Composer propertyId={property.id} conversationId={view.conversation.id} seenUpTo={view.latestGuestMessageId} quickReplies={languageReplies} values={view.values} />
           </>
         )}
       </section>
@@ -146,6 +146,7 @@ function Thread({ messages, m, when, file }: { messages: ThreadMessage[]; m: Mes
         >
           <span className="text-[11px] text-ink-60">
             {x.kind === "auto" ? m["inbox.auto"] : x.kind === "note" ? `${m["inbox.note"]} · ${x.authorName}` : x.authorName} · {when(x.at)}
+            {x.notSent ? ` · ${m["inbox.notSent"]}` : ""}
           </span>
           {x.subject ? <span className="font-medium">{x.subject}</span> : null}
           {x.body ? <span className="whitespace-pre-wrap">{x.body}</span> : null}

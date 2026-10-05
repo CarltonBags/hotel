@@ -5,6 +5,8 @@
 alter table property_messaging add column desk_opens time not null default '07:00';
 alter table property_messaging add column desk_closes time not null default '22:00';
 alter table property_messaging add column emergency_phone text;
+-- from when guests can check in, for Quick Replies (the check-out time is there already)
+alter table property_messaging add column checkin_time time not null default '15:00';
 alter table property_messaging add column escalation_minutes integer not null default 15 constraint property_messaging_escalation_check check (escalation_minutes between 5 and 240);
 
 -- one per Reservation, or per Booking for the Booker of several rooms
@@ -14,8 +16,6 @@ create table conversations (
   reservation_id uuid unique references reservations(id) on delete cascade,
   booking_id uuid unique references bookings(id) on delete cascade,
   constraint conversations_owner_check check ((reservation_id is null) <> (booking_id is null)),
-  -- the guest it is with (the stay's guest, or the Booker; none for a company Booker): earlier stays are theirs
-  guest_id uuid references guests(id),
   last_message_at timestamptz,
   last_guest_message_at timestamptz,
   -- the first guest message nobody answered yet (waiting time)
@@ -34,7 +34,6 @@ create table conversations (
   created_at timestamptz not null default now()
 );
 create index conversations_property_idx on conversations(property_id, last_message_at desc);
-create index conversations_guest_idx on conversations(guest_id);
 create index conversations_unread_idx on conversations(unread_since) where unread_since is not null;
 
 -- a guest's or staff member's message, or an Internal Note; automatic messages are the guest_messages of the stay
@@ -55,7 +54,7 @@ create index conversation_messages_conversation_idx on conversation_messages(con
 create table quick_replies (
   id uuid primary key default gen_random_uuid(),
   property_id uuid not null references properties(id),
-  language text not null,
+  language text not null constraint quick_replies_language_check check (language in ('de', 'en')),
   title text not null,
   body text not null,
   created_at timestamptz not null default now(),
@@ -65,3 +64,7 @@ create table quick_replies (
 -- images and PDFs in Conversations, both ways
 alter table stored_files drop constraint stored_files_kind_check;
 alter table stored_files add constraint stored_files_kind_check check (kind in ('issue_photo', 'fix_photo', 'id_document', 'portal_photo', 'conversation_file'));
+
+-- the staff answer and the night's automatic reply belong to their Conversation (a Booker's is not a room guest's)
+alter table guest_messages add column conversation_id uuid references conversations(id) on delete cascade;
+create index guest_messages_conversation_idx on guest_messages(conversation_id) where conversation_id is not null;

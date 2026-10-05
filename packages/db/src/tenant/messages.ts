@@ -260,7 +260,7 @@ function sendMoment(look: PropertyLook, timing: (typeof MESSAGE_TYPE_INFO)[Messa
   return [when.date, when.time, look.timeZone];
 }
 
-const dateText = (d: string, language: MessageLanguage) => {
+export const dateText = (d: string, language: MessageLanguage) => {
   const [y, m, day] = d.split("-");
   return language === "de" ? `${day}.${m}.${y}` : new Date(`${d}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 };
@@ -333,6 +333,9 @@ export async function queueGuestMessageIn(
     message?: string;
     /** The Portal Link to put in, when not the stay's own (the Booker's booking link). */
     linkKey?: string;
+    /** The Conversation it belongs to, and whom it greets when not the stay's guest (the Booker) (ticket 42). */
+    conversationId?: string;
+    greetName?: string;
   },
 ): Promise<string | null> {
   const f = await factsOf(tx, input.reservationId);
@@ -345,7 +348,7 @@ export async function queueGuestMessageIn(
   const s = setting[0]!;
   const language = messageLanguage(f.language, s.use_guest_language, s.fallback_language);
   const values: Partial<Record<Placeholder, string>> = {
-    guest_name: [f.first_name, f.last_name].filter(Boolean).join(" "),
+    guest_name: input.greetName ?? [f.first_name, f.last_name].filter(Boolean).join(" "),
     hotel_name: look.name,
     confirmation: f.confirmation_number,
     arrival: dateText(f.arrival, language),
@@ -375,10 +378,10 @@ export async function queueGuestMessageIn(
   const channelOff = f.channel && !(f.channel_confirmation ?? s.switched[CHANNEL_SWITCH] ?? true) && (input.type === "confirmation" || input.type === "cancellation");
   const reason = channelOff ? "channel" : !email ? "no_email" : email === f.email_bounced ? "bounced" : email === f.email_complained && !info.essential ? "complained" : null;
   const { rows } = await tx.query<{ id: string }>(
-    `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by, secret_code)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, greatest(($13::date + $14::time) at time zone $15, $16::timestamptz), $17, $18)
+    `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by, secret_code, conversation_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, greatest(($13::date + $14::time) at time zone $15, $16::timestamptz), $17, $18, $19)
      on conflict (reservation_id, type, trigger_key) do nothing returning id`,
-    [f.property_id, input.reservationId, input.type, input.triggerKey, language, email, rendered.subject, rendered.html, rendered.text, input.invoiceId ?? null, reason ? "suppressed" : "queued", reason, ...sendMoment(look, info.timing, input.now), input.now, input.userId ?? null, reason ? null : (input.code ?? null)],
+    [f.property_id, input.reservationId, input.type, input.triggerKey, language, email, rendered.subject, rendered.html, rendered.text, input.invoiceId ?? null, reason ? "suppressed" : "queued", reason, ...sendMoment(look, info.timing, input.now), input.now, input.userId ?? null, reason ? null : (input.code ?? null), input.conversationId ?? null],
   );
   return rows[0]?.id ?? null;
 }

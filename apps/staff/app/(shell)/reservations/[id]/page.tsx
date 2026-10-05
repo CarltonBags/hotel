@@ -21,6 +21,7 @@ import { ReservationActions } from "./reservation-actions";
 import { HousekeepingNotes } from "./housekeeping-notes";
 import { StatsExclusion } from "./stats-exclusion";
 import { MessagesPanel } from "./messages-panel";
+import { ActionForm } from "@/components/form-fields";
 import { openConversationAction } from "../../inbox/actions";
 import { PortalPanel } from "./portal-panel";
 import { StoredCard } from "./stored-card";
@@ -108,12 +109,11 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
       <MessagesPanel schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} language={language} timeZone={property.timeZone} m={m} />
       <StoredCard schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} m={m} />
       {can(actor, "use_guest_inbox", r.propertyId) ? (
-        <form action={openConversationAction} data-open-conversation>
-          <input type="hidden" name="reservationId" value={r.id} />
-          <button type="submit" className="h-10 rounded-full bg-surface-2 px-4 text-sm font-medium">
-            {m["inbox.open"]}
-          </button>
-        </form>
+        <div data-open-conversation>
+          <ActionForm action={openConversationAction} submitLabel={m["inbox.open"]} className="flex">
+            <input type="hidden" name="reservationId" value={r.id} />
+          </ActionForm>
+        </div>
       ) : null}
       <PortalPanel schema={tenant.schemaName} tenant={tenant} userId={session.user.id} reservationId={r.id} propertyId={r.propertyId} actor={actor} language={language} timeZone={property.timeZone} m={m} />
 

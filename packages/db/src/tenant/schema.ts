@@ -1780,6 +1780,7 @@ export const propertyMessaging = pgTable(
     deskOpens: time("desk_opens").notNull().default("07:00"),
     deskCloses: time("desk_closes").notNull().default("22:00"),
     emergencyPhone: text("emergency_phone"),
+    checkinTime: time("checkin_time").notNull().default("15:00"),
     escalationMinutes: integer("escalation_minutes").notNull().default(15),
   },
   (t) => [
@@ -1831,8 +1832,10 @@ export const guestMessages = pgTable(
     sentAt: timestamp("sent_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     failedAt: timestamp("failed_at", { withTimezone: true }),
+    conversationId: uuid("conversation_id").references((): AnyPgColumn => conversations.id, { onDelete: "cascade" }),
   },
   (t) => [
+    index("guest_messages_conversation_idx").on(t.conversationId).where(sql`${t.conversationId} is not null`),
     check("guest_messages_status_check", sql`${t.status} in ('queued', 'sending', 'sent', 'delivered', 'failed', 'suppressed')`),
     uniqueIndex("guest_messages_once_key").on(t.reservationId, t.type, t.triggerKey),
     index("guest_messages_due_idx").on(t.sendAfter).where(sql`${t.status} = 'queued'`),
@@ -2068,7 +2071,6 @@ export const conversations = pgTable(
     propertyId: uuid("property_id").notNull().references(() => properties.id),
     reservationId: uuid("reservation_id").unique().references(() => reservations.id, { onDelete: "cascade" }),
     bookingId: uuid("booking_id").unique().references(() => bookings.id, { onDelete: "cascade" }),
-    guestId: uuid("guest_id").references(() => guests.id),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
     lastGuestMessageAt: timestamp("last_guest_message_at", { withTimezone: true }),
     waitingSince: timestamp("waiting_since", { withTimezone: true }),
@@ -2084,7 +2086,6 @@ export const conversations = pgTable(
   (t) => [
     check("conversations_owner_check", sql`(${t.reservationId} is null) <> (${t.bookingId} is null)`),
     index("conversations_property_idx").on(t.propertyId, t.lastMessageAt.desc()),
-    index("conversations_guest_idx").on(t.guestId),
     index("conversations_unread_idx").on(t.unreadSince).where(sql`${t.unreadSince} is not null`),
   ],
 );
@@ -2118,7 +2119,7 @@ export const quickReplies = pgTable(
     body: text("body").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique("quick_replies_key").on(t.propertyId, t.language, t.title)],
+  (t) => [unique("quick_replies_key").on(t.propertyId, t.language, t.title), check("quick_replies_language_check", sql`${t.language} in ('de', 'en')`)],
 );
 
 export const tenantSchema = {

@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { can } from "@hoteloftware/domain";
-import { dispatchMessages, escalateConversations, listTenantUsers, mapProviderAccount, recordMailEvent, scanGuestMessages, type BouncedMessage, type Tenant } from "@hoteloftware/db";
+import { dispatchMessages, escalateConversations, listTenantUsers, releaseEscalation, mapProviderAccount, recordMailEvent, scanGuestMessages, type BouncedMessage, type Tenant } from "@hoteloftware/db";
 import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
 import { notifyStaff, notifyWithRight } from "@hoteloftware/events";
 import type { ProviderProcessor } from "./payments";
@@ -41,12 +41,18 @@ export async function runMessaging(pool: Pool, tenant: { id: string; slug: strin
 export async function escalateUnread(pool: Pool, tenant: { id: string; schemaName: string }, now = new Date()): Promise<number> {
   const due = await escalateConversations(pool, tenant.schemaName, now);
   for (const e of due) {
-    await notifyWithRight(pool, tenant, "receive_inbox_escalations", e.propertyId, {
-      kind: "inbox.escalated",
-      title: `Guest message waiting · ${e.guestName}`,
-      body: "Nobody has opened it yet.",
-      href: `/inbox?c=${e.conversationId}`,
-    });
+    try {
+      await notifyWithRight(pool, tenant, "receive_inbox_escalations", e.propertyId, {
+        kind: "inbox.escalated",
+        title: `Guest message waiting · ${e.guestName}`,
+        body: "Nobody has opened it yet.",
+        href: `/inbox?c=${e.conversationId}`,
+      });
+    } catch (err) {
+      // not told: due again on the next run
+      console.error("[messaging] escalation not sent", err);
+      await releaseEscalation(pool, tenant.schemaName, e.conversationId);
+    }
   }
   return due.length;
 }

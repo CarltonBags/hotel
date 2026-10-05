@@ -6,7 +6,6 @@ import { addDays } from "./rates-grid";
  * the desk is staffed (Desk Hours); outside them the guest gets one automatic
  * reply per night and the escalation timer pauses.
  */
-export const ESCALATION_MINUTES = 15;
 export const CONVERSATION_FILE_BYTES = 10 * 1024 * 1024;
 export const CONVERSATION_FILE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"] as const;
 
@@ -56,7 +55,7 @@ export function deskNight(at: Date, hours: DeskHours, timeZone: string): string 
 }
 
 /** The placeholders a Quick Reply may use. */
-export const QUICK_REPLY_PLACEHOLDERS = ["firstName", "lastName", "room", "arrival", "departure", "property"] as const;
+export const QUICK_REPLY_PLACEHOLDERS = ["firstName", "lastName", "room", "arrival", "departure", "checkInTime", "checkOutTime", "property"] as const;
 export type QuickReplyValues = Partial<Record<(typeof QUICK_REPLY_PLACEHOLDERS)[number], string>>;
 
 /** A Quick Reply with what is known filled in; anything else stays as typed, for staff to complete. */
