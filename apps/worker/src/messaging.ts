@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import { CONVERSATION_FILE_BYTES, can, isAutoReply, isConversationFile, parseReplyAddress } from "@hoteloftware/domain";
-import { FileRefused, PORTAL_USER, conversationByReplyToken, inboundMailKnown, dispatchMessages, escalateConversations, listTenantUsers, receiveGuestEmail, releaseEscalation, storeFile, mapProviderAccount, recordMailEvent, scanGuestMessages, type BouncedMessage, type Tenant } from "@hoteloftware/db";
-import { DeliveryError, type InboundMail, type MailProvider, type SmsProvider } from "@hoteloftware/messaging";
+import { CONVERSATION_FILE_BYTES, WHATSAPP_MEDIA_BYTES, can, isAutoReply, isConversationFile, parseReplyAddress } from "@hoteloftware/domain";
+import { FileRefused, PORTAL_USER, WHATSAPP_SOURCE, applyTemplateReview, applyWhatsAppStatus, conversationByReplyToken, inboundMailKnown, propertyOfNumber, receiveWhatsApp, refreshTemplateReviews, whatsAppMessageKnown, dispatchMessages, escalateConversations, listTenantUsers, receiveGuestEmail, releaseEscalation, storeFile, mapProviderAccount, recordMailEvent, scanGuestMessages, type BouncedMessage, type Tenant } from "@hoteloftware/db";
+import { DeliveryError, whatsAppMessageCost, type InboundMail, type MailProvider, type SmsProvider, type WhatsAppProvider } from "@hoteloftware/messaging";
 import { notifyStaff, notifyWithRight, publishDataChange, publishNotification } from "@hoteloftware/events";
 import { fileServices } from "@hoteloftware/storage";
 import type { ProviderProcessor } from "./payments";
@@ -33,7 +34,7 @@ export function portalBase(slug: string, env: NodeJS.ProcessEnv = process.env): 
   return `${scheme}://${slug}.${env.APP_DOMAIN}`;
 }
 
-export async function runMessaging(pool: Pool, tenant: { id: string; slug: string; schemaName: string }, providers: { mail: MailProvider; sms: SmsProvider }, platformDomain: string): Promise<{ queued: number; sent: number; failed: number }> {
+export async function runMessaging(pool: Pool, tenant: { id: string; slug: string; schemaName: string }, providers: { mail: MailProvider; sms: SmsProvider; whatsapp?: WhatsAppProvider }, platformDomain: string): Promise<{ queued: number; sent: number; failed: number }> {
   // the provider's events carry the tenant id; the intake maps it back
   if (!mapped.has(tenant.id)) {
     await mapProviderAccount(pool, MAIL_SOURCE, tenant.id, tenant.id);
@@ -41,7 +42,10 @@ export async function runMessaging(pool: Pool, tenant: { id: string; slug: strin
     mapped.add(tenant.id);
   }
   const queued = await scanGuestMessages(pool, tenant.schemaName, new Date(), guestLinks(tenant.slug));
-  const r = await dispatchMessages(pool, tenant.schemaName, tenant.id, providers, { platformDomain });
+  const { whatsapp, ...rest } = providers;
+  const r = await dispatchMessages(pool, tenant.schemaName, tenant.id, { ...rest, ...(whatsapp ? { whatsapp: { provider: whatsapp, cost: whatsAppMessageCost() } } : {}) }, { platformDomain });
+  // template reviews come by webhook; a quarter-hourly look catches one missed
+  if (whatsapp && new Date().getMinutes() % 15 === 0) await refreshTemplateReviews(pool, tenant.schemaName, whatsapp).catch((err) => console.error("[messaging] template reviews", err));
   await escalateUnread(pool, tenant).catch((err) => console.error("[messaging] inbox escalation", err));
   return { queued, ...r };
 }
@@ -162,5 +166,63 @@ async function takeReply(pool: Pool, tenant: Tenant, mail: MailProvider, m: Inbo
     }
   } catch (err) {
     console.error("[messaging] inbox not told of an email reply", err);
+  }
+}
+
+/** WhatsApp's webhook (ticket 44): signed with the app secret; the business number (or account) names the tenant. */
+export function whatsAppWebhookSource(wa: WhatsAppProvider): WebhookSource {
+  return {
+    name: WHATSAPP_SOURCE,
+    verify: (headers, rawBody) => wa.verifyWebhook(headers, rawBody),
+    // Meta sends a body again unchanged when it retries: its digest is the delivery's identity
+    externalId: (_headers, body) => (body ? createHash("sha256").update(JSON.stringify(body)).digest("hex") : null),
+    externalRef: (body) => {
+      const entry = (body as { entry?: { id?: string; changes?: { value?: { metadata?: { phone_number_id?: string } } }[] }[] } | null)?.entry?.[0];
+      return entry?.changes?.[0]?.value?.metadata?.phone_number_id ?? entry?.id ?? null;
+    },
+    challenge: (query) => wa.verifyChallenge(query),
+  };
+}
+
+/**
+ * WhatsApp events inside their tenant: guests' messages (media up to 5 MB
+ * stored like other attachments) into their Conversation or Unassigned;
+ * delivery states; template reviews. The guest's text then leaves the stored
+ * event.
+ */
+export function whatsAppProcessor(wa: WhatsAppProvider): ProviderProcessor {
+  return async ({ tenant, data, pool }) => {
+    const stored = await pool.query<{ body: unknown }>("select body from control.webhook_events where id = $1", [data.eventId]);
+    for (const e of wa.parseWebhook(stored.rows[0]?.body ?? null)) {
+      if (e.kind === "template") await applyTemplateReview(pool, tenant.schemaName, e.templateId, e.status, e.reason);
+      else if (e.kind === "status") await applyWhatsAppStatus(pool, tenant.schemaName, e.id, e.status, e.error);
+      else await takeWhatsApp(pool, tenant, wa, e);
+    }
+    await pool.query("update control.webhook_events set body = null, raw_body = '' where id = $1", [data.eventId]);
+  };
+}
+
+async function takeWhatsApp(pool: Pool, tenant: Tenant, wa: WhatsAppProvider, e: Extract<ReturnType<WhatsAppProvider["parseWebhook"]>[number], { kind: "message" }>): Promise<void> {
+  const at = await propertyOfNumber(pool, tenant.schemaName, e.phoneNumberId);
+  if (!at || (await whatsAppMessageKnown(pool, tenant.schemaName, e.id))) return;
+  let fileId: string | null = null;
+  if (e.media && isConversationFile(e.media.type, 0)) {
+    try {
+      const media = await wa.fetchMedia(at.account, e.media.id, WHATSAPP_MEDIA_BYTES);
+      if (media) fileId = await storeFile(pool, tenant.schemaName, fileServices(), { tenantId: tenant.id, kind: "conversation_file", bytes: media.bytes, contentType: media.type, propertyId: at.propertyId, userId: PORTAL_USER });
+    } catch (err) {
+      // a file refused for what it is is left out; WhatsApp away: the event is tried again
+      if (!(err instanceof FileRefused) && !(err instanceof DeliveryError && !err.retry)) throw err;
+    }
+  }
+  const got = await receiveWhatsApp(pool, tenant.schemaName, { propertyId: at.propertyId, providerId: e.id, from: e.from, name: e.name, text: e.text, at: e.at, fileId }, guestLinks(tenant.slug));
+  try {
+    await publishDataChange(pool, { tenantId: tenant.id, kind: "conversations", propertyId: at.propertyId });
+    const users = (await listTenantUsers(pool, tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "use_guest_inbox", at.propertyId));
+    for (const u of users) {
+      await publishNotification(pool, { tenantId: tenant.id, userId: u.id, kind: "inbox.message", title: got?.guestName || e.name || `+${e.from}`, body: e.text.split("\n")[0]!.slice(0, 120) || "📎", href: got ? `/inbox?c=${got.conversationId}` : "/inbox" });
+    }
+  } catch (err) {
+    console.error("[messaging] inbox not told of a WhatsApp message", err);
   }
 }

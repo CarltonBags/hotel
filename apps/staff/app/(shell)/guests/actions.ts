@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { GuestData } from "@hoteloftware/domain";
-import { createGuest, findGuestDuplicates, mergeGuests, updateGuest, type GuestDuplicate } from "@hoteloftware/db";
+import { createGuest, findGuestDuplicates, mergeGuests, setWhatsAppConsent, updateGuest, type GuestDuplicate } from "@hoteloftware/db";
 import { authorizeAnywhere } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { field, flag, formAction, type FormState } from "@/lib/form";
@@ -91,5 +91,19 @@ export async function mergeGuestAction(_prev: FormState, formData: FormData): Pr
     await mergeGuests(pool(), tenant.schemaName, { keepId, mergeId: field(formData, "mergeId") }, { userId: session.user.id });
     revalidatePath(`/guests/${keepId}`);
     return { ok: true, message: "Merged." };
+  });
+}
+
+/** The desk records a guest's WhatsApp consent (asked at booking or at the desk) or its withdrawal (ticket 44): time, source and wording kept. */
+export async function whatsAppConsentAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const { tenant, session } = await authorizeAnywhere("edit_guests");
+    const granted = flag(formData, "granted");
+    await setWhatsAppConsent(pool(), tenant.schemaName, field(formData, "guestId"), {
+      granted,
+      source: `desk (${session.user.name})`,
+      wording: granted ? "The guest agreed at the desk to receive service messages by WhatsApp." : "The guest withdrew WhatsApp consent at the desk.",
+    });
+    revalidatePath(`/guests/${field(formData, "guestId")}`);
   });
 }

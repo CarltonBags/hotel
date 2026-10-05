@@ -26,6 +26,8 @@ export interface WebhookSource {
   externalRef: (body: unknown, headers: Record<string, string>) => string | null;
   /** Signature or secret check. Nothing is stored when it fails. */
   verify: (headers: Record<string, string>, rawBody: string) => boolean;
+  /** The provider's subscription check by GET (Meta's hub.challenge): the answer, or null. */
+  challenge?: (query: URLSearchParams) => string | null;
 }
 
 export interface IntakeResult {

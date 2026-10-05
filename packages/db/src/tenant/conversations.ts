@@ -4,6 +4,7 @@ import { isUuid } from "./catalogue-common";
 import { fileIn, setFileRetention, type StoredFile } from "./files";
 import { ENSURE_MESSAGING, dateText, enabledTypes, queueGuestMessageIn, type PortalLinks } from "./messages";
 import { reportIssueIn } from "./maintenance";
+import { keepUnassignedIn, matchWhatsApp, noteWhatsAppIn, withdrawWhatsAppIn, type IncomingWhatsApp } from "./whatsapp";
 import { PORTAL_USER, reservationByKey } from "./portal";
 import type { Viewer } from "./room-state";
 import { withTenant } from "./with-tenant";
@@ -204,7 +205,7 @@ export async function postGuestMessage(pool: Pool, schema: string, key: string, 
 async function guestMessagesIn(
   tx: PoolClient,
   c: ConversationRow,
-  input: { body: string; fileIds: string[]; via: "portal" | "email" },
+  input: { body: string; fileIds: string[]; via: "portal" | "email" | "whatsapp"; providerId?: string },
   links: PortalLinks | null,
   now: Date,
 ): Promise<{ messageId: string; guestName: string; autoReplied: boolean }> {
@@ -218,8 +219,8 @@ async function guestMessagesIn(
   let first = "";
   for (const part of parts) {
     const { rows } = await tx.query<{ id: string }>(
-      "insert into conversation_messages (conversation_id, kind, user_id, author_name, body, file_id, via) values ($1, 'guest', $2, $3, $4, $5, $6) returning id",
-      [c.id, PORTAL_USER, guestName, part.body, part.fileId, input.via],
+      "insert into conversation_messages (conversation_id, kind, user_id, author_name, body, file_id, via, provider_id) values ($1, 'guest', $2, $3, $4, $5, $6, $7) returning id",
+      [c.id, PORTAL_USER, guestName, part.body, part.fileId, input.via, first ? null : (input.providerId ?? null)],
     );
     first ||= rows[0]!.id;
     // times as stored, never through the app's milliseconds
@@ -322,18 +323,21 @@ export async function postStaffMessage(
   propertyId: string,
   conversationId: string,
   author: { userId: string; name: string },
-  input: { body: string; note: boolean; fileId: string | null; seenUpTo: string | null },
+  input: { body: string; note: boolean; fileId: string | null; seenUpTo: string | null; transport?: "email" | "whatsapp" },
   links: PortalLinks | null,
   now = new Date(),
-): Promise<{ messageId: string }> {
+): Promise<{ messageId: string; whatsapp: boolean }> {
   const body = input.body.trim().slice(0, 5000);
   if (!body && !input.fileId) throw new Error("Write a message or add a file");
   return withTenant(pool, schema, async (tx) => {
     const c = await lockConversation(tx, conversationId, propertyId);
+    // by WhatsApp (ticket 44): text only; it goes out after this commits, delivery shown on the message
+    const whatsapp = !input.note && input.transport === "whatsapp";
+    if (whatsapp && input.fileId) throw new Error("Files go by email or the Guest Portal, not by WhatsApp");
     const fileId = await attachIn(tx, input.fileId, author.userId);
     const { rows } = await tx.query<{ id: string }>(
-      "insert into conversation_messages (conversation_id, kind, user_id, author_name, body, file_id) values ($1, $2, $3, $4, $5, $6) returning id",
-      [c.id, input.note ? "note" : "staff", author.userId, author.name, body, fileId],
+      "insert into conversation_messages (conversation_id, kind, user_id, author_name, body, file_id, via, delivery) values ($1, $2, $3, $4, $5, $6, $7, $8) returning id",
+      [c.id, input.note ? "note" : "staff", author.userId, author.name, body, fileId, whatsapp ? "whatsapp" : "portal", whatsapp ? "sending" : null],
     );
     if (!input.note) {
       // answered: no longer waiting for what was on screen; a guest message that came in meanwhile stays waiting and unread
@@ -345,13 +349,13 @@ export async function postStaffMessage(
         [c.id, rows[0]!.id, input.seenUpTo && isUuid(input.seenUpTo) ? input.seenUpTo : null],
       );
       if (input.seenUpTo) await seenIn(tx, c.id, input.seenUpTo);
-      const to = await recipientIn(tx, c);
+      const to = whatsapp ? null : await recipientIn(tx, c);
       if (to) {
         const message = [body, fileId ? "(+ 1 attachment)" : ""].filter(Boolean).join(" ");
         await queueGuestMessageIn(tx, { reservationId: to.reservationId, type: "inbox_reply", triggerKey: rows[0]!.id, userId: author.userId, now, links, message, ...toOf(c, to) });
       }
     }
-    return { messageId: rows[0]!.id };
+    return { messageId: rows[0]!.id, whatsapp };
   });
 }
 
@@ -478,6 +482,9 @@ export interface ThreadMessage {
   notSent: boolean;
   /** A guest's message replied by email rather than written in the portal. */
   byEmail: boolean;
+  /** Sent or received on WhatsApp (ticket 44), and how far a sent one got. */
+  byWhatsApp: boolean;
+  delivery: "sending" | "sent" | "delivered" | "read" | "failed" | null;
   /** Work made from it (ticket 43), linked back. */
   issueId: string | null;
   taskId: string | null;
@@ -496,12 +503,12 @@ interface ThreadOwner {
  * Booker's. The guest sees only what was sent (or kept for the portal).
  */
 async function threadIn(tx: PoolClient, c: ThreadOwner, forStaff: boolean): Promise<ThreadMessage[]> {
-  const { rows } = await tx.query<{ id: string; kind: ThreadMessage["kind"]; author_name: string; body: string; subject: string | null; file_id: string | null; file_type: string | null; at: Date; not_sent: boolean; by_email: boolean; issue_id: string | null; task_id: string | null }>(
-    `select m.id, m.kind, m.author_name, m.body, null as subject, m.file_id, f.content_type as file_type, m.created_at as at, false as not_sent, m.via = 'email' as by_email,
+  const { rows } = await tx.query<{ id: string; kind: ThreadMessage["kind"]; author_name: string; body: string; subject: string | null; file_id: string | null; file_type: string | null; at: Date; not_sent: boolean; by_email: boolean; by_whatsapp: boolean; delivery: ThreadMessage["delivery"]; issue_id: string | null; task_id: string | null }>(
+    `select m.id, m.kind, m.author_name, m.body, null as subject, m.file_id, f.content_type as file_type, m.created_at as at, false as not_sent, m.via = 'email' as by_email, m.via = 'whatsapp' as by_whatsapp, m.delivery,
             (select i.id from maintenance_issues i where i.conversation_message_id = m.id limit 1) as issue_id, (select tm.task_id from housekeeping_task_messages tm where tm.message_id = m.id) as task_id
      from conversation_messages m left join stored_files f on f.id = m.file_id where m.conversation_id = $1 and ($4 or m.kind <> 'note')
      union all
-     select gm.id, 'auto', '', gm.body_text, gm.subject, null, null, gm.send_after, gm.status in ('failed', 'suppressed'), false, null, null
+     select gm.id, 'auto', '', gm.body_text, gm.subject, null, null, gm.send_after, gm.status in ('failed', 'suppressed'), false, gm.transport = 'whatsapp', null, null, null
      from guest_messages gm
      where gm.type <> 'inbox_reply' and gm.send_after <= now()
        and (gm.conversation_id = $1
@@ -512,7 +519,7 @@ async function threadIn(tx: PoolClient, c: ThreadOwner, forStaff: boolean): Prom
      order by at`,
     [c.id, c.reservation_id, c.booking_id, forStaff],
   );
-  return rows.map((r) => ({ id: r.id, kind: r.kind, authorName: r.author_name, body: r.body, subject: r.subject, fileId: r.file_id, fileType: r.file_type, at: r.at, notSent: r.not_sent, byEmail: r.by_email, issueId: forStaff ? r.issue_id : null, taskId: forStaff ? r.task_id : null }));
+  return rows.map((r) => ({ id: r.id, kind: r.kind, authorName: r.author_name, body: r.body, subject: r.subject, fileId: r.file_id, fileType: r.file_type, at: r.at, notSent: r.not_sent, byEmail: r.by_email, byWhatsApp: r.by_whatsapp, delivery: r.delivery, issueId: forStaff ? r.issue_id : null, taskId: forStaff ? r.task_id : null }));
 }
 
 export interface ConversationView {
@@ -804,5 +811,49 @@ export async function messageToTask(pool: Pool, schema: string, propertyId: stri
     );
     await tx.query("insert into housekeeping_task_messages (task_id, message_id) values ($1, $2)", [task[0]!.id, m.id]);
     return task[0]!.id;
+  });
+}
+
+/**
+ * A guest's WhatsApp message (ticket 44): into the Conversation of the
+ * guest's current or next stay when the number matches one, else kept
+ * Unassigned for staff to link. Writing first opts in; "STOP" withdraws
+ * (WhatsApp only). Null when unassigned or taken before.
+ */
+export async function receiveWhatsApp(pool: Pool, schema: string, msg: IncomingWhatsApp, links: PortalLinks | null, now = new Date()): Promise<(GuestPost & { conversationId: string }) | null> {
+  return withTenant(pool, schema, async (tx) => {
+    if ((await tx.query("select 1 from conversation_messages where provider_id = $1 union all select 1 from whatsapp_unassigned where provider_id = $1", [msg.providerId])).rows.length) return null;
+    const match = await matchWhatsApp(tx, msg);
+    if (!match) {
+      await keepUnassignedIn(tx, msg);
+      return null;
+    }
+    const c = (await tx.query<ConversationRow>(`select ${ROW} from conversations where id = $1 for update`, [match.conversationId])).rows[0]!;
+    if (/^\s*stop\s*$/i.test(msg.text)) await withdrawWhatsAppIn(tx, match.guestId);
+    else await noteWhatsAppIn(tx, c.id, match.guestId, msg.from, msg.at);
+    if (msg.fileId) await attachIn(tx, msg.fileId, PORTAL_USER);
+    const posted = await guestMessagesIn(tx, c, { body: msg.text.trim().slice(0, 5000), fileIds: msg.fileId ? [msg.fileId] : [], via: "whatsapp", providerId: msg.providerId }, links, now);
+    return { conversationId: c.id, propertyId: c.property_id, ...posted };
+  });
+}
+
+/** Staff link an Unassigned WhatsApp message to a stay: it joins the stay's Conversation, which talks to that number from now on. */
+export async function linkUnassignedWhatsApp(pool: Pool, schema: string, propertyId: string, unassignedId: string, reservationId: string, viewer: Viewer, links: PortalLinks | null): Promise<string> {
+  if (!isUuid(unassignedId) || !isUuid(reservationId)) throw new Error("Not found");
+  if (!can(viewer.actor, "use_guest_inbox", propertyId)) throw new Error("Not allowed");
+  return withTenant(pool, schema, async (tx) => {
+    const u = (await tx.query<{ id: string; from_phone: string; body: string; file_id: string | null; provider_id: string; received_at: Date }>(
+      "select id, from_phone, body, file_id, provider_id, received_at from whatsapp_unassigned where id = $1 and property_id = $2 and linked_at is null for update",
+      [unassignedId, propertyId],
+    )).rows[0];
+    if (!u) throw new Error("Already linked");
+    const r = (await tx.query<{ primary_guest_id: string }>("select primary_guest_id from reservations where id = $1 and property_id = $2 and status in ('confirmed', 'checked_in')", [reservationId, propertyId])).rows[0];
+    if (!r) throw new Error("Choose a current or coming stay");
+    const c = await conversationIn(tx, { reservationId, bookingId: null, propertyId });
+    await noteWhatsAppIn(tx, c.id, r.primary_guest_id, u.from_phone, u.received_at);
+    if (u.file_id) await setFileRetention(tx, [u.file_id], null);
+    await guestMessagesIn(tx, c, { body: u.body, fileIds: u.file_id ? [u.file_id] : [], via: "whatsapp", providerId: u.provider_id }, links, new Date());
+    await tx.query("update whatsapp_unassigned set linked_conversation_id = $2, linked_at = now(), linked_by = $3 where id = $1", [u.id, c.id, viewer.userId]);
+    return c.id;
   });
 }

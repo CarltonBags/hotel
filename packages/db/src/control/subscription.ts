@@ -117,8 +117,8 @@ export async function setYearly(pool: Pool, tenantId: string, yearly: boolean, t
 }
 
 /** Usage passed on (SMS, WhatsApp): recorded when the message is sent; billed the month after at cost plus handling. */
-export async function recordUsage(pool: Pool, tenantId: string, kind: string, quantity: number, cost: number, at = new Date()): Promise<void> {
-  await pool.query("insert into control.usage_events (tenant_id, kind, quantity, cost, at) values ($1, $2, $3, $4, $5)", [tenantId, kind, quantity, cost, at]);
+export async function recordUsage(pool: Pool, tenantId: string, kind: string, quantity: number, cost: number, at = new Date(), propertyId: string | null = null): Promise<void> {
+  await pool.query("insert into control.usage_events (tenant_id, kind, quantity, cost, at, property_id) values ($1, $2, $3, $4, $5, $6)", [tenantId, kind, quantity, cost, at, propertyId]);
 }
 
 export interface SubscriptionInvoiceRow {

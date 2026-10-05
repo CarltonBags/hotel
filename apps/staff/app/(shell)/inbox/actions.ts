@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { TASKS_FROM_MESSAGES, claimConversation, conversationOfReservation, markConversationSeen, messageToTask, postStaffMessage, setConversationDisputed, type TaskFromMessage } from "@hoteloftware/db";
+import { TASKS_FROM_MESSAGES, deliverStaffWhatsApp, linkUnassignedWhatsApp, claimConversation, conversationOfReservation, markConversationSeen, messageToTask, postStaffMessage, setConversationDisputed, type TaskFromMessage } from "@hoteloftware/db";
+import { whatsAppMessageCost, whatsAppProvider } from "@hoteloftware/messaging";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { guestLinks } from "@/lib/env";
@@ -21,18 +22,24 @@ export async function sendMessageAction(_prev: FormState, formData: FormData): P
     const propertyId = field(formData, "propertyId");
     const { tenant, session } = await inbox(propertyId);
     const fileId = await storeConversationFile(tenant, formData, propertyId, session.user.id);
-    await postStaffMessage(
+    const links = guestLinks(tenant.slug);
+    const posted = await postStaffMessage(
       pool(),
       tenant.schemaName,
       propertyId,
       field(formData, "conversationId"),
       { userId: session.user.id, name: session.user.name },
       // the guest message on screen when writing: one that came in meanwhile stays unread
-      { body: String(formData.get("body") ?? ""), note: flag(formData, "note"), fileId, seenUpTo: field(formData, "seenUpTo") || null },
-      guestLinks(tenant.slug),
+      { body: String(formData.get("body") ?? ""), note: flag(formData, "note"), fileId, seenUpTo: field(formData, "seenUpTo") || null, transport: field(formData, "transport") === "whatsapp" ? "whatsapp" : "email" },
+      links,
     );
-    await announceConversations(tenant.id, propertyId);
-    revalidatePath("/inbox");
+    try {
+      // by WhatsApp it goes now; refused, it stays in the thread marked as not sent
+      if (posted.whatsapp) await deliverStaffWhatsApp(pool(), tenant.schemaName, whatsAppProvider(), { tenantId: tenant.id, propertyId, messageId: posted.messageId, portalBase: links.base, cost: whatsAppMessageCost() });
+    } finally {
+      await announceConversations(tenant.id, propertyId);
+      revalidatePath("/inbox");
+    }
     return { ok: true };
   });
 }
@@ -87,5 +94,16 @@ export async function openConversationAction(_prev: FormState, formData: FormDat
     const r = await reservationScope(field(formData, "reservationId"), "use_guest_inbox");
     const c = await conversationOfReservation(pool(), r.schema, r.reservation.id);
     redirect(`/inbox?c=${c.id}`);
+  });
+}
+
+/** Staff link an Unassigned WhatsApp message to a current or coming stay (ticket 44). */
+export async function linkUnassignedAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const propertyId = field(formData, "propertyId");
+    const { tenant, session, actor } = await inbox(propertyId);
+    await linkUnassignedWhatsApp(pool(), tenant.schemaName, propertyId, field(formData, "unassignedId"), field(formData, "reservationId"), { userId: session.user.id, actor }, guestLinks(tenant.slug));
+    await announceConversations(tenant.id, propertyId);
+    revalidatePath("/inbox");
   });
 }

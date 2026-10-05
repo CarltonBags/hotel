@@ -260,4 +260,5 @@ export { ISSUE_PHOTO_DAYS } from "./maintenance";
 export { FULL_PUSH_DAYS, channelRestriction, channelStatusText, compressDays, type ChannelRestrictionValue, type ChannelStatus } from "./channels";
 export { addVat, channelNight, channelNights, splitCityTaxIncluded, type ChannelNightInput } from "./channel-bookings";
 export { OTP_ATTEMPTS, OTP_MINUTES, PORTAL_DAYS_AFTER_DEPARTURE, PORTAL_LANGUAGES, cardLabel, depositDue, expressCheckoutOpen, extrasOpen, isArrivalTime, portalLanguage, portalLinkOpen, sameLastName, type PortalLanguage } from "./portal";
+export { WHATSAPP_MEDIA_BYTES, WHATSAPP_TYPES, WINDOW_HOURS, asMetaTemplate, isWhatsAppType, whatsAppNumber, sensitiveData, windowOpen, type WhatsAppType } from "./whatsapp";
 export { CONVERSATION_FILE_BYTES, CONVERSATION_FILE_TYPES, QUICK_REPLY_PLACEHOLDERS, conversationExpired, deskMinutesBetween, isAutoReply, parseReplyAddress, replyAddress, deskNight, fillQuickReply, inDeskHours, isConversationFile, type DeskHours, type QuickReplyValues } from "./conversations";

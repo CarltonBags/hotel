@@ -149,6 +149,13 @@ export async function startWorkerServer(options: WorkerServerOptions): Promise<W
         });
         return;
       }
+      if (req.method === "GET" && url.pathname.startsWith("/webhooks/")) {
+        // a provider checking its subscription (Meta): answered only with the agreed token
+        const answer = sources.get(url.pathname.slice("/webhooks/".length))?.challenge?.(url.searchParams) ?? null;
+        if (answer === null) res.writeHead(403).end();
+        else res.writeHead(200, { "content-type": "text/plain" }).end(answer);
+        return;
+      }
       if (req.method === "POST" && url.pathname.startsWith("/webhooks/")) {
         const name = url.pathname.slice("/webhooks/".length);
         const source = sources.get(name);

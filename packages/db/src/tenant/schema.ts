@@ -1837,8 +1837,13 @@ export const guestMessages = pgTable(
     failedAt: timestamp("failed_at", { withTimezone: true }),
     conversationId: uuid("conversation_id").references((): AnyPgColumn => conversations.id, { onDelete: "cascade" }),
     replyTo: text("reply_to"),
+    transport: text("transport").notNull().default("email"),
+    toPhone: text("to_phone"),
+    templateParams: jsonb("template_params"),
   },
   (t) => [
+    check("guest_messages_transport_check", sql`${t.transport} in ('email', 'whatsapp')`),
+    index("guest_messages_provider_lookup_idx").on(t.providerId).where(sql`${t.providerId} is not null and ${t.transport} = 'whatsapp'`),
     index("guest_messages_conversation_idx").on(t.conversationId).where(sql`${t.conversationId} is not null`),
     check("guest_messages_status_check", sql`${t.status} in ('queued', 'sending', 'sent', 'delivered', 'failed', 'suppressed')`),
     uniqueIndex("guest_messages_once_key").on(t.reservationId, t.type, t.triggerKey),
@@ -2089,6 +2094,8 @@ export const conversations = pgTable(
     replyToken: text("reply_token").notNull().default(sql`replace(gen_random_uuid()::text, '-', '')`),
     disputedAt: timestamp("disputed_at", { withTimezone: true }),
     disputedBy: text("disputed_by"),
+    whatsappPhone: text("whatsapp_phone"),
+    whatsappLastIn: timestamp("whatsapp_last_in", { withTimezone: true }),
   },
   (t) => [
     unique("conversations_reply_token_key").on(t.replyToken),
@@ -2110,9 +2117,14 @@ export const conversationMessages = pgTable(
     fileId: uuid("file_id").references(() => storedFiles.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     via: text("via").notNull().default("portal"),
+    providerId: text("provider_id"),
+    delivery: text("delivery"),
+    deliveryError: text("delivery_error"),
   },
   (t) => [
-    check("conversation_messages_via_check", sql`${t.via} in ('portal', 'email')`),
+    check("conversation_messages_via_check", sql`${t.via} in ('portal', 'email', 'whatsapp')`),
+    check("conversation_messages_delivery_check", sql`${t.delivery} in ('sending', 'sent', 'delivered', 'read', 'failed')`),
+    uniqueIndex("conversation_messages_provider_key").on(t.providerId).where(sql`${t.providerId} is not null`),
     check("conversation_messages_kind_check", sql`${t.kind} in ('guest', 'staff', 'note')`),
     check("conversation_messages_content_check", sql`${t.body} <> '' or ${t.fileId} is not null`),
     index("conversation_messages_conversation_idx").on(t.conversationId, t.createdAt),
@@ -2155,6 +2167,57 @@ export const housekeepingTaskMessages = pgTable(
     messageId: uuid("message_id").primaryKey().references(() => conversationMessages.id, { onDelete: "cascade" }),
   },
   (t) => [index("housekeeping_task_messages_task_idx").on(t.taskId)],
+);
+
+export const whatsappAccounts = pgTable("whatsapp_accounts", {
+  propertyId: uuid("property_id").primaryKey().references(() => properties.id),
+  wabaId: text("waba_id").notNull(),
+  phoneNumberId: text("phone_number_id").notNull(),
+  displayNumber: text("display_number").notNull().default(""),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  connectedBy: text("connected_by").notNull(),
+}, (t) => [unique("whatsapp_accounts_number_key").on(t.phoneNumberId)]);
+
+export const whatsappTemplates = pgTable(
+  "whatsapp_templates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    type: text("type").notNull(),
+    language: text("language").notNull(),
+    name: text("name").notNull(),
+    text: text("text").notNull(),
+    status: text("status").notNull().default("in_review"),
+    reason: text("reason"),
+    providerId: text("provider_id"),
+    approvedText: text("approved_text"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text("updated_by"),
+  },
+  (t) => [
+    check("whatsapp_templates_language_check", sql`${t.language} in ('de', 'en')`),
+    check("whatsapp_templates_status_check", sql`${t.status} in ('in_review', 'approved', 'rejected')`),
+    unique("whatsapp_templates_key").on(t.propertyId, t.type, t.language),
+    index("whatsapp_templates_provider_idx").on(t.providerId),
+  ],
+);
+
+export const whatsappUnassigned = pgTable(
+  "whatsapp_unassigned",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    fromPhone: text("from_phone").notNull(),
+    name: text("name").notNull().default(""),
+    body: text("body").notNull().default(""),
+    fileId: uuid("file_id").references(() => storedFiles.id, { onDelete: "set null" }),
+    providerId: text("provider_id").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    linkedConversationId: uuid("linked_conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+    linkedAt: timestamp("linked_at", { withTimezone: true }),
+    linkedBy: text("linked_by"),
+  },
+  (t) => [unique("whatsapp_unassigned_provider_key").on(t.providerId), index("whatsapp_unassigned_open_idx").on(t.propertyId, t.receivedAt).where(sql`${t.linkedAt} is null`)],
 );
 
 export const tenantSchema = {
@@ -2262,4 +2325,7 @@ export const tenantSchema = {
   quickReplies,
   inboundMails,
   housekeepingTaskMessages,
+  whatsappAccounts,
+  whatsappTemplates,
+  whatsappUnassigned,
 };

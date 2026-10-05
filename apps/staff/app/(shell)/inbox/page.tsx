@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { conversationProperty, conversationRooms, conversationView, modulePeriods, listConversations, listQuickReplies, type ThreadMessage } from "@hoteloftware/db";
+import { conversationProperty, conversationRooms, conversationView, linkableStays, listUnassignedWhatsApp, modulePeriods, whatsAppState, listConversations, listQuickReplies, type ThreadMessage } from "@hoteloftware/db";
 import { DATA_KINDS, can, moduleState, moduleVisible, todayIn } from "@hoteloftware/domain";
 import { ActionForm } from "@/components/form-fields";
 import { fill, type Messages } from "@/i18n/messages";
@@ -8,7 +8,7 @@ import { pool } from "@/lib/db";
 import { fileLink } from "@/lib/files";
 import { loadShell } from "@/lib/shell";
 import { LiveRefresh } from "@/shell/LiveRefresh";
-import { claimAction, disputeAction, messageToTaskAction } from "./actions";
+import { claimAction, disputeAction, linkUnassignedAction, messageToTaskAction } from "./actions";
 import { Composer, SeenMarker, TypingIndicator } from "./inbox-client";
 
 /**
@@ -46,6 +46,10 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     openAt ? conversationRooms(pool(), tenant.schemaName, openAt, open) : Promise.resolve([]),
   ]);
   const zoneOf = new Map(allowed.map((p) => [p.id, p.timeZone]));
+  // WhatsApp (ticket 44): messages not matched to a stay, and whether the open Conversation can go that way
+  const unassigned = await listUnassignedWhatsApp(pool(), tenant.schemaName, ids);
+  const stays = new Map(await Promise.all([...new Set(unassigned.map((u) => u.propertyId))].map(async (id) => [id, await linkableStays(pool(), tenant.schemaName, id)] as const)));
+  const wa = openAt ? await whatsAppState(pool(), tenant.schemaName, openAt, open) : null;
   const keeps = can(actor, "keep_conversations", property.id);
   const locale = language === "de" ? "de-DE" : "en-GB";
   // each hotel's own clock
@@ -65,6 +69,35 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
           {m["module.guest_inbox"]} <span className="text-ink-60">· {combined ? m["shell.allProperties"] : property.name}</span>
         </h1>
         {list.length === 0 ? <p className="px-2 text-sm text-ink-60">{m["inbox.empty"]}</p> : null}
+        {unassigned.length ? (
+          <details className="mb-2 rounded-xl bg-warning/10 p-2 text-sm" open data-unassigned>
+            <summary className="cursor-pointer font-medium">
+              {m["wa.unassigned"]} ({unassigned.length})
+            </summary>
+            <ul className="mt-2 grid gap-2">
+              {unassigned.map((u) => (
+                <li key={u.id} className="grid gap-1 rounded-lg bg-surface p-2">
+                  <span className="text-[12px] text-ink-60">
+                    {combined ? `${allowed.find((p) => p.id === u.propertyId)?.name ?? ""} · ` : ""}+{u.fromPhone}
+                    {u.name ? ` · ${u.name}` : ""} · {when(u.receivedAt, u.propertyId)}
+                  </span>
+                  <span className="whitespace-pre-wrap">{u.body || "📎"}</span>
+                  <ActionForm action={linkUnassignedAction} submitLabel={m["wa.link"]} className="flex flex-wrap gap-1">
+                    <input type="hidden" name="propertyId" value={u.propertyId} />
+                    <input type="hidden" name="unassignedId" value={u.id} />
+                    <select name="reservationId" required className="h-8 min-w-0 flex-1 rounded-lg bg-surface-2 px-2 text-[12px]" aria-label={m["wa.link"]}>
+                      {(stays.get(u.propertyId) ?? []).map((st) => (
+                        <option key={st.reservationId} value={st.reservationId}>
+                          {st.label}
+                        </option>
+                      ))}
+                    </select>
+                  </ActionForm>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
         <ul className="grid gap-1">
           {list.map((c) => (
             <li key={c.id}>
@@ -147,7 +180,14 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
               <Thread messages={view.messages} m={m} when={when} file={file} toWork={{ propertyId: property.id, rooms }} />
             </div>
             <TypingIndicator conversationId={view.conversation.id} />
-            <Composer propertyId={property.id} conversationId={view.conversation.id} seenUpTo={view.latestGuestMessageId} quickReplies={languageReplies} values={view.values} />
+            <Composer
+              propertyId={property.id}
+              conversationId={view.conversation.id}
+              seenUpTo={view.latestGuestMessageId}
+              quickReplies={languageReplies}
+              values={view.values}
+              whatsapp={wa?.possible ? { windowOpen: wa.windowOpen, templateReady: wa.templateReady } : null}
+            />
           </>
         )}
       </section>
@@ -181,6 +221,7 @@ function Thread({ messages, m, when, file, toWork }: { messages: ThreadMessage[]
             {x.kind === "auto" ? m["inbox.auto"] : x.kind === "note" ? `${m["inbox.note"]} · ${x.authorName}` : x.authorName} · {when(x.at)}
             {x.notSent ? ` · ${m["inbox.notSent"]}` : ""}
             {x.byEmail ? ` · ${m["inbox.byEmail"]}` : ""}
+            {x.byWhatsApp ? ` · ${m["wa.byWhatsApp"]}${x.delivery ? ` (${m[`wa.delivery.${x.delivery}`]})` : ""}` : ""}
           </span>
           {x.subject ? <span className="font-medium">{x.subject}</span> : null}
           {x.body ? <span className="whitespace-pre-wrap">{x.body}</span> : null}

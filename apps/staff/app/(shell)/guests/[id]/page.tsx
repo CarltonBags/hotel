@@ -1,6 +1,9 @@
 import { notFound } from "next/navigation";
 import { can } from "@hoteloftware/domain";
 import Link from "next/link";
+import { whatsAppConsentOf } from "@hoteloftware/db";
+import { ActionForm } from "@/components/form-fields";
+import { whatsAppConsentAction } from "../actions";
 import { findGuest, findGuestDuplicates, guestHistory, listGuestMerges, listGuestReservations, listProperties, listTenantUsers, searchGuests } from "@hoteloftware/db";
 import { CHANNEL_USER, PORTAL_USER } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
@@ -31,6 +34,7 @@ export default async function GuestPage({ params, searchParams }: { params: Prom
     listGuestReservations(pool(), tenant.schemaName, id),
   ]);
   const names = new Map(users.map((u) => [u.id, u.name]));
+  const whatsApp = await whatsAppConsentOf(pool(), tenant.schemaName, id);
   // reservations only at properties where the user may see reservations
   // the front office sees its working property only
   const working = await workingPropertyId();
@@ -51,6 +55,17 @@ export default async function GuestPage({ params, searchParams }: { params: Prom
         </h1>
         <p className="text-sm text-ink-60">{createdAt ? fill(m["guests.createdAt"], { property: createdAt, date: fmt.format(stored.createdAt) }) : fmt.format(stored.createdAt)}</p>
       </div>
+
+      <section className="flex flex-wrap items-center gap-3 rounded-2xl bg-surface-2 p-4 text-sm" data-whatsapp-consent={String(whatsApp)}>
+        <span className="font-medium">{m["wa.consent"]}</span>
+        <span>{whatsApp ? m["wa.consentYes"] : m["wa.consentNo"]}</span>
+        {rights.edit ? (
+          <ActionForm action={whatsAppConsentAction} submitLabel={whatsApp ? m["wa.consentWithdraw"] : m["wa.consentGrant"]} className="flex">
+            <input type="hidden" name="guestId" value={id} />
+            {whatsApp ? null : <input type="hidden" name="granted" value="on" />}
+          </ActionForm>
+        ) : null}
+      </section>
 
       <GuestProfile
         guest={guest}

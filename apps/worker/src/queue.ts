@@ -11,7 +11,7 @@ import { sendScheduledReports } from "./reports";
 import { alertMajorIncidents } from "./outage-alert";
 import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 import { runMessaging } from "./messaging";
-import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
+import type { MailProvider, SmsProvider, WhatsAppProvider } from "@hoteloftware/messaging";
 import { fileStore } from "@hoteloftware/storage";
 import type { ChannelManager } from "@hoteloftware/channels";
 import { pullChannelBookings, pushTenantChannels } from "./channels";
@@ -63,7 +63,7 @@ export interface QueueOptions {
   /** The payment provider, for the Card Hold check. */
   paymentProvider?: PaymentProvider;
   /** Mail and SMS providers, and the platform's sending domain, for messages and alerts. */
-  messaging?: { mail: MailProvider; sms: SmsProvider; platformDomain: string };
+  messaging?: { mail: MailProvider; sms: SmsProvider; whatsapp?: WhatsAppProvider; platformDomain: string };
   /** The channel manager (Channex or the fake). */
   channelManager?: ChannelManager;
   /** Where the channel manager announces booking revisions (registered for each connected property). */
