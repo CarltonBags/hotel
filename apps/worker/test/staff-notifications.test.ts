@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { createLegalEntity, createProperty, dispatchMessages, listTenantUsers, migrateControl, provisionTenant, setAlertSettings, setPropertyRoles, type Tenant } from "@hoteloftware/db";
+import { createLegalEntity, createProperty, dispatchMessages, listTenantUsers, migrateControl, provisionTenant, setNotificationChannels, setPropertyRoles, type Tenant } from "@hoteloftware/db";
 import { controlMigrations, tenantMigrations } from "@hoteloftware/db/migrations";
 import { FakeMailProvider, FakeSmsProvider } from "@hoteloftware/messaging";
-import { alertStaff } from "../src/alerts";
+import { notifyStaff } from "@hoteloftware/events";
 
-/** Seam: a staff alert reaches the app always, email per user setting, SMS only for urgent kinds and only Property Manager and Owner. */
-describe("staff alerts", () => {
+/** Seam: a staff Notification reaches the app always, email per user setting, SMS only for urgent kinds and only Property Managers (Tenant Roles count as one). */
+describe("staff notifications", () => {
   let pool: Pool;
   let alpha: Tenant;
   let berlin = "";
@@ -22,8 +22,8 @@ describe("staff alerts", () => {
     await pool.query(`insert into control."user" (id, tenant_id, name, email) values ('u_pm', $1, 'Pia Manager', 'pia@alpha.example'), ('u_fd', $1, 'Fred Desk', 'fred@alpha.example')`, [alpha.id]);
     await setPropertyRoles(pool, { tenantId: alpha.id, userId: "u_pm", propertyId: berlin, roles: ["property_manager"] });
     await setPropertyRoles(pool, { tenantId: alpha.id, userId: "u_fd", propertyId: berlin, roles: ["front_desk"] });
-    await setAlertSettings(pool, "u_pm", { email: false, sms: true, phone: "+49 170 1234567" });
-    await setAlertSettings(pool, "u_fd", { email: true, sms: true, phone: "+491709999999" });
+    await setNotificationChannels(pool, "u_pm", { email: false, sms: true, phone: "+49 170 1234567" });
+    await setNotificationChannels(pool, "u_fd", { email: true, sms: true, phone: "+491709999999" });
   });
 
   afterAll(async () => {
@@ -32,8 +32,8 @@ describe("staff alerts", () => {
 
   it("a Night Audit overdue alert reaches the manager's phone, not the desk's", async () => {
     const users = await listTenantUsers(pool, alpha.id);
-    await alertStaff(pool, alpha, users, { kind: "night_audit.overdue", title: "Night Audit overdue · Berlin · 2026-10-04", href: "/night-audit", propertyId: berlin });
-    await alertStaff(pool, alpha, users, { kind: "card_hold.expiring", title: "Card Hold expiring · 100123", propertyId: berlin });
+    await notifyStaff(pool, alpha, users, { kind: "night_audit.overdue", title: "Night Audit overdue · Berlin · 2026-10-04", href: "/night-audit", propertyId: berlin });
+    await notifyStaff(pool, alpha, users, { kind: "card_hold.expiring", title: "Card Hold expiring · 100123", propertyId: berlin });
     const mail = new FakeMailProvider();
     const sms = new FakeSmsProvider();
     await dispatchMessages(pool, alpha.schemaName, alpha.id, { mail, sms }, { platformDomain: "mail.test" });

@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
-import { refreshPaymentAccountById, renewExpiringHolds, retryOpenRefunds, syncByIntent, syncRefund, withTenant, type Tenant } from "@hoteloftware/db";
-import { publishDataChange, publishNotification } from "@hoteloftware/events";
+import { listTenantUsers, refreshPaymentAccountById, renewExpiringHolds, retryOpenRefunds, syncByIntent, syncRefund, withTenant, type Tenant } from "@hoteloftware/db";
+import { can } from "@hoteloftware/domain";
+import { notifyStaff, publishDataChange } from "@hoteloftware/events";
 import type { PaymentProvider } from "@hoteloftware/payments";
 import type { WebhookJobData, WebhookSource } from "./webhooks";
 
@@ -50,9 +51,10 @@ export async function checkHolds(pool: Pool, tenant: { id: string; schemaName: s
     const confirmation = await withTenant(pool, tenant.schemaName, async (tx) =>
       (await tx.query<{ confirmation_number: string }>("select b.confirmation_number from reservations r join bookings b on b.id = r.booking_id where r.id = $1", [w.reservationId])).rows[0]?.confirmation_number ?? "",
     );
-    await publishNotification(pool, {
-      tenantId: tenant.id,
-      userId: null,
+    // the desk of the property that can take a new hold or a payment; email per their setting
+    const desk = (await listTenantUsers(pool, tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "take_payments", w.propertyId));
+    await notifyStaff(pool, tenant, desk, {
+      propertyId: w.propertyId,
       kind: w.renewed ? "card_hold.renewed" : "card_hold.expiring",
       title: w.renewed ? `Card Hold renewed · ${confirmation}` : `Card Hold expiring · ${confirmation}`,
       body: w.renewed ? "The pre-authorisation was renewed on the same card." : `The pre-authorisation runs out soon and could not be renewed${w.error ? `: ${w.error}` : ""}. Take a new hold or a payment.`,

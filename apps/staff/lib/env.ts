@@ -49,3 +49,8 @@ export const env = {
     return process.env.SUPPORT_PHONE ?? "";
   },
 };
+
+/** The platform's mail domain: guest mail goes from it until a hotel's own domain is verified (the worker uses the same). */
+export function platformMailDomain(): string {
+  return process.env.MAIL_FROM_DOMAIN ?? process.env.MAILGUN_DOMAIN ?? "mail.hoteloftware.test";
+}

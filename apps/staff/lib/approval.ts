@@ -1,7 +1,7 @@
 import { can } from "@hoteloftware/domain";
 import { ApprovalRequired, listTenantUsers, loadActor, requestApproval, type ApprovalSubject } from "@hoteloftware/db";
 import { verifyTenantCredentials } from "@hoteloftware/auth";
-import { publishNotification } from "@hoteloftware/events";
+import { notifyStaff } from "@hoteloftware/events";
 import { auth } from "./auth";
 import { pool } from "./db";
 import type { FormState } from "./form";
@@ -60,15 +60,12 @@ async function askForApproval(ctx: ApprovalContext, subject: ApprovalSubject): P
   const managers = (await listTenantUsers(pool(), ctx.tenantId)).filter(
     (u) => u.id !== ctx.userId && !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "approve_requests", subject.propertyId),
   );
-  for (const m of managers) {
-    await publishNotification(pool(), {
-      tenantId: ctx.tenantId,
-      userId: m.id,
-      kind: "approval.requested",
-      title: `${ctx.userName} asks for an Approval: ${subject.summary}`,
-      href: `/approvals?property=${subject.propertyId}`,
-    }).catch((err) => console.error("notification not sent", err));
-  }
+  await notifyStaff(pool(), { id: ctx.tenantId, schemaName: ctx.schema }, managers, {
+    kind: "approval.requested",
+    title: `${ctx.userName} asks for an Approval: ${subject.summary}`,
+    href: `/approvals?property=${subject.propertyId}`,
+    propertyId: subject.propertyId,
+  }).catch((err) => console.error("notification not sent", err));
 }
 
 /**

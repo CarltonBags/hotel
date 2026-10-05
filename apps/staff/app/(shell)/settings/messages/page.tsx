@@ -1,5 +1,5 @@
 import { messageText, messagingSettings, previewMessage } from "@hoteloftware/db";
-import { MESSAGE_LANGUAGES, MESSAGE_TYPES, MESSAGE_TYPE_INFO, PLACEHOLDERS, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
+import { MESSAGE_LANGUAGES, MESSAGE_TYPES, MESSAGE_TYPE_INFO, PLACEHOLDERS, isMessageLanguage, isMessageType, messageSendable, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
 import Link from "next/link";
 import { ActionForm, Field } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
@@ -22,8 +22,8 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
   }
   const { tenant } = await requireAllowed("manage_property_settings", property.id);
   const q = await searchParams;
-  const type: MessageType = (MESSAGE_TYPES as readonly string[]).includes(q.type ?? "") ? (q.type as MessageType) : "confirmation";
-  const lang: MessageLanguage = (MESSAGE_LANGUAGES as readonly string[]).includes(q.lang ?? "") ? (q.lang as MessageLanguage) : "de";
+  const type: MessageType = isMessageType(q.type ?? "") ? (q.type as MessageType) : "confirmation";
+  const lang: MessageLanguage = isMessageLanguage(q.lang ?? "") ? (q.lang as MessageLanguage) : "de";
   const s = await messagingSettings(pool(), tenant.schemaName, property.id);
   const text = await messageText(pool(), tenant.schemaName, property.id, type, lang);
   const preview = await previewMessage(pool(), tenant.schemaName, property.id, type, lang);
@@ -62,10 +62,15 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
               </select>
             </label>
             <Field label={m["messages.replyTo"]} name="replyTo" type="email" defaultValue={s.replyTo ?? ""} />
+            <Field label={m["messages.checkoutTime"]} name="checkoutTime" type="time" defaultValue={s.checkoutTime} required />
           </div>
           <label className="flex items-center gap-2">
             <input type="hidden" name="useGuestLanguage" value="off" />
             <input type="checkbox" name="useGuestLanguage" defaultChecked={s.useGuestLanguage} /> {m["messages.useGuestLanguage"]}
+          </label>
+          <label className="flex items-center gap-2" data-channel-confirmation>
+            <input type="hidden" name="channelConfirmation" value="off" />
+            <input type="checkbox" name="channelConfirmation" defaultChecked={s.channelConfirmation} /> {m["messages.channelConfirmation"]}
           </label>
           <fieldset className="grid gap-1 sm:grid-cols-2">
             <legend className="mb-1 text-ink-60">{m["messages.types"]}</legend>
@@ -80,7 +85,10 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
                   <input type="checkbox" checked disabled readOnly />
                 )}
                 {m[`messages.type.${t}`]}
-                <span className="text-xs text-ink-60">{MESSAGE_TYPE_INFO[t].timing === "at_once" ? m["messages.atOnce"] : m["messages.inHours"]}</span>
+                <span className="text-xs text-ink-60">
+                  {m[`messages.timing.${MESSAGE_TYPE_INFO[t].timing}`]}
+                  {messageSendable(t) ? "" : ` · ${m["messages.waitsForPortal"]}`}
+                </span>
               </label>
             ))}
           </fieldset>

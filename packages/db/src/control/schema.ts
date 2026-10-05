@@ -116,12 +116,12 @@ export const userPreferences = control.table("user_preferences", {
   quickAccess: jsonb("quick_access"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   floorLanguage: text("floor_language"),
-  alertEmail: boolean("alert_email").notNull().default(true),
-  alertSms: boolean("alert_sms").notNull().default(false),
-  alertPhone: text("alert_phone"),
+  notifyEmail: boolean("notify_email").notNull().default(true),
+  notifySms: boolean("notify_sms").notNull().default(false),
+  notifyPhone: text("notify_phone"),
 }, (t) => [
   check("user_preferences_floor_language_check", sql`${t.floorLanguage} in ('de', 'en', 'pl', 'ro', 'bg', 'hr', 'hu', 'tr', 'uk', 'ar')`),
-  check("user_preferences_alert_phone_check", sql`${t.alertPhone} ~ '^\\+[1-9][0-9]{6,14}$'`),
+  check("user_preferences_notify_phone_check", sql`${t.notifyPhone} ~ '^\\+[1-9][0-9]{6,14}$'`),
 ]);
 
 export const userWorkspace = control.table(
@@ -465,7 +465,17 @@ export const counters = control.table("counters", {
   last: integer("last").notNull().default(0),
 });
 
+export const senderDomains = control.table("sender_domains", {
+  domain: text("domain").primaryKey(),
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  propertyId: uuid("property_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const controlSchema = {
+  senderDomains,
   supportStaff,
   supportAccesses,
   statusIncidents,

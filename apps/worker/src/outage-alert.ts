@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { claimIncidentsToAlert, listTenantUsers } from "@hoteloftware/db";
 import { canAtAnyProperty } from "@hoteloftware/domain";
-import { alertStaff } from "./alerts";
+import { notifyStaff } from "@hoteloftware/events";
 
 /**
  * An outage on our side (ticket 86): a major incident reported on the status
@@ -19,9 +19,9 @@ export async function alertMajorIncidents(pool: Pool, options: { platformSlug: s
     for (const t of tenants) {
       try {
         const managers = (await listTenantUsers(pool, t.id)).filter((u) => !u.pendingInvitation && canAtAnyProperty({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "manage_downtime"));
-        await alertStaff(pool, { id: t.id, schemaName: t.schema_name }, managers, {
+        await notifyStaff(pool, { id: t.id, schemaName: t.schema_name }, managers, {
           kind: "service.outage",
-          title: `Hoteloftware outage: ${incident.title}`,
+          title: `Service outage: ${incident.title}`,
           body: `${incident.message}\n\nStatus: ${options.statusUrl}\nAfterwards, enter what happened on paper under "Catch-up after outage".`,
           href: "/catch-up",
           propertyId: null,

@@ -98,38 +98,38 @@ export async function setFloorLanguage(db: Queryable, userId: string, language: 
   );
 }
 
-/** How a user hears of staff alerts besides the app (ticket 39): email, and SMS for the urgent kinds (Property Manager and Owner only). */
-export interface AlertSettings {
+/** How a user gets staff Notifications besides the app (ticket 39): email, and SMS for the urgent kinds (Property Managers only). */
+export interface NotificationChannels {
   email: boolean;
   sms: boolean;
   /** International format, e.g. +491701234567. */
   phone: string | null;
 }
 
-export async function getAlertSettings(db: Queryable, userId: string): Promise<AlertSettings> {
-  const { rows } = await db.query<{ alert_email: boolean; alert_sms: boolean; alert_phone: string | null }>("select alert_email, alert_sms, alert_phone from control.user_preferences where user_id = $1", [userId]);
-  const r = rows[0];
-  return r ? { email: r.alert_email, sms: r.alert_sms, phone: r.alert_phone } : { email: true, sms: false, phone: null };
+const CHANNEL_DEFAULTS: NotificationChannels = { email: true, sms: false, phone: null };
+
+export async function getNotificationChannels(db: Queryable, userId: string): Promise<NotificationChannels> {
+  return (await notificationChannelsOf(db, [userId])).get(userId)!;
 }
 
-/** Alert settings of several users at once; absent users have the defaults. */
-export async function alertSettingsOf(db: Queryable, userIds: string[]): Promise<Map<string, AlertSettings>> {
-  const { rows } = await db.query<{ user_id: string; alert_email: boolean; alert_sms: boolean; alert_phone: string | null }>(
-    "select user_id, alert_email, alert_sms, alert_phone from control.user_preferences where user_id = any($1)",
+/** The channels of several users at once; users without settings have the defaults. */
+export async function notificationChannelsOf(db: Queryable, userIds: string[]): Promise<Map<string, NotificationChannels>> {
+  const { rows } = await db.query<{ user_id: string; notify_email: boolean; notify_sms: boolean; notify_phone: string | null }>(
+    "select user_id, notify_email, notify_sms, notify_phone from control.user_preferences where user_id = any($1)",
     [userIds],
   );
-  const out = new Map(userIds.map((id) => [id, { email: true, sms: false, phone: null } as AlertSettings]));
-  for (const r of rows) out.set(r.user_id, { email: r.alert_email, sms: r.alert_sms, phone: r.alert_phone });
+  const out = new Map(userIds.map((id) => [id, { ...CHANNEL_DEFAULTS }]));
+  for (const r of rows) out.set(r.user_id, { email: r.notify_email, sms: r.notify_sms, phone: r.notify_phone });
   return out;
 }
 
-export async function setAlertSettings(db: Queryable, userId: string, input: AlertSettings): Promise<void> {
+export async function setNotificationChannels(db: Queryable, userId: string, input: NotificationChannels): Promise<void> {
   const phone = input.phone?.replace(/[\s()-]/g, "") || null;
   if (phone && !/^\+[1-9][0-9]{6,14}$/.test(phone)) throw new Error("Enter the phone number in international format, e.g. +49 170 1234567");
-  if (input.sms && !phone) throw new Error("SMS alerts need a phone number");
+  if (input.sms && !phone) throw new Error("SMS needs a phone number");
   await db.query(
-    `insert into control.user_preferences (user_id, alert_email, alert_sms, alert_phone) values ($1, $2, $3, $4)
-     on conflict (user_id) do update set alert_email = $2, alert_sms = $3, alert_phone = $4, updated_at = now()`,
+    `insert into control.user_preferences (user_id, notify_email, notify_sms, notify_phone) values ($1, $2, $3, $4)
+     on conflict (user_id) do update set notify_email = $2, notify_sms = $3, notify_phone = $4, updated_at = now()`,
     [userId, input.email, input.sms, phone],
   );
 }

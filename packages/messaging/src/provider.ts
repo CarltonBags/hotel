@@ -13,8 +13,10 @@ export interface MailMessage {
   /** Sender address, and the name shown. */
   from: string;
   fromName: string;
-  replyTo?: string;
+  replyTo?: string | undefined;
   to: string;
+  /** The provider domain to send through: the hotel's own once verified, so the signature matches the sender; else the platform's. */
+  sendingDomain?: string | undefined;
   subject: string;
   html: string;
   text: string;
@@ -43,6 +45,8 @@ export interface MailProvider {
   /** Whether an event really comes from the provider. */
   verifyWebhook(headers: Record<string, string>, rawBody: string): boolean;
   parseEvent(rawBody: unknown): MailEvent | null;
+  /** What makes an event delivery unique for replay protection (the signed token), from the parsed body. */
+  replayKey(body: unknown): string | null;
   /** A hotel's own sending domain: registered at the provider on first ask; verified once its DNS records are in place. */
   domainStatus(domain: string): Promise<DomainStatus>;
 }

@@ -15,6 +15,8 @@ create table property_messaging (
   sender_verified boolean not null default false,
   reply_to text,
   pre_arrival_days integer not null default 3 constraint property_messaging_pre_arrival_check check (pre_arrival_days between 1 and 30),
+  -- shown in the departure-eve message
+  checkout_time time not null default '11:00',
   -- events from before messaging started are not messaged (no flood of old bookings)
   started_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -50,6 +52,8 @@ create table guest_messages (
   reason text,
   send_after timestamptz not null,
   attempts integer not null default 0,
+  -- taken by a dispatch run; a run never sends what another has taken
+  claimed_at timestamptz,
   provider_id text,
   created_at timestamptz not null default clock_timestamp(),
   -- null when automatic
@@ -79,6 +83,9 @@ alter table mail_outbox add column attempts integer not null default 0;
 alter table mail_outbox add column error text;
 -- a rendered message (a test send of a guest text) keeps its layout
 alter table mail_outbox add column html text;
+alter table mail_outbox add column claimed_at timestamptz;
+-- sent as the hotel (its sender and domain), not as the platform: a test send of a guest text
+alter table mail_outbox add column property_id uuid references properties(id);
 
 create table sms_outbox (
   id uuid primary key default gen_random_uuid(),
@@ -88,6 +95,7 @@ create table sms_outbox (
   created_at timestamptz not null default now(),
   sent_at timestamptz,
   attempts integer not null default 0,
+  claimed_at timestamptz,
   error text,
   provider_id text
 );

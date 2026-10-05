@@ -13,7 +13,7 @@ export { GoLiveBlocked, goLive, goLiveCheckCurrent, goLiveChecklistOf, markGoLiv
 export { seedDemoData } from "./tenant/demo";
 /** Kept with the rates for the app's Rates page; the domain owns it. */
 export { PRICE_HORIZON_DAYS } from "@hoteloftware/domain";
-export { alertSettingsOf, getAlertSettings, getFloorLanguage, getPreferences, getWorkspace, setAlertSettings, setFloorLanguage, setPinnedTabs, setPreferences, type AlertSettings, type PinnedTab, type Preferences, type Workspace } from "./control/preferences";
+export { getFloorLanguage, getNotificationChannels, getPreferences, getWorkspace, notificationChannelsOf, setFloorLanguage, setNotificationChannels, setPinnedTabs, setPreferences, type NotificationChannels, type PinnedTab, type Preferences, type Workspace } from "./control/preferences";
 export { assertTenantSlug, isTenantSlug, resolveTenantSlug, tenantSchemaFromSlug } from "@hoteloftware/domain";
 export { assertTenantSchemaName, inTenantTransaction, isTenantSchemaName, withTenant } from "./tenant/with-tenant";
 export { controlSchema } from "./control/schema";
@@ -428,7 +428,7 @@ export { claimIncidentsToAlert,
 } from "./control/support";
 export { logReportExport, runReport, type ReportRequest } from "./tenant/reports";
 export { createReportSchedule, deleteReportSchedule, dueReportSchedules, listReportSchedules, markReportScheduleSent, stopReportSchedule, type ReportSchedule, type ScheduleOptions } from "./tenant/report-schedules";
-export { queueMail, type OutgoingMail } from "./tenant/mail-outbox";
+export { dispatchOutboxes, queueMail, queueSms, type OutgoingMail } from "./tenant/mail-outbox";
 export { catchUp, downtimeSet, emergencyReport, endOutage, getDowntimeOptions, listOutages, logOutage, setDowntimeOptions, type CatchUpInput, type DowntimeGuestRow, type DowntimeSet, type EmergencyReport, type Outage, type RoomRackRow } from "./tenant/downtime";
 export {
   addRegistrationPerson,
@@ -468,7 +468,6 @@ export {
   messageText,
   messagingSettings,
   previewMessage,
-  queueSms,
   recordMailEvent,
   reservationMessages,
   resetMessageText,
@@ -478,8 +477,9 @@ export {
   setMessageText,
   setMessagingSettings,
   setSenderDomain,
-  type BounceAlert,
+  type BouncedMessage,
   type GuestMessageRow,
+  type MessageStatus,
   type MessagingSettings,
   type MessagingSettingsInput,
 } from "./tenant/messages";

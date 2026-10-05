@@ -20,7 +20,6 @@ import {
   checkSenderDomain,
   dispatchMessages,
   messagingSettings,
-  queueSms,
   recordMailEvent,
   reservationMessages,
   resetMessageText,
@@ -30,6 +29,9 @@ import {
   setMessagingSettings,
   setSenderDomain,
 } from "../src/tenant/messages";
+import { queueSms } from "../src/tenant/mail-outbox";
+import { assignRoom } from "../src/tenant/reservation-changes";
+import { checkIn } from "../src/tenant/folios";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -102,21 +104,27 @@ describe("Guest messages", () => {
     expect((await reservationMessages(pool, s(), id))[0]!.status).toBe("delivered");
   });
 
-  it("holds a service message triggered at 23:00 until Sending Hours", async () => {
-    const id = await book("Late", "late@example.com", "de", 2);
+  it("holds a service message triggered at 23:00 until Sending Hours; one with a Portal Link waits for the portal", async () => {
+    await setMessagingSettings(pool, s(), propertyId, { sendingFrom: "08:00", sendingTo: "20:00", fallbackLanguage: "de", useGuestLanguage: true, enabled: { welcome: true }, channelConfirmation: true, replyTo: null, preArrivalDays: 3, checkoutTime: "10:30" }, fd);
+    const id = await book("Late", "late@example.com", "de", 0);
+    const { rows } = await pool.query<{ id: string }>(`select id from ${s()}.rooms where property_id = $1 order by number limit 1`, [propertyId]);
+    await assignRoom(pool, s(), id, fd, rows[0]!.id);
+    await checkIn(pool, s(), id, fd, { notReadyReason: "test" });
     await scanGuestMessages(pool, s(), at("23:00"));
     const msgs = await reservationMessages(pool, s(), id);
-    const pre = msgs.find((m) => m.type === "pre_arrival")!;
+    const welcome = msgs.find((m) => m.type === "welcome")!;
     const confirmation = msgs.find((m) => m.type === "confirmation")!;
     // the document goes at once, the service message the next morning at 08:00
     expect(confirmation.sendAfter.getTime()).toBe(at("23:00").getTime());
-    expect(pre.sendAfter.toISOString()).toBe(new Date(at("08:00").getTime() + 86400000).toISOString());
-    expect(pre.subject).toContain("Bald bei uns");
+    expect(welcome.sendAfter.toISOString()).toBe(new Date(at("08:00").getTime() + 86400000).toISOString());
+    expect(welcome.subject).toBe("Willkommen im Haus am Ring");
+    // the pre-arrival invitation carries the Portal Link (ticket 40): not queued yet
+    expect(msgs.find((m) => m.type === "pre_arrival")).toBeUndefined();
     mail.sent.length = 0;
     await dispatchMessages(pool, s(), tenant.id, providers, options, at("23:05"));
-    expect(mail.sent.map((m) => m.subject)).not.toContain(pre.subject);
+    expect(mail.sent.map((m) => m.subject)).not.toContain(welcome.subject);
     await dispatchMessages(pool, s(), tenant.id, providers, options, new Date(at("08:00").getTime() + 86400000));
-    expect(mail.sent.map((m) => m.subject)).toContain(pre.subject);
+    expect(mail.sent.map((m) => m.subject)).toContain(welcome.subject);
   });
 
   it("marks a hard-bounced address, asks for a desk alert, and sends no more to it", async () => {
@@ -135,7 +143,7 @@ describe("Guest messages", () => {
   });
 
   it("keeps a guest without address on record, and leaves switched-off types out", async () => {
-    await setMessagingSettings(pool, s(), propertyId, { sendingFrom: "08:00", sendingTo: "20:00", fallbackLanguage: "de", useGuestLanguage: true, enabled: { pre_arrival: false }, replyTo: null, preArrivalDays: 3 }, fd);
+    await setMessagingSettings(pool, s(), propertyId, { sendingFrom: "08:00", sendingTo: "20:00", fallbackLanguage: "de", useGuestLanguage: true, enabled: { pre_arrival: false, welcome: false }, channelConfirmation: true, replyTo: null, preArrivalDays: 3, checkoutTime: "11:00" }, fd);
     expect((await messagingSettings(pool, s(), propertyId)).enabled).toMatchObject({ pre_arrival: false, confirmation: true, welcome: false });
     const id = await book("Nomail", null, "fr", 2);
     await scanGuestMessages(pool, s(), at("12:00"));
@@ -143,25 +151,42 @@ describe("Guest messages", () => {
     expect(msgs.map((m) => [m.type, m.status, m.reason, m.language])).toEqual([["confirmation", "suppressed", "no_email", "de"]]);
   });
 
+  it("leaves our confirmation out for booking-site bookings when switched off, on record", async () => {
+    await setMessagingSettings(pool, s(), propertyId, { sendingFrom: "08:00", sendingTo: "20:00", fallbackLanguage: "de", useGuestLanguage: true, enabled: {}, channelConfirmation: false, replyTo: null, preArrivalDays: 3, checkoutTime: "11:00" }, fd);
+    const id = await book("Channel", "c@example.com", "en");
+    await pool.query(`update ${s()}.bookings set source = 'channel', channel_name = 'Booking.com' where id = (select booking_id from ${s()}.reservations where id = $1)`, [id]);
+    await scanGuestMessages(pool, s(), at("12:00"));
+    expect((await reservationMessages(pool, s(), id)).map((m) => [m.type, m.status, m.reason])).toEqual([["confirmation", "suppressed", "channel"]]);
+    await setMessagingSettings(pool, s(), propertyId, { sendingFrom: "08:00", sendingTo: "20:00", fallbackLanguage: "de", useGuestLanguage: true, enabled: {}, channelConfirmation: true, replyTo: null, preArrivalDays: 3, checkoutTime: "11:00" }, fd);
+  });
+
   it("edits a text per language, refuses unknown placeholders, resets to the shipped text", async () => {
     await expect(setMessageText(pool, s(), propertyId, "confirmation", "en", { subject: "Hi {gast}", blocks: ["x"] }, fd)).rejects.toThrow(/\{gast\}/);
-    await setMessageText(pool, s(), propertyId, "confirmation", "en", { subject: "Booked: {confirmation}", blocks: ["Hello {guest_name}!", ""] }, fd);
-    expect(await messageText(pool, s(), propertyId, "confirmation", "en")).toEqual({ subject: "Booked: {confirmation}", blocks: ["Hello {guest_name}!"], edited: true });
+    // mandatory content stays
+    await expect(setMessageText(pool, s(), propertyId, "confirmation", "en", { subject: "Booked", blocks: ["Hello {guest_name}!"] }, fd)).rejects.toThrow(/must keep \{confirmation\}, \{arrival\}, \{departure\}/);
+    await setMessageText(pool, s(), propertyId, "confirmation", "en", { subject: "Booked: {confirmation}", blocks: ["Hello {guest_name}!", "", "{arrival} to {departure}"] }, fd);
+    expect(await messageText(pool, s(), propertyId, "confirmation", "en")).toEqual({ subject: "Booked: {confirmation}", blocks: ["Hello {guest_name}!", "{arrival} to {departure}"], edited: true });
     expect((await messageText(pool, s(), propertyId, "confirmation", "de")).edited).toBe(false);
     await resetMessageText(pool, s(), propertyId, "confirmation", "en");
     expect((await messageText(pool, s(), propertyId, "confirmation", "en")).subject).toBe("Your booking {confirmation} at {hotel_name}");
   });
 
-  it("refuses a free-mail sender and sends from the hotel's domain once verified", async () => {
-    await expect(setSenderDomain(pool, s(), propertyId, { domain: "gmx.de", local: "info" }, fd)).rejects.toThrow(/free-mail/);
-    await setSenderDomain(pool, s(), propertyId, { domain: "haus-am-ring.invalid", local: "booking" }, fd);
+  it("refuses free mail, the platform's domain and another tenant's domain; sends from the hotel's domain once verified", async () => {
+    const domain = (d: string, tenantId = tenant.id, schema = s()) => setSenderDomain(pool, schema, { tenantId, propertyId, domain: d, local: "booking", platformDomain: "mail.hoteloftware.test" }, fd);
+    await expect(domain("gmx.de")).rejects.toThrow(/free-mail/);
+    await expect(domain("hoteloftware.test")).rejects.toThrow(/platform/);
+    await domain("haus-am-ring.invalid");
     expect(await checkSenderDomain(pool, s(), propertyId, mail)).toMatchObject({ verified: false });
-    await setSenderDomain(pool, s(), propertyId, { domain: "haus-am-ring.de", local: "booking" }, fd);
+    await domain("haus-am-ring.de");
     expect(await checkSenderDomain(pool, s(), propertyId, mail)).toMatchObject({ verified: true });
+    const beta = await provisionTenant(pool, { slug: "beta", name: "Beta" }, tenantMigrations());
+    await expect(domain("haus-am-ring.de", beta.id, beta.schemaName)).rejects.toThrow(/another account/);
     await book("Domain", "d@example.com", "en");
     await scanGuestMessages(pool, s(), at("12:00"));
     await dispatchMessages(pool, s(), tenant.id, providers, options, at("12:00"));
-    expect(mail.sent.find((m) => m.to === "d@example.com")!.from).toBe("booking@haus-am-ring.de");
+    const sent = mail.sent.find((m) => m.to === "d@example.com")!;
+    expect(sent.from).toBe("booking@haus-am-ring.de");
+    expect(sent.sendingDomain).toBe("haus-am-ring.de");
   });
 
   it("sends queued SMS alerts", async () => {

@@ -2,9 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { checkSenderDomain, findProperty, resetMessageText, sendTestMessage, setMessageText, setMessagingSettings, setSenderDomain } from "@hoteloftware/db";
-import { MESSAGE_LANGUAGES, MESSAGE_TYPES, MESSAGE_TYPE_INFO, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
+import { MESSAGE_TYPES, MESSAGE_TYPE_INFO, isMessageLanguage, isMessageType, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
 import { mailProvider } from "@hoteloftware/messaging";
 import { authorize } from "@/lib/authorize";
+import { platformMailDomain } from "@/lib/env";
 import { pool } from "@/lib/db";
 import { field, flag, formAction, type FormState } from "@/lib/form";
 
@@ -19,8 +20,8 @@ async function scope(formData: FormData) {
 function typeAndLanguage(formData: FormData): { type: MessageType; language: MessageLanguage } {
   const type = field(formData, "type");
   const language = field(formData, "language");
-  if (!(MESSAGE_TYPES as readonly string[]).includes(type) || !(MESSAGE_LANGUAGES as readonly string[]).includes(language)) throw new Error("Unknown message type or language");
-  return { type: type as MessageType, language: language as MessageLanguage };
+  if (!isMessageType(type) || !isMessageLanguage(language)) throw new Error("Unknown message type or language");
+  return { type, language };
 }
 
 export async function messagingSettingsAction(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -37,8 +38,10 @@ export async function messagingSettingsAction(_prev: FormState, formData: FormDa
         fallbackLanguage: field(formData, "fallbackLanguage") as MessageLanguage,
         useGuestLanguage: flag(formData, "useGuestLanguage"),
         enabled,
+        channelConfirmation: flag(formData, "channelConfirmation"),
         replyTo: field(formData, "replyTo") || null,
         preArrivalDays: Number(field(formData, "preArrivalDays")),
+        checkoutTime: field(formData, "checkoutTime"),
       },
       c.userId,
     );
@@ -49,7 +52,7 @@ export async function messagingSettingsAction(_prev: FormState, formData: FormDa
 export async function senderDomainAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const c = await scope(formData);
-    await setSenderDomain(pool(), c.schema, c.propertyId, { domain: field(formData, "domain") || null, local: field(formData, "local") }, c.userId);
+    await setSenderDomain(pool(), c.schema, { tenantId: c.tenantId, propertyId: c.propertyId, domain: field(formData, "domain") || null, local: field(formData, "local"), platformDomain: platformMailDomain() }, c.userId);
     const status = await checkSenderDomain(pool(), c.schema, c.propertyId, mailProvider());
     revalidatePath("/settings/messages");
     if (!status) return { ok: true, message: "Mail goes from the platform domain with the hotel's name." };

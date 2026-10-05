@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { can } from "@hoteloftware/domain";
 import { listTenantUsers, markAuditAlerted, overdueAudits } from "@hoteloftware/db";
-import { alertStaff } from "./alerts";
+import { notifyStaff } from "@hoteloftware/events";
 
 /**
  * Overdue Night Audits (ticket 32): once per property and Business Date
@@ -17,7 +17,7 @@ export async function alertOverdueAudits(pool: Pool, tenant: { id: string; schem
     // marked first: a crash part-way sends no alert twice (at most once per Business Date)
     await markAuditAlerted(pool, tenant.schemaName, o.propertyId, o.businessDate);
     const staff = users.filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "run_night_audit", o.propertyId));
-    await alertStaff(pool, tenant, staff, {
+    await notifyStaff(pool, tenant, staff, {
       kind: "night_audit.overdue",
       title: `Night Audit overdue · ${o.name} · ${o.businessDate}${o.behind > 1 ? ` (${o.behind} days behind)` : ""}`,
       href: "/night-audit",

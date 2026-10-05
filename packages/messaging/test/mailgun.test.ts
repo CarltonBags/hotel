@@ -18,6 +18,8 @@ describe("Mailgun", () => {
     const mg = new MailgunProvider("key-1", "mg.hoteloftware.example", "sign", fetcher);
     const r = await mg.send({ from: "booking@haus.example", fromName: "Haus am Ring", to: "aiko@example.com", subject: "S", html: "<p>h</p>", text: "h", attachments: [{ name: "RE-1.pdf", type: "application/pdf", bytes: new Uint8Array([37, 80]) }], tags: { tenantId: "t1", messageId: "m1" } });
     expect(r.providerId).toBe("<abc@mg>");
+    await mg.send({ from: "booking@haus.example", fromName: "H", sendingDomain: "haus.example", to: "a@example.com", subject: "S", html: "h", text: "h", attachments: [], tags: { tenantId: "t1", messageId: "m2" } });
+    expect(calls[1]!.url).toBe("https://api.eu.mailgun.net/v3/haus.example/messages");
     expect(calls[0]!.url).toBe("https://api.eu.mailgun.net/v3/mg.hoteloftware.example/messages");
     expect(calls[0]!.auth).toBe(`Basic ${Buffer.from("api:key-1").toString("base64")}`);
     expect(calls[0]!.body.get("from")).toBe("Haus am Ring <booking@haus.example>");
@@ -31,6 +33,7 @@ describe("Mailgun", () => {
     expect(mg.verifyWebhook({}, raw)).toBe(true);
     expect(mg.verifyWebhook({}, signed("other-key", { id: "ev1" }))).toBe(false);
     expect(mg.verifyWebhook({}, signed("signing-key", { id: "ev1" }, "1000"))).toBe(false);
+    expect(mg.replayKey(JSON.parse(raw))).toBeNull();
     expect(mg.parseEvent(JSON.parse(raw))).toEqual({ id: "ev1", type: "failed", severity: "permanent", tenantId: "t1", messageId: "m1", recipient: "x@example.com", detail: "No such user" });
   });
 });

@@ -1,5 +1,9 @@
+import { rolesAt, type Actor } from "./permissions";
+
 /**
- * Automatic guest messages (ticket 39, "Notifications model"): the types,
+ * Automatic guest messages (ticket 39, "Notifications model"): Messages the
+ * system sends a guest by email on an event (they join the reservation's
+ * Conversation once Conversations exist, ticket 43). The types,
  * when they go, which a property may switch off, the texts we ship in every
  * guest language, and the fixed layout they are rendered in.
  */
@@ -20,9 +24,13 @@ export const MESSAGE_TYPES = [
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 
+export function isMessageType(value: string): value is MessageType {
+  return (MESSAGE_TYPES as readonly string[]).includes(value);
+}
+
 export interface MessageTypeInfo {
-  /** A document or request goes at once; a service message within Sending Hours. */
-  timing: "at_once" | "sending_hours";
+  /** A document or request goes at once; a service message within Sending Hours; the departure-eve message in the evening. */
+  timing: "at_once" | "sending_hours" | "evening";
   /** The property may switch it off. */
   switchable: boolean;
   /** On by default where switchable. */
@@ -33,26 +41,44 @@ export interface MessageTypeInfo {
   essential: boolean;
   /** May go more than once per reservation (a changed booking re-sends the confirmation). */
   repeatable: boolean;
+  /** Carries the Portal Link: not sent until the Guest Portal gives one (ticket 40). */
+  needsPortal: boolean;
 }
 
 export const MESSAGE_TYPE_INFO: Record<MessageType, MessageTypeInfo> = {
-  confirmation: { timing: "at_once", switchable: false, defaultOn: true, critical: true, essential: true, repeatable: true },
-  cancellation: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: false },
-  deposit_invoice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true },
-  payment_receipt: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true },
-  final_invoice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true },
-  refund_notice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true },
-  fee_notice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: false },
-  card_request: { timing: "at_once", switchable: false, defaultOn: true, critical: true, essential: true, repeatable: true },
-  balance_request: { timing: "at_once", switchable: true, defaultOn: true, critical: true, essential: true, repeatable: true },
-  pre_arrival: { timing: "sending_hours", switchable: true, defaultOn: true, critical: false, essential: false, repeatable: false },
-  welcome: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false },
-  departure_eve: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false },
-  thanks: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false },
+  confirmation: { timing: "at_once", switchable: false, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: false },
+  cancellation: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: false, needsPortal: false },
+  deposit_invoice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
+  payment_receipt: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
+  final_invoice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
+  refund_notice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
+  fee_notice: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: false, needsPortal: false },
+  card_request: { timing: "at_once", switchable: false, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: true },
+  balance_request: { timing: "at_once", switchable: true, defaultOn: true, critical: true, essential: true, repeatable: true, needsPortal: true },
+  pre_arrival: { timing: "sending_hours", switchable: true, defaultOn: true, critical: false, essential: false, repeatable: false, needsPortal: true },
+  welcome: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: false },
+  departure_eve: { timing: "evening", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: true },
+  thanks: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: true },
 };
+
+/** The Guest Portal hands out Portal Links from ticket 40; until then messages that need one stay unsent. */
+export const PORTAL_LINKS_READY = false;
+
+/** Whether a type can go now: its Portal Link exists. */
+export function messageSendable(type: MessageType): boolean {
+  return PORTAL_LINKS_READY || !MESSAGE_TYPE_INFO[type].needsPortal;
+}
+
+/** Types the desk may send by hand from the reservation. */
+export const MANUAL_MESSAGE_TYPES = ["card_request", "balance_request", "confirmation"] as const satisfies readonly MessageType[];
+export type ManualMessageType = (typeof MANUAL_MESSAGE_TYPES)[number];
 
 export const MESSAGE_LANGUAGES = ["de", "en"] as const;
 export type MessageLanguage = (typeof MESSAGE_LANGUAGES)[number];
+
+export function isMessageLanguage(value: string): value is MessageLanguage {
+  return (MESSAGE_LANGUAGES as readonly string[]).includes(value);
+}
 
 export interface MessageText {
   subject: string;
@@ -124,6 +150,29 @@ export function fillPlaceholders(text: string, values: Partial<Record<Placeholde
   return text.replace(/\{([a-z_]+)\}/g, (all, key: string) => ((PLACEHOLDERS as readonly string[]).includes(key) ? (values[key as Placeholder] ?? "") : all));
 }
 
+/** Mandatory content: what an edited text of each type must keep. */
+export const REQUIRED_PLACEHOLDERS: Record<MessageType, Placeholder[]> = {
+  confirmation: ["confirmation", "arrival", "departure"],
+  cancellation: ["confirmation"],
+  deposit_invoice: ["document_number", "amount"],
+  payment_receipt: ["amount"],
+  final_invoice: ["document_number"],
+  refund_notice: ["amount"],
+  fee_notice: ["amount"],
+  card_request: ["portal_link"],
+  balance_request: ["amount", "portal_link"],
+  pre_arrival: ["portal_link"],
+  welcome: [],
+  departure_eve: ["checkout_time"],
+  thanks: ["portal_link"],
+};
+
+/** Mandatory placeholders an edited text left out. */
+export function missingPlaceholders(type: MessageType, text: MessageText): Placeholder[] {
+  const all = [text.subject, ...text.blocks].join("\n");
+  return REQUIRED_PLACEHOLDERS[type].filter((p) => !all.includes(`{${p}}`));
+}
+
 /** Placeholders a text uses that do not exist (a typo would stay visible to the guest). */
 export function unknownPlaceholders(text: MessageText): string[] {
   const used = [text.subject, ...text.blocks].flatMap((t) => [...t.matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1]!));
@@ -143,7 +192,8 @@ export interface LegalFooter {
   register: string | null;
 }
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const esc = escapeHtml;
 
 /** The fixed layout: header with the hotel's branding, the blocks, the Legal Entity's legal footer. Text and HTML. */
 export function renderMessage(text: MessageText, values: Partial<Record<Placeholder, string>>, branding: Branding, footer: LegalFooter): { subject: string; html: string; text: string } {
@@ -161,9 +211,21 @@ export function renderMessage(text: MessageText, values: Partial<Record<Placehol
   return { subject, html, text: `${blocks.join("\n\n")}\n\n--\n${legal.join(" · ")}` };
 }
 
-/** When a message may go: at once, or the next moment inside Sending Hours (local times "HH:MM"). */
+const EVENING = "18:00";
+
+/**
+ * When a message may go: at once; the next moment inside Sending Hours; or
+ * for the evening message from 18:00 (an hour before Sending Hours end, if
+ * they end earlier). Local times "HH:MM".
+ */
 export function sendAfter(timing: MessageTypeInfo["timing"], localNow: { date: string; time: string }, hours: { from: string; to: string }): { date: string; time: string } {
   if (timing === "at_once") return localNow;
+  if (timing === "evening") {
+    const [h, m] = hours.to.split(":").map(Number);
+    const lastHour = `${String(Math.max(0, h! - 1)).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    const evening = EVENING < lastHour ? EVENING : lastHour < hours.from ? hours.from : lastHour;
+    if (localNow.time < evening) return { date: localNow.date, time: evening };
+  }
   if (localNow.time < hours.from) return { date: localNow.date, time: hours.from };
   if (localNow.time >= hours.to) {
     const d = new Date(`${localNow.date}T12:00:00Z`);
@@ -186,5 +248,15 @@ export function senderDomainProblem(domain: string): "invalid" | "free_mail" | n
   return FREE_MAIL.includes(d) ? "free_mail" : null;
 }
 
-/** Staff alert kinds sent by SMS too, to Property Manager and Owner only. */
-export const URGENT_ALERTS = ["service.outage", "fiscal.outage", "guest_message.escalated", "night_audit.overdue"] as const;
+/**
+ * Notification kinds that also go by SMS, to Property Managers (and the
+ * Tenant Roles acting as one) only. Fiscal outages (ticket 61) and escalated
+ * guest messages (ticket 43) are sent by their tickets.
+ */
+export const URGENT_NOTIFICATIONS = ["service.outage", "fiscal.outage", "guest_message.escalated", "night_audit.overdue"] as const;
+
+/** Who gets an urgent Notification by SMS: a Property Manager of the property (any property when it concerns the whole tenant); Owner and Tenant Admin count as one everywhere. */
+export function receivesUrgentSms(actor: Actor, propertyId: string | null): boolean {
+  if (propertyId) return rolesAt(actor, propertyId).includes("property_manager");
+  return actor.tenantRole !== undefined || actor.propertyRoles.some((r) => r.role === "property_manager");
+}

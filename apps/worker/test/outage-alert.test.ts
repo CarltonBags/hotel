@@ -4,7 +4,7 @@ import { createLegalEntity, createProperty, migrateControl, provisionTenant, rep
 import { controlMigrations, tenantMigrations } from "@hoteloftware/db/migrations";
 import { alertMajorIncidents } from "../src/outage-alert";
 
-/** Seam: a major incident on our side reaches every customer's Property Managers once, in the app and by queued email; SMS only to managers who want it. */
+/** Seam: a major incident on our side reaches every customer's Property Managers once, in the app and by queued email. */
 describe("outage alerts", () => {
   let pool: Pool;
   let alpha: Tenant;
@@ -34,8 +34,8 @@ describe("outage alerts", () => {
     expect(await alertMajorIncidents(pool, opts)).toBe(1);
     expect(await alertMajorIncidents(pool, opts)).toBe(0);
     const mails = (await pool.query(`select to_email, subject from ${alpha.schemaName}.mail_outbox`)).rows;
-    expect(mails).toEqual([{ to_email: "pia@alpha.example", subject: "Hoteloftware outage: Database down" }]);
+    expect(mails).toEqual([{ to_email: "pia@alpha.example", subject: "Service outage: Database down" }]);
     const notes = (await pool.query("select user_id, title from control.notifications where kind = 'service.outage'")).rows;
-    expect(notes).toEqual([{ user_id: "u_pm", title: "Hoteloftware outage: Database down" }]);
+    expect(notes).toEqual([{ user_id: "u_pm", title: "Service outage: Database down" }]);
   });
 });

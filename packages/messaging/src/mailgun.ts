@@ -11,7 +11,7 @@ export class MailgunProvider implements MailProvider {
   constructor(
     private readonly apiKey: string,
     private readonly domain: string,
-    private readonly signingKey: string | null,
+    private readonly signingKey: string,
     private readonly fetcher: typeof fetch = fetch,
     private readonly baseUrl = "https://api.eu.mailgun.net",
   ) {}
@@ -29,7 +29,7 @@ export class MailgunProvider implements MailProvider {
     for (const a of m.attachments) form.append("attachment", new Blob([Buffer.from(a.bytes)], { type: a.type }), a.name);
     let res: Response;
     try {
-      res = await this.fetcher(`${this.baseUrl}/v3/${encodeURIComponent(this.domain)}/messages`, {
+      res = await this.fetcher(`${this.baseUrl}/v3/${encodeURIComponent(m.sendingDomain ?? this.domain)}/messages`, {
         method: "POST",
         headers: { authorization: `Basic ${Buffer.from(`api:${this.apiKey}`).toString("base64")}` },
         body: form,
@@ -45,7 +45,6 @@ export class MailgunProvider implements MailProvider {
   }
 
   verifyWebhook(_headers: Record<string, string>, rawBody: string): boolean {
-    if (!this.signingKey) return false;
     try {
       const s = (JSON.parse(rawBody) as { signature?: { timestamp?: string; token?: string; signature?: string } }).signature;
       if (!s?.timestamp || !s.token || !s.signature) return false;
@@ -57,6 +56,16 @@ export class MailgunProvider implements MailProvider {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * The signature covers timestamp and token only, not the event: the token
+   * is the delivery's identity, so a captured signature replayed with another
+   * body is a duplicate and ignored.
+   */
+  replayKey(raw: unknown): string | null {
+    const token = (raw as { signature?: { token?: unknown } } | null)?.signature?.token;
+    return typeof token === "string" && token.length >= 20 ? `mailgun:${token}` : null;
   }
 
   parseEvent(raw: unknown): MailEvent | null {

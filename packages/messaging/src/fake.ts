@@ -1,10 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { DomainStatus, MailEvent, MailMessage, MailProvider, SmsProvider } from "./provider";
 
-/** In-memory mail for tests and development without provider keys: keeps what was sent; events signed with a fixed header. */
+/** In-memory mail for tests and development without provider keys: keeps what was sent; events carry a shared secret. */
 export class FakeMailProvider implements MailProvider {
   readonly name = "fake-mail";
   readonly sent: (MailMessage & { providerId: string })[] = [];
+  /** Events are accepted with this secret in x-fake-signature; none means none are accepted. */
+  constructor(private readonly webhookSecret = "") {}
 
   async send(message: MailMessage): Promise<{ providerId: string }> {
     const providerId = `<fake-${randomUUID()}@mail.test>`;
@@ -13,7 +15,13 @@ export class FakeMailProvider implements MailProvider {
   }
 
   verifyWebhook(headers: Record<string, string>): boolean {
-    return headers["x-fake-signature"] === "fake-signature";
+    const given = Buffer.from(headers["x-fake-signature"] ?? "");
+    const expected = Buffer.from(this.webhookSecret);
+    return expected.length > 0 && given.length === expected.length && timingSafeEqual(given, expected);
+  }
+
+  replayKey(body: unknown): string | null {
+    return (body as { id?: string } | null)?.id ?? null;
   }
 
   parseEvent(raw: unknown): MailEvent | null {

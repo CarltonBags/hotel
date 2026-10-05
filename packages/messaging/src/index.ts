@@ -8,13 +8,13 @@ export { FakeMailProvider, FakeSmsProvider } from "./fake";
 export { MailgunProvider } from "./mailgun";
 export { SevenSmsProvider } from "./seven";
 
-/** Mail for this process: Mailgun EU when MAILGUN_API_KEY is set, else the fake (refused in production). One per process. */
+/** Mail for this process: Mailgun EU when MAILGUN_API_KEY is set, else the fake (refused in production; its events need WEBHOOK_TEST_SECRET). One per process: the first call's environment decides. */
 export function mailProvider(env: NodeJS.ProcessEnv = process.env): MailProvider {
   const g = globalThis as { __hsMail?: MailProvider };
   if (g.__hsMail) return g.__hsMail;
   if (!env.MAILGUN_API_KEY && env.NODE_ENV === "production") throw new Error("MAILGUN_API_KEY is not set");
   if (env.MAILGUN_API_KEY && (!env.MAILGUN_DOMAIN || !env.MAILGUN_WEBHOOK_SIGNING_KEY)) throw new Error("MAILGUN_DOMAIN and MAILGUN_WEBHOOK_SIGNING_KEY are needed with MAILGUN_API_KEY");
-  g.__hsMail = env.MAILGUN_API_KEY ? new MailgunProvider(env.MAILGUN_API_KEY, env.MAILGUN_DOMAIN!, env.MAILGUN_WEBHOOK_SIGNING_KEY!) : new FakeMailProvider();
+  g.__hsMail = env.MAILGUN_API_KEY ? new MailgunProvider(env.MAILGUN_API_KEY, env.MAILGUN_DOMAIN!, env.MAILGUN_WEBHOOK_SIGNING_KEY!) : new FakeMailProvider(env.WEBHOOK_TEST_SECRET ?? "");
   return g.__hsMail;
 }
 
