@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AccountStatus, IntentState, PaymentProvider, ProviderEvent, RefundResult, TerminalPaymentInput } from "./provider";
+import type { AccountStatus, IntentState, OnlinePaymentInput, PaymentProvider, ProviderEvent, RefundResult, SetupState, TerminalPaymentInput } from "./provider";
 import { ProviderError } from "./provider";
 
 interface FakeIntent extends IntentState {
@@ -243,5 +243,65 @@ export class FakePaymentProvider implements PaymentProvider {
   private view(i: FakeIntent): IntentState {
     const { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, customerId, captureBefore, extended, error } = i;
     return { intentId, status, amount, capturable, received, currency, brand, last4, paymentMethodId, customerId, captureBefore, extended, error };
+  }
+
+  readonly publishableKey = null;
+  readonly setups = new Map<string, SetupState & { accountId: string }>();
+
+  async createOnlinePayment(accountId: string, input: OnlinePaymentInput): Promise<{ intentId: string; clientSecret: string; customerId: string | null }> {
+    const known = this.byKey.get(input.idempotencyKey);
+    if (known) return { intentId: known, clientSecret: `${known}_secret`, customerId: this.intents.get(known)!.customerId };
+    const intentId = `pi_fake_${randomUUID().slice(0, 12)}`;
+    const customerId = input.saveCard ? (input.customerId ?? `cus_fake_${randomUUID().slice(0, 8)}`) : null;
+    this.intents.set(intentId, { intentId, accountId, readerId: null, hold: false, status: "waiting", amount: input.amount, capturable: 0, received: 0, currency: input.currency, brand: null, last4: null, paymentMethodId: null, customerId, captureBefore: null, extended: false, error: null, refunded: 0 });
+    this.byKey.set(input.idempotencyKey, intentId);
+    return { intentId, clientSecret: `${intentId}_secret`, customerId };
+  }
+
+  async cancelOnlinePayment(accountId: string, intentId: string): Promise<IntentState> {
+    const i = this.intent(accountId, intentId);
+    if (i.status === "waiting") Object.assign(i, { status: "cancelled" });
+    return this.view(i);
+  }
+
+  /** The guest's browser in development: the card goes through, or is declined. */
+  async simulateOnline(accountId: string, intentId: string, outcome: "succeed" | "decline"): Promise<void> {
+    const i = this.intent(accountId, intentId);
+    if (i.status !== "waiting") return;
+    if (outcome === "decline") Object.assign(i, { status: "failed", error: "Your card was declined" });
+    else Object.assign(i, { status: "succeeded", received: i.amount, brand: "visa", last4: "4242", paymentMethodId: i.customerId ? `pm_fake_${randomUUID().slice(0, 8)}` : null });
+  }
+
+  async createCardSetup(accountId: string, input: { customerId: string | null; idempotencyKey: string }): Promise<{ setupId: string; clientSecret: string; customerId: string }> {
+    const setupId = `seti_fake_${randomUUID().slice(0, 12)}`;
+    const customerId = input.customerId ?? `cus_fake_${randomUUID().slice(0, 8)}`;
+    this.setups.set(setupId, { setupId, accountId, status: "waiting", customerId, paymentMethodId: null, brand: null, last4: null, error: null });
+    return { setupId, clientSecret: `${setupId}_secret`, customerId };
+  }
+
+  async simulateSetup(accountId: string, setupId: string, outcome: "succeed" | "decline"): Promise<void> {
+    const s = this.setups.get(setupId);
+    if (!s || s.accountId !== accountId || s.status !== "waiting") return;
+    if (outcome === "decline") Object.assign(s, { status: "failed", error: "Your card was declined" });
+    else Object.assign(s, { status: "succeeded", paymentMethodId: `pm_fake_${randomUUID().slice(0, 8)}`, brand: "visa", last4: "4242" });
+  }
+
+  async getSetup(accountId: string, setupId: string): Promise<SetupState> {
+    const s = this.setups.get(setupId);
+    if (!s || s.accountId !== accountId) throw new ProviderError("Card setup not found");
+    const { accountId: _a, ...state } = s;
+    return state;
+  }
+
+  async chargeSavedCard(accountId: string, input: { customerId: string; paymentMethodId: string; amount: number; currency: string; idempotencyKey: string }): Promise<IntentState> {
+    const known = this.byKey.get(input.idempotencyKey);
+    if (known) return this.view(this.intents.get(known)!);
+    const intentId = `pi_fake_${randomUUID().slice(0, 12)}`;
+    // an amount ending in .13 is declined, as at the reader
+    const declined = Math.round(input.amount * 100) % 100 === 13;
+    const i: FakeIntent = { intentId, accountId, readerId: null, hold: false, status: declined ? "failed" : "succeeded", amount: input.amount, capturable: 0, received: declined ? 0 : input.amount, currency: input.currency, brand: "visa", last4: "4242", paymentMethodId: input.paymentMethodId, customerId: input.customerId, captureBefore: null, extended: false, error: declined ? "Card declined" : null, refunded: 0 };
+    this.intents.set(intentId, i);
+    this.byKey.set(input.idempotencyKey, intentId);
+    return this.view(i);
   }
 }

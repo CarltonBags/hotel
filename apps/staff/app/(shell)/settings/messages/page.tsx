@@ -117,6 +117,10 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
             <input type="checkbox" name="removePhoto" /> {m["portal.removePhoto"]}
           </label>
           <label className="flex items-center gap-2">
+            <input type="hidden" name="expressAuto" value="off" />
+            <input type="checkbox" name="expressAuto" defaultChecked={portal.expressCheckoutAuto} /> {m["portal.expressAuto"]}
+          </label>
+          <label className="flex items-center gap-2">
             <input type="hidden" name="documentImages" value="off" />
             <input type="checkbox" name="documentImages" defaultChecked={portal.documentImages} /> {m["portal.documentImages"]}
           </label>

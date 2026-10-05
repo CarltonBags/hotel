@@ -188,7 +188,7 @@ interface Context {
 }
 
 /** The property's provider account (its Legal Entity's), ready for card payments. In Test Mode no card is charged: only a test provider. */
-async function accountFor(tx: PoolClient, propertyId: string, provider: PaymentProvider | null): Promise<Context> {
+export async function accountFor(tx: PoolClient, propertyId: string, provider: PaymentProvider | null): Promise<Context> {
   if (provider && !provider.testMode && (await inTestMode(tx))) throw new Error("No card is charged in Test Mode");
   const { rows } = await tx.query<{ account_id: string | null; charges_enabled: boolean | null; currency: string }>(
     "select a.account_id, a.charges_enabled, p.currency from properties p left join payment_accounts a on a.legal_entity_id = p.legal_entity_id where p.id = $1",
@@ -294,7 +294,7 @@ function failureOf(err: unknown): { definite: boolean; message: string } {
 }
 
 /** Open amount on the guest's own folios: Charges less payments received. */
-async function guestBalance(tx: PoolClient, reservationId: string): Promise<number> {
+export async function guestBalance(tx: PoolClient, reservationId: string): Promise<number> {
   const { rows } = await tx.query<{ b: string }>(
     `select (select coalesce(sum(ch.amount), 0) from charges ch join folios f on f.id = ch.folio_id where ch.reservation_id = $1 and ch.voided_at is null and f.bill_to_guest_id is not null)
           - (select coalesce(sum(pa.amount), 0) from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null) as b`,
@@ -381,7 +381,7 @@ export async function syncPayment(pool: Pool, schema: string, provider: PaymentP
 }
 
 /** Only a pending payment changes: webhook and desk polling cannot settle it twice. */
-async function applyIntentToPayment(pool: Pool, schema: string, paymentId: string, state: IntentState): Promise<Payment> {
+export async function applyIntentToPayment(pool: Pool, schema: string, paymentId: string, state: IntentState): Promise<Payment> {
   const status: PaymentStatus | null = state.status === "succeeded" ? "succeeded" : state.status === "failed" || state.status === "cancelled" ? "failed" : null;
   return settleIntent(pool, schema, paymentId, state, status);
 }

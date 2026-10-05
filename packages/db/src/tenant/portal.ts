@@ -5,6 +5,7 @@ import { postServiceChargeIn } from "./folios";
 import { loadGuest, updateGuestIn, type Guest } from "./guests";
 import { fileIn, setFileRetention } from "./files";
 import { queueGuestMessageIn, type PortalLinks } from "./messages";
+import { guestBalance } from "./payments";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -60,6 +61,10 @@ export interface PortalStay {
   extras: { id: string; name: string; price: number }[];
   added: { description: string; quantity: number; amount: number }[];
   emailConsent: boolean | null;
+  /** Open on the guest's own folios. */
+  balance: number;
+  /** The card securing the stay (brand and last digits only). */
+  guarantee: { brand: string | null; last4: string | null } | null;
 }
 
 /** What the Booker sees of each room: no guest's personal data, no room's own link. */
@@ -144,7 +149,10 @@ async function stayOf(tx: PoolClient, reservationId: string): Promise<PortalStay
   const { rows: extras } = await tx.query("select id, name, default_price from services where property_id = $1 and active and bookable_online and default_price > 0 order by name", [r.property_id]);
   const { rows: added } = await tx.query("select description, quantity, amount from charges where reservation_id = $1 and posted_by = $2 and voided_at is null order by posted_at", [reservationId, PORTAL_USER]);
   const { rows: consent } = await tx.query<{ granted: boolean }>("select granted from messaging_consents where guest_id = $1 and transport = 'email' order by at desc limit 1", [r.primary_guest_id]);
+  const { rows: card } = await tx.query<{ brand: string | null; last4: string | null }>("select brand, last4 from card_guarantees where reservation_id = $1 and status = 'secured' order by secured_at desc limit 1", [reservationId]);
   return {
+    balance: await guestBalance(tx, reservationId),
+    guarantee: card[0] ?? null,
     reservationId: r.id,
     portalKey: r.portal_key,
     confirmationNumber: r.confirmation_number,
@@ -410,17 +418,18 @@ export async function addPortalDocument(pool: Pool, schema: string, key: string,
 }
 
 /** What the hotel tells guests in the portal (per language) and whether guests may upload a document picture. */
-export async function portalSettings(pool: Pool, schema: string, propertyId: string): Promise<{ info: Partial<Record<PortalLanguage, string>>; documentImages: boolean }> {
+export async function portalSettings(pool: Pool, schema: string, propertyId: string): Promise<{ info: Partial<Record<PortalLanguage, string>>; documentImages: boolean; expressCheckoutAuto: boolean }> {
   return withTenant(pool, schema, async (tx) => {
     const p = await propertyOf(tx, propertyId);
-    return { info: p.info, documentImages: p.documentImages };
+    const auto = (await tx.query<{ a: boolean }>("select express_checkout_auto as a from properties where id = $1", [propertyId])).rows[0]!.a;
+    return { info: p.info, documentImages: p.documentImages, expressCheckoutAuto: auto };
   });
 }
 
-export async function setPortalSettings(pool: Pool, schema: string, propertyId: string, input: { info: Partial<Record<PortalLanguage, string>>; documentImages: boolean; photoFileId?: string | null | undefined }): Promise<void> {
+export async function setPortalSettings(pool: Pool, schema: string, propertyId: string, input: { info: Partial<Record<PortalLanguage, string>>; documentImages: boolean; expressCheckoutAuto?: boolean; photoFileId?: string | null | undefined }): Promise<void> {
   const info = Object.fromEntries(Object.entries(input.info).map(([k, v]) => [k, (v ?? "").trim().slice(0, 4000)]).filter(([, v]) => v));
   await withTenant(pool, schema, async (tx) => {
-    await tx.query("update properties set portal_info = $2, portal_document_images = $3, updated_at = now() where id = $1", [propertyId, JSON.stringify(info), input.documentImages]);
+    await tx.query("update properties set portal_info = $2, portal_document_images = $3, express_checkout_auto = coalesce($4, express_checkout_auto), updated_at = now() where id = $1", [propertyId, JSON.stringify(info), input.documentImages, input.expressCheckoutAuto ?? null]);
     if (input.photoFileId !== undefined) {
       const f = input.photoFileId ? await fileIn(tx, input.photoFileId) : null;
       if (input.photoFileId && (!f || f.kind !== "portal_photo")) throw new Error("Photo not found");
@@ -438,13 +447,15 @@ export interface PortalSummary {
   companions: Companion[];
   documents: string[];
   emailConsent: { granted: boolean; at: Date } | null;
+  /** The guest asked for express checkout (the desk checks out). */
+  expressCheckoutAt: Date | null;
 }
 
 /** What staff see of the portal on the reservation: the links, Pre-check-in, companions, document pictures, consent. */
 export async function portalSummary(pool: Pool, schema: string, reservationId: string): Promise<PortalSummary | null> {
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query(
-      `select r.portal_key, b.portal_key as booking_key, r.precheckin_at, r.arrival_time, r.primary_guest_id
+      `select r.portal_key, b.portal_key as booking_key, r.precheckin_at, r.arrival_time, r.primary_guest_id, r.express_checkout_at
        from reservations r join bookings b on b.id = r.booking_id where r.id = $1`,
       [reservationId],
     );
@@ -460,6 +471,7 @@ export async function portalSummary(pool: Pool, schema: string, reservationId: s
       companions: comps.map((c) => ({ firstName: c.first_name, lastName: c.last_name, dateOfBirth: c.dob, nationality: c.nationality })),
       documents: docs.map((d) => d.file_id),
       emailConsent: consent[0] ?? null,
+      expressCheckoutAt: r.express_checkout_at,
     };
   });
 }
