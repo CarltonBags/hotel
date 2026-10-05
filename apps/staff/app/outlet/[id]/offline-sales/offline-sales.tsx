@@ -9,7 +9,7 @@ import { offlineStore } from "@/lib/offline-store";
 
 const store = offlineStore("hs-outlet");
 
-interface TillLine {
+interface OfflineLine {
   id: string;
   menuItemId: string;
   description: string;
@@ -19,32 +19,32 @@ interface TillLine {
   sent: boolean;
 }
 
-/** A bill the till worked on since the last sync: one it opened, or an open one of the snapshot it added to. */
-interface TillBill {
+/** A bill the device worked on since the last sync: one it opened, or an open one of the snapshot it added to. */
+interface OfflineBill {
   id: string;
   /** The bill's number when the server gave it one; a local mark for one opened offline. */
   label: string;
   tableId: string | null;
   /** What was on it at the last sync (an open bill of the snapshot). */
   baseTotal: number;
-  lines: TillLine[];
+  lines: OfflineLine[];
   status: "open" | "paid" | "charged";
   receipt: { at: string; total: number } | null;
 }
 
-interface TillState {
-  bills: TillBill[];
+interface OfflineState {
+  bills: OfflineBill[];
   ops: OutletOp[];
   problems: { opId: string; error: string }[];
 }
 
-const EMPTY: TillState = { bills: [], ops: [], problems: [] };
+const EMPTY: OfflineState = { bills: [], ops: [], problems: [] };
 /** An operation before it gets its id and time (each kind of the union keeps its own fields). */
 type OpDraft = OutletOp extends infer O ? (O extends OutletOp ? Omit<O, "opId" | "at"> : never) : never;
-const total = (b: TillBill) => roundMoney(b.baseTotal + b.lines.reduce((s, l) => s + l.amount, 0));
+const total = (b: OfflineBill) => roundMoney(b.baseTotal + b.lines.reduce((s, l) => s + l.amount, 0));
 
 /**
- * The till that keeps an outlet selling without a connection (ticket 62):
+ * Offline Sales at an outlet (ticket 62): selling on without a connection:
  * it keeps the last snapshot (menu, tables, printers, open bills, in-house
  * list) and what it did, each step an operation with its own id and time.
  * Offline the round's tickets go straight to the printers on the outlet's
@@ -52,10 +52,10 @@ const total = (b: TillBill) => roundMoney(b.baseTotal + b.lines.reduce((s, l) =>
  * guest on the last list within what was left tonight. Back online the
  * operations are sent in order and the TSE signs afterwards.
  */
-export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
+export function OfflineSales({ outletId, m }: { outletId: string; m: Messages }) {
   const key = (k: string) => `outlet:${outletId}:${k}`;
   const [snap, setSnap] = useState<OutletSnapshot | null>(null);
-  const [state, setState] = useState<TillState>(EMPTY);
+  const [state, setState] = useState<OfflineState>(EMPTY);
   const [online, setOnline] = useState(true);
   const [current, setCurrent] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -64,8 +64,8 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
   const money = (n: number) => (snap ? formatCurrency(n, snap.currency, "de", snap.country) : String(n));
 
   const change = useCallback(
-    async (fn: (s: TillState) => TillState) => {
-      const next = await store.update<TillState>(key("state"), (cur) => fn(cur ?? EMPTY));
+    async (fn: (s: OfflineState) => OfflineState) => {
+      const next = await store.update<OfflineState>(key("state"), (cur) => fn(cur ?? EMPTY));
       setState(next);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -87,7 +87,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
 
   // back online: what was done is sent, in order, once
   const sync = useCallback(async () => {
-    const s = (await store.load<TillState>(key("state"))) ?? EMPTY;
+    const s = (await store.load<OfflineState>(key("state"))) ?? EMPTY;
     if (!s.ops.length || busy) return;
     setBusy(true);
     try {
@@ -112,7 +112,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
   useEffect(() => {
     void (async () => {
       setSnap(await store.load<OutletSnapshot>(key("snapshot")));
-      setState((await store.load<TillState>(key("state"))) ?? EMPTY);
+      setState((await store.load<OfflineState>(key("state"))) ?? EMPTY);
       setOnline(navigator.onLine);
       await refresh();
     })();
@@ -145,7 +145,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
       setCurrent(id);
       return { ...s, bills: [...s.bills, { id, label: `${m["outlet.offline"]} ${s.bills.length + 1}`, tableId, baseTotal: 0, lines: [], status: "open", receipt: null }], ops: [...s.ops, op({ kind: "open_bill", billId: id, tableId, label: "" })] };
     });
-  const take = (b: TillBill) =>
+  const take = (b: OfflineBill) =>
     change((s) => {
       setCurrent(b.id);
       return s.bills.some((x) => x.id === b.id) ? s : { ...s, bills: [...s.bills, b] };
@@ -153,7 +153,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
   const add = (itemId: string) =>
     change((s) => {
       const item = snap.menu.find((i) => i.id === itemId)!;
-      const line: TillLine = { id: crypto.randomUUID(), menuItemId: item.id, description: item.name, quantity: 1, amount: item.price, printerId: item.printerId, sent: false };
+      const line: OfflineLine = { id: crypto.randomUUID(), menuItemId: item.id, description: item.name, quantity: 1, amount: item.price, printerId: item.printerId, sent: false };
       return { ...s, bills: s.bills.map((b) => (b.id === current ? { ...b, lines: [...b.lines, line] } : b)), ops: [...s.ops, op({ kind: "add_item", billId: current!, lineId: line.id, menuItemId: item.id, quantity: 1, modifiers: [], note: "" })] };
     });
   const send = async () => {
@@ -180,7 +180,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
       bills: s.bills.map((b) => (b.id === bill!.id ? { ...b, status: "paid", receipt: { at: new Date().toISOString(), total: total(b) } } : b)),
       ops: [...s.ops, op({ kind: "pay_cash", billId: bill!.id, customerName: "" })],
     }));
-  // what the till charged to a stay since the list was taken counts against what was left
+  // what the device charged to a stay since the list was taken counts against what was left
   const chargedSince = (reservationId: string) =>
     state.ops.filter((o) => o.kind === "room_charge" && o.reservationId === reservationId).reduce((s, o) => s + total(state.bills.find((b) => b.id === o.billId)!), 0);
   const roomCharge = (reservationId: string) =>
@@ -189,10 +189,10 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
   const button = "h-11 rounded-full px-4 text-sm font-medium disabled:opacity-50";
   const unsent = bill?.lines.some((l) => !l.sent) ?? false;
   return (
-    <main className="mx-auto grid max-w-5xl gap-4 p-4" data-till={online ? "online" : "offline"}>
+    <main className="mx-auto grid max-w-5xl gap-4 p-4" data-offline-sales={online ? "online" : "offline"}>
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-medium">
-          {snap.outlet.name} · {m["outlet.till"]}
+          {snap.outlet.name} · {m["outlet.offlineSales"]}
         </h1>
         <div className="flex items-center gap-3 text-sm">
           <span className={online ? "text-success" : "text-danger"} data-connection>
@@ -214,7 +214,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
           ) : null}
         </div>
       </header>
-      <p className="text-sm text-ink-60">{m["outlet.tillHelp"]}</p>
+      <p className="text-sm text-ink-60">{m["outlet.offlineSalesHelp"]}</p>
       {state.problems.length ? (
         <section role="alert" className="rounded-xl bg-danger/10 p-3 text-sm" data-sync-problems>
           <p className="font-medium">{m["outlet.syncProblems"]}</p>
@@ -226,7 +226,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
         </section>
       ) : null}
       {printed.length ? (
-        <section className="flex flex-wrap gap-2" data-till-printed>
+        <section className="flex flex-wrap gap-2" data-offline-printed>
           {printed.map((p, i) => (
             <figure key={i} className="rounded-xl bg-surface-2 p-2 text-xs">
               <figcaption className="text-ink-60">{p.printer}</figcaption>
@@ -237,7 +237,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
       ) : null}
       <div className="grid gap-4 md:grid-cols-[2fr_3fr]">
         <section className="grid content-start gap-2" aria-label={m["outlet.tables"]}>
-          <button type="button" onClick={() => void newBill(null)} className={`${button} border border-ink-10`} data-till-new>
+          <button type="button" onClick={() => void newBill(null)} className={`${button} border border-ink-10`} data-offline-new>
             + {m["outlet.newBill"]}
           </button>
           {snap.tables.map((t) => (
@@ -246,19 +246,19 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
             </button>
           ))}
           {openBills.map((b) => (
-            <button key={b.id} type="button" onClick={() => void take(b)} className={`flex justify-between rounded-xl px-3 py-2 ${b.id === current ? "bg-accent/15" : "bg-surface"}`} data-till-bill={b.label}>
+            <button key={b.id} type="button" onClick={() => void take(b)} className={`flex justify-between rounded-xl px-3 py-2 ${b.id === current ? "bg-accent/15" : "bg-surface"}`} data-offline-bill={b.label}>
               <span>{b.label}</span>
               <span>{money(total(b))}</span>
             </button>
           ))}
         </section>
         {bill ? (
-          <section className="grid content-start gap-3 rounded-2xl bg-surface-2 p-3" data-till-current={bill.status}>
+          <section className="grid content-start gap-3 rounded-2xl bg-surface-2 p-3" data-offline-current={bill.status}>
             <h2 className="font-medium">{bill.label}</h2>
             {bill.status === "open" ? (
               <div className="flex flex-wrap gap-2">
                 {snap.menu.map((i) => (
-                  <button key={i.id} type="button" onClick={() => void add(i.id)} className="min-h-12 rounded-2xl bg-surface px-3 py-1 text-left" data-till-item={i.name}>
+                  <button key={i.id} type="button" onClick={() => void add(i.id)} className="min-h-12 rounded-2xl bg-surface px-3 py-1 text-left" data-offline-item={i.name}>
                     <span className="block font-medium">{i.name}</span>
                     <span className="text-xs text-ink-60">{money(i.price)}</span>
                   </button>
@@ -267,7 +267,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
             ) : null}
             <ul className="grid gap-1 text-sm">
               {bill.lines.map((l) => (
-                <li key={l.id} className="flex justify-between" data-till-line={l.description} data-sent={l.sent ? "yes" : ""}>
+                <li key={l.id} className="flex justify-between" data-offline-line={l.description} data-sent={l.sent ? "yes" : ""}>
                   <span>
                     {l.quantity} × {l.description}
                     {l.sent ? "" : ` · ${m["outlet.unsent"]}`}
@@ -282,10 +282,10 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
             </p>
             {bill.status === "open" ? (
               <div className="grid gap-2">
-                <button type="button" disabled={!unsent} onClick={() => void send()} className={`${button} bg-accent text-white`} data-till-send>
+                <button type="button" disabled={!unsent} onClick={() => void send()} className={`${button} bg-accent text-white`} data-offline-send>
                   {m["outlet.send"]}
                 </button>
-                <button type="button" disabled={unsent || total(bill) <= 0} onClick={() => void payCash()} className={`${button} bg-success text-white`} data-till-cash>
+                <button type="button" disabled={unsent || total(bill) <= 0} onClick={() => void payCash()} className={`${button} bg-success text-white`} data-offline-cash>
                   {m["outlet.payCash"]} · {money(total(bill))}
                 </button>
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={m["outlet.findGuest"]} aria-label={m["outlet.findGuest"]} className="h-11 rounded-full border border-ink-10 bg-surface px-3" />
@@ -297,7 +297,7 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
                         const left = roundMoney(g.remaining - chargedSince(g.reservationId));
                         const ok = !unsent && total(bill) <= left;
                         return (
-                          <button key={g.reservationId} type="button" disabled={!ok} onClick={() => void roomCharge(g.reservationId)} className="flex justify-between rounded-xl bg-surface px-3 py-2 disabled:opacity-50" data-till-guest={g.room ?? ""}>
+                          <button key={g.reservationId} type="button" disabled={!ok} onClick={() => void roomCharge(g.reservationId)} className="flex justify-between rounded-xl bg-surface px-3 py-2 disabled:opacity-50" data-offline-guest={g.room ?? ""}>
                             <span>
                               {g.room ?? "–"} · {g.lastName}
                             </span>
@@ -310,11 +310,11 @@ export function OutletTill({ outletId, m }: { outletId: string; m: Messages }) {
               </div>
             ) : null}
             {bill.receipt ? (
-              <p className="rounded-xl bg-surface p-3 text-sm" data-till-receipt>
+              <p className="rounded-xl bg-surface p-3 text-sm" data-offline-receipt>
                 {m["outlet.offlineReceipt"]} · {money(bill.receipt.total)} · {bill.receipt.at.slice(11, 16)}
               </p>
             ) : null}
-            {bill.status === "charged" ? <p data-till-charged>{m["outlet.room"]}</p> : null}
+            {bill.status === "charged" ? <p data-offline-charged>{m["outlet.room"]}</p> : null}
           </section>
         ) : null}
       </div>

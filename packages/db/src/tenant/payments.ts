@@ -643,6 +643,13 @@ async function sendRefund(pool: Pool, schema: string, provider: PaymentProvider,
   }
 }
 
+/** Payments readers took offline and have not forwarded yet: asked again (the worker, every few minutes). */
+export async function syncOfflinePayments(pool: Pool, schema: string, provider: PaymentProvider): Promise<number> {
+  const ids = await withTenant(pool, schema, async (tx) => (await tx.query<{ id: string }>("select id from payments where collected_offline and forwarded_at is null and status = 'succeeded' order by posted_at limit 200")).rows.map((r) => r.id));
+  for (const id of ids) await syncPayment(pool, schema, provider, id).catch(() => undefined);
+  return ids.length;
+}
+
 /** A refund event from the provider: settle the refund it is about. */
 export async function syncRefund(pool: Pool, schema: string, provider: PaymentProvider, refundId: string): Promise<{ propertyId: string } | null> {
   const p = await withTenant(pool, schema, async (tx) => (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where provider_refund_id = $1`, [refundId])).rows[0]);
@@ -1013,7 +1020,11 @@ export async function renewExpiringHolds(pool: Pool, schema: string, provider: P
 /** A provider event about an intent: settle the payment or hold it belongs to. */
 export async function syncByIntent(pool: Pool, schema: string, provider: PaymentProvider, intentId: string): Promise<{ propertyId: string; paymentId?: string } | null> {
   const found = await withTenant(pool, schema, async (tx) => {
-    const p = (await tx.query<{ id: string; property_id: string }>("select id, property_id from payments where provider_intent_id = $1 and refund_of is null and status = 'pending'", [intentId])).rows[0];
+    // pending, or taken offline by a reader and not forwarded yet (ticket 62: a decline may still come)
+    const p = (await tx.query<{ id: string; property_id: string }>(
+      "select id, property_id from payments where provider_intent_id = $1 and refund_of is null and (status = 'pending' or (status = 'succeeded' and collected_offline and forwarded_at is null))",
+      [intentId],
+    )).rows[0];
     const h = (await tx.query<{ id: string; property_id: string }>("select id, property_id from card_holds where provider_intent_id = $1", [intentId])).rows[0];
     return { p, h };
   });

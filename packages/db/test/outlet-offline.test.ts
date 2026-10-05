@@ -181,4 +181,26 @@ describe("Outlet signing and offline selling", () => {
     expect(await syncPayment(pool, s(), payments, p.id)).toMatchObject({ status: "succeeded", forwarded: true });
     expect(payments.intents.get(intent)).toMatchObject({ status: "succeeded", received: 9 });
   });
+
+  it("a device cannot reach another outlet's bill; cash it could not book stays named on the bill", async () => {
+    const other = await createOutlet(pool, s(), propertyId, { name: "Spa", kind: "spa", cashRegisterId: null, active: true }, pm);
+    const foreign = await openOutletBill(pool, s(), other, { tableId: null, label: "" }, pm);
+    const [r] = await applyOutletOps(pool, s(), bar, "tablet-1", [{ opId: randomUUID(), at: new Date().toISOString(), kind: "pay_cash", billId: foreign, customerName: "" }], mia);
+    expect(r).toMatchObject({ ok: false, error: "The bill is not at this outlet" });
+    // the till's Shift was closed meanwhile: the cash taken offline cannot be booked
+    await pool.query(
+      `update ${s()}.cash_shifts set closed_at = now(), counted_at = coalesce(counted_at, now()), close_count = coalesce(close_count, '{}'::jsonb), counted = coalesce(counted, 0), expected = coalesce(expected, 0), difference = coalesce(difference, 0) where user_id = $1 and closed_at is null`,
+      [mia.userId],
+    );
+    const billId = randomUUID();
+    const line = randomUUID();
+    const results = await applyOutletOps(pool, s(), bar, "tablet-1", [
+      { opId: randomUUID(), at: new Date().toISOString(), kind: "open_bill", billId, tableId: null, label: "" },
+      { opId: randomUUID(), at: new Date().toISOString(), kind: "add_item", billId, lineId: line, menuItemId: pils, quantity: 1, modifiers: [], note: "" },
+      { opId: randomUUID(), at: new Date().toISOString(), kind: "send_round", billId, roundId: randomUUID(), lineIds: [line] },
+      { opId: randomUUID(), at: new Date().toISOString(), kind: "pay_cash", billId, customerName: "" },
+    ], mia);
+    expect(results.at(-1)!.ok).toBe(false);
+    expect((await outletBill(pool, s(), billId, mia)).offlineProblem).toMatch(/^Cash taken offline not booked/);
+  });
 });

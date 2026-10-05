@@ -479,6 +479,10 @@ _Avoid_: TSE (in Austria), signature card
 A period in which the fiscal signing cannot sign: the desk goes on, the Receipts carry a notice instead of the signature, and the outage is logged from start to end. In Germany such a Receipt is never signed later; in Austria it is signed once the provider answers again, and an outage over 48 hours is reported to FinanzOnline within a week.
 _Avoid_: TSE failure, offline mode
 
+**Offline Sale**:
+A sale an outlet's device makes while it has no connection: orders, cash and Room Charges for guests on its last list are kept on the device and sent, in order, when the connection is back; only then are its orders and Receipt signed (owner's decision for the outlets; the tax advisor confirms it for Germany, where a desk Receipt of a Fiscal Outage is never signed later).
+_Avoid_: offline mode, till
+
 **Voucher**:
 A prepaid amount sold by a legal entity, redeemable against charges at its properties until used up.
 _Avoid_: Gift card, coupon, Gutschein, credit

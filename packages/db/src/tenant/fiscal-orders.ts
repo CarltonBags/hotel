@@ -15,7 +15,7 @@ import { withTenant } from "./with-tenant";
  * the first order. Austria signs only the payment (as before).
  */
 
-/** Signed within this many seconds of the order (KassenSichV practice for orders at a table). */
+/** Signed within this many seconds of the order (KassenSichV practice for orders at a table); a failed attempt is tried again after 10 seconds per attempt so far. */
 export const ORDER_SIGN_SECONDS = 45;
 const STALE_CLAIM_SECONDS = 90;
 
@@ -81,7 +81,7 @@ export async function signOutletOrders(pool: Pool, schema: string, deps: FiscalD
     (await tx.query<{ id: string }>(
       `select id from fiscal_orders
        where ($1::uuid is null or bill_id = $1)
-         and (state = 'open' or (state = 'failed' and claimed_at < now() - least(attempts, 30) * interval '1 minute')
+         and (state = 'open' or (state = 'failed' and claimed_at < now() - least(attempts, 30) * interval '10 seconds')
               or (state = 'signing' and claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS})))
        order by ordered_at, created_at limit 100`,
       [filter.billId ?? null],
@@ -95,12 +95,17 @@ export async function signOutletOrders(pool: Pool, schema: string, deps: FiscalD
 async function signOrder(pool: Pool, schema: string, deps: FiscalDeps, orderId: string): Promise<boolean> {
   const claim = randomUUID();
   const held = await withTenant(pool, schema, async (tx) => {
-    const o = (await tx.query<{ property_id: string; client_id: string; bill_id: string; lines: OrderLine[]; attempts: number; registered: boolean }>(
-      `select o.property_id, o.client_id, o.bill_id, o.lines, o.attempts, c.registered_at is not null as registered
+    // the claim protocol of the fiscal module: a live claim is left alone, a failed order waits its back-off
+    const o = (await tx.query<{ property_id: string; client_id: string; bill_id: string; lines: OrderLine[]; attempts: number; registered: boolean; ready: boolean }>(
+      `select o.property_id, o.client_id, o.bill_id, o.lines, o.attempts, c.registered_at is not null as registered,
+         (o.state = 'open' or (o.state = 'failed' and o.claimed_at < now() - least(o.attempts, 30) * interval '10 seconds')
+          or (o.state = 'signing' and o.claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS})))
+         -- a void only after the order it cancels is signed
+         and (o.voided_line_id is null or exists (select 1 from fiscal_orders r join outlet_bill_lines l on l.round_id = r.round_id where l.id = o.voided_line_id and r.state = 'signed')) as ready
        from fiscal_orders o join fiscal_clients c on c.id = o.client_id where o.id = $1 and o.state <> 'signed' for update of o`,
       [orderId],
     )).rows[0];
-    if (!o || !o.registered) return null;
+    if (!o || !o.registered || !o.ready) return null;
     const unit = await unitIn(tx, o.property_id);
     if (!unit) return null;
     await tx.query("update fiscal_orders set state = 'signing', claim = $2, claimed_at = clock_timestamp(), attempts = attempts + 1 where id = $1", [orderId, claim]);
@@ -132,17 +137,4 @@ async function signOrder(pool: Pool, schema: string, deps: FiscalDeps, orderId: 
     await withTenant(pool, schema, (tx) => tx.query("update fiscal_orders set state = 'failed', claim = null, error = $2 where id = $1 and claim = $3", [orderId, error, claim]));
     return false;
   }
-}
-
-export interface BillOrders {
-  /** When the bill's first order was taken: printed on the Receipt. */
-  firstOrderAt: Date | null;
-  orders: { number: number | null; orderedAt: Date; signedAt: Date | null; state: string }[];
-}
-
-/** The orders of a bill as signed (or waiting), oldest first. */
-export async function billOrdersIn(tx: PoolClient, billId: string): Promise<BillOrders> {
-  const rows = (await tx.query<{ number: string | null; ordered_at: Date; signed_at: Date | null; state: string }>("select number, ordered_at, signed_at, state from fiscal_orders where bill_id = $1 order by ordered_at, created_at", [billId])).rows;
-  const first = (await tx.query<{ at: Date | null }>("select min(coalesce(ordered_at, sent_at)) as at from outlet_rounds where bill_id = $1", [billId])).rows[0]!.at;
-  return { firstOrderAt: first, orders: rows.map((r) => ({ number: r.number === null ? null : Number(r.number), orderedAt: r.ordered_at, signedAt: r.signed_at, state: r.state })) };
 }

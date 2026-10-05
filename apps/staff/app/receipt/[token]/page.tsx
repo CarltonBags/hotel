@@ -58,7 +58,9 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
       {/* issued on a device without a connection (ticket 62): signed when it synced */}
       {r.issuedOfflineAt ? (
         <p className="text-center font-bold" data-offline-receipt>
-          Offline erstellt / Issued offline {new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short", timeZone: r.timeZone }).format(r.issuedOfflineAt)}
+          {/* Austria: the signature unit's failure wording (RKSV); Germany: issued without the TSE, signed afterwards */}
+          {r.legalEntity.country === "AT" ? "Sicherheitseinrichtung ausgefallen" : "TSE nicht erreichbar, nachträglich signiert"} / Issued offline{" "}
+          {new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short", timeZone: r.timeZone }).format(r.issuedOfflineAt)}
         </p>
       ) : null}
       <dl className="grid grid-cols-2 gap-1">
@@ -81,7 +83,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
             <dd className="text-right">
               {r.outletSale.outlet} · Bon {r.outletSale.bill}
             </dd>
-            {/* Germany: the time of the first order and the table key the signed orders carry (ticket 62) */}
+            {/* Germany: the time of the first order (ticket 62); orders and Receipt share the bill as table key at the TSE */}
             {r.outletSale.firstOrderAt ? (
               <>
                 <dt>Erste Bestellung / First order</dt>

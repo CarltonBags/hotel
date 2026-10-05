@@ -81,20 +81,75 @@ export interface OpResult {
   receiptToken?: string;
 }
 
-/** A unique violation: what the operation makes exists already (applied, its record lost). */
-const already = (err: unknown) => typeof err === "object" && err !== null && "code" in err && (err as { code: string }).code === "23505";
+/** How a failed offline operation is named on its bill for staff. */
+const PROBLEM: Record<OutletOp["kind"], string> = {
+  open_bill: "Bill opened offline not taken",
+  add_item: "Item added offline not taken",
+  remove_line: "Item taken back offline not taken",
+  send_round: "Order sent offline not taken",
+  pay_cash: "Cash taken offline not booked (count it into the Cash Book)",
+  room_charge: "Room Charge offline refused when checked",
+};
+
+const KINDS: OutletOp["kind"][] = ["open_bill", "add_item", "remove_line", "send_round", "pay_cash", "room_charge"];
+/** How far back a device's offline time is believed: older is taken as this long ago. */
+const OFFLINE_DAYS = 7;
 
 /**
- * Apply what the device did offline, in its order, each operation once. An
+ * Done before (the device sent it again after a lost answer, or its record
+ * was lost): read from what exists, never from an error.
+ */
+async function doneBefore(pool: Pool, schema: string, outletId: string, op: OutletOp): Promise<boolean> {
+  return withTenant(pool, schema, async (tx) => {
+    const b = (await tx.query<{ outlet_id: string; status: string; reservation_id: string | null }>("select outlet_id, status, reservation_id from outlet_bills where id = $1", [op.billId])).rows[0];
+    if (op.kind === "open_bill") {
+      if (b && b.outlet_id !== outletId) throw new Error("The bill is not at this outlet");
+      return !!b;
+    }
+    if (!b || b.outlet_id !== outletId) throw new Error("The bill is not at this outlet");
+    switch (op.kind) {
+      case "add_item":
+        return (await tx.query("select 1 from outlet_bill_lines where id = $1 and bill_id = $2", [op.lineId, op.billId])).rows.length > 0;
+      case "remove_line":
+        return !(await tx.query("select 1 from outlet_bill_lines where id = $1", [op.lineId])).rows.length;
+      case "send_round":
+        return (await tx.query("select 1 from outlet_rounds where id = $1 and bill_id = $2", [op.roundId, op.billId])).rows.length > 0;
+      case "pay_cash":
+        return b.status === "paid";
+      case "room_charge":
+        return b.status === "charged" && b.reservation_id === op.reservationId;
+    }
+  });
+}
+
+/**
+ * Apply what the device did offline, in its order, each operation once. One
+ * sync per outlet at a time (a second waits), so nothing is applied twice.
+ * The device's times are believed back to a week and kept in order. An
  * operation that fails does not stop the ones after it on other bills; on
  * its own bill the next ones fail too (and are reported).
  */
 export async function applyOutletOps(pool: Pool, schema: string, outletId: string, device: string, ops: OutletOp[], viewer: Viewer & { name: string }): Promise<OpResult[]> {
+  if (!isUuid(outletId)) throw new Error("Outlet not found");
+  const c = await pool.connect();
+  try {
+    await c.query("select pg_advisory_lock(hashtext($1))", [`${schema}:outlet-sync:${outletId}`]);
+    return await applyLocked(pool, schema, outletId, device, ops, viewer);
+  } finally {
+    await c.query("select pg_advisory_unlock(hashtext($1))", [`${schema}:outlet-sync:${outletId}`]).catch(() => undefined);
+    c.release();
+  }
+}
+
+async function applyLocked(pool: Pool, schema: string, outletId: string, device: string, ops: OutletOp[], viewer: Viewer & { name: string }): Promise<OpResult[]> {
   const out: OpResult[] = [];
   const broken = new Set<string>();
+  const floor = Date.now() - OFFLINE_DAYS * 86_400_000;
+  let last = floor;
+  const named = (billId: string, text: string) => withTenant(pool, schema, (tx) => tx.query("update outlet_bills set offline_problem = coalesce(offline_problem || '; ', '') || $2 where id = $1 and outlet_id = $3", [billId, text.slice(0, 300), outletId]));
   for (const op of ops.slice(0, 500)) {
-    if (!isUuid(op.opId) || !isUuid(op.billId)) {
-      out.push({ opId: String(op.opId), ok: false, error: "Not a valid operation" });
+    if (!op || !isUuid(op.opId) || !isUuid(op.billId) || !KINDS.includes(op.kind)) {
+      out.push({ opId: String(op?.opId), ok: false, error: "Not a valid operation" });
       continue;
     }
     const seen = await withTenant(pool, schema, async (tx) => (await tx.query<{ result: OpResult }>("select result from outlet_sync_ops where op_id = $1", [op.opId])).rows[0]?.result);
@@ -104,22 +159,22 @@ export async function applyOutletOps(pool: Pool, schema: string, outletId: strin
     }
     if (broken.has(op.billId)) {
       out.push({ opId: op.opId, ok: false, error: "An earlier operation on this bill failed" });
+      // cash or a Room Charge after the failure: still named on the bill, money was taken
+      if (op.kind === "pay_cash" || op.kind === "room_charge") await named(op.billId, `${PROBLEM[op.kind]}: an earlier operation on this bill failed`);
       continue;
     }
-    const at = new Date(op.at);
-    const when = Number.isNaN(at.getTime()) || at.getTime() > Date.now() + 60_000 ? new Date() : at;
+    // the device's time, within the last week and never before the operation before it
+    const t = new Date(op.at).getTime();
+    last = Math.min(Date.now(), Math.max(last, Number.isNaN(t) ? Date.now() : t));
     let result: OpResult;
     try {
-      result = { opId: op.opId, ok: true, ...(await applyOne(pool, schema, outletId, op, when, viewer)) };
+      result = (await doneBefore(pool, schema, outletId, op)) ? { opId: op.opId, ok: true, repeated: true } : { opId: op.opId, ok: true, ...(await applyOne(pool, schema, outletId, op, new Date(last), viewer)) };
     } catch (err) {
-      if (already(err)) result = { opId: op.opId, ok: true, repeated: true };
-      else {
-        const error = err instanceof Error && !("code" in err) ? err.message : "Could not be applied";
-        result = { opId: op.opId, ok: false, error };
-        broken.add(op.billId);
-        // a Room Charge that no longer holds stays with the bill for staff to settle
-        if (op.kind === "room_charge") await withTenant(pool, schema, (tx) => tx.query("update outlet_bills set offline_problem = $2 where id = $1", [op.billId, `Room Charge offline refused when checked: ${error}`.slice(0, 300)]));
-      }
+      const error = err instanceof Error && !("code" in err) ? err.message : "Could not be applied";
+      result = { opId: op.opId, ok: false, error };
+      broken.add(op.billId);
+      // what failed (a Room Charge that no longer holds, cash taken with no Shift to book it to) stays with the bill for staff to settle
+      if (op.kind !== "open_bill") await named(op.billId, `${PROBLEM[op.kind]}: ${error}`);
     }
     await withTenant(pool, schema, (tx) =>
       tx.query("insert into outlet_sync_ops (op_id, outlet_id, device, kind, result, applied_by) values ($1, $2, $3, $4, $5, $6) on conflict do nothing", [op.opId, outletId, device.slice(0, 100), op.kind, JSON.stringify(result), viewer.userId]),
@@ -152,5 +207,7 @@ async function applyOne(pool: Pool, schema: string, outletId: string, op: Outlet
     case "room_charge":
       await chargeBillToRoom(pool, schema, op.billId, { reservationId: op.reservationId, signature: op.signature }, viewer);
       return {};
+    default:
+      throw new Error("Not a valid operation");
   }
 }

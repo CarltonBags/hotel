@@ -110,7 +110,11 @@ export class FakePaymentProvider implements PaymentProvider {
       Object.assign(intent, { status: "failed", brand: "girocard", error: "girocard is not accepted by tap to pay: use the reader" });
       return;
     }
-    // a reader without a connection takes chip and PIN only, never by tap or girocard on a phone; stored until forwarded
+    // a reader without a connection takes chip and PIN only: never a phone, never girocard (it is declined); stored until forwarded
+    if (card.offline && (intent.tapToPay || card.brand === "girocard")) {
+      Object.assign(intent, { status: "failed", brand: card.brand ?? "visa", error: "Offline only by chip and PIN on a reader, never girocard" });
+      return;
+    }
     if (card.offline) Object.assign(intent, { offline: true });
     Object.assign(intent, {
       brand: card.brand ?? "visa",

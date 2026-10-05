@@ -294,6 +294,8 @@ export interface OpenBill {
   /** Items with a printer not sent yet. */
   unsent: number;
   openedAt: string;
+  /** What a device sold offline that could not be taken when it synced (ticket 62): for staff to settle. */
+  offlineProblem: string | null;
 }
 
 export interface OutletFloor {
@@ -309,13 +311,13 @@ export async function outletFloor(pool: Pool, schema: string, outletId: string, 
     const o = await outletIn(tx, outletId);
     needWork(viewer, o.propertyId);
     const tables = (await tx.query<{ id: string; name: string; seats: number }>("select id, name, seats from outlet_tables where outlet_id = $1 and active order by sort_order, name", [o.id])).rows;
-    const bills = (await tx.query<{ id: string; number: number; table_id: string | null; label: string; total: string; unsent: number; opened_at: Date }>(
-      `select b.id, b.number, b.table_id, b.label, b.opened_at,
+    const bills = (await tx.query<{ id: string; number: number; table_id: string | null; label: string; total: string; unsent: number; opened_at: Date; offline_problem: string | null }>(
+      `select b.id, b.number, b.table_id, b.label, b.opened_at, b.offline_problem,
          coalesce((select sum(l.amount) from outlet_bill_lines l where l.bill_id = b.id), 0) as total,
          (select count(*)::int from outlet_bill_lines l where l.bill_id = b.id and l.round_id is null and l.printer_id is not null) as unsent
        from outlet_bills b where b.outlet_id = $1 and b.status = 'open' order by b.number`,
       [o.id],
-    )).rows.map((b) => ({ id: b.id, number: b.number, tableId: b.table_id, label: b.label, total: Number(b.total), unsent: b.unsent, openedAt: b.opened_at.toISOString() }));
+    )).rows.map((b) => ({ id: b.id, number: b.number, tableId: b.table_id, label: b.label, total: Number(b.total), unsent: b.unsent, openedAt: b.opened_at.toISOString(), offlineProblem: b.offline_problem }));
     return { outlet: o, tables: tables.map((t) => ({ ...t, bills: bills.filter((b) => b.tableId === t.id) })), loose: bills.filter((b) => !b.tableId) };
   });
 }
@@ -405,8 +407,10 @@ export interface OutletBillView {
   roomCharge: { room: string | null; guest: string } | null;
   /** The card payment waiting at a reader or phone while the bill is paying. */
   pendingPaymentId: string | null;
+  /** What a device sold offline that could not be taken when it synced (ticket 62). */
+  offlineProblem: string | null;
   /** Payments received on the bill, for a refund. */
-  payments: { id: string; tender: string; amount: number; refunded: number }[];
+  payments: { id: string; tender: string; amount: number; refunded: number; offlineRisk: boolean }[];
   /** The Receipt of a bill paid on the spot. */
   receiptToken: string | null;
   invoiceId: string | null;
@@ -416,8 +420,8 @@ export async function outletBill(pool: Pool, schema: string, billId: string, vie
   return withTenant(pool, schema, async (tx) => {
     const b = await billIn(tx, billId);
     needWork(viewer, b.property_id);
-    const head = (await tx.query<{ table: string | null; label: string; receipt: string | null; invoice: string | null; tip: string; room: string | null; guest: string | null; pending: string | null }>(
-      `select t.name as table, b.label,
+    const head = (await tx.query<{ table: string | null; label: string; receipt: string | null; invoice: string | null; tip: string; room: string | null; guest: string | null; pending: string | null; offline_problem: string | null }>(
+      `select t.name as table, b.label, b.offline_problem,
          (select coalesce(sum(p.tip), 0) from folios f join payments p on p.folio_id = f.id where f.outlet_bill_id = b.id and p.status = 'succeeded') as tip,
          (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = b.reservation_id order by a.to_date desc limit 1) as room,
          (select g.last_name from reservations r join guests g on g.id = r.primary_guest_id where r.id = b.reservation_id) as guest,
@@ -429,11 +433,11 @@ export async function outletBill(pool: Pool, schema: string, billId: string, vie
     )).rows[0]!;
     const lines = await linesOf(tx, b.id);
     const a = await amountsIn(tx, b);
-    const payments = (await tx.query<{ id: string; tender: string; amount: string; refunded: string }>(
-      `select p.id, p.tender, p.amount, (select coalesce(-sum(r.amount), 0) from payments r where r.refund_of = p.id and r.status in ('succeeded', 'pending', 'refund_pending_balance')) as refunded
+    const payments = (await tx.query<{ id: string; tender: string; amount: string; refunded: string; risk: boolean }>(
+      `select p.id, p.tender, p.amount, (p.collected_offline and p.forwarded_at is null) as risk, (select coalesce(-sum(r.amount), 0) from payments r where r.refund_of = p.id and r.status in ('succeeded', 'pending', 'refund_pending_balance')) as refunded
        from folios f join payments p on p.folio_id = f.id where f.outlet_bill_id = $1 and p.status = 'succeeded' and p.refund_of is null order by p.posted_at`,
       [b.id],
-    )).rows.map((p) => ({ id: p.id, tender: p.tender, amount: Number(p.amount), refunded: Number(p.refunded) }));
+    )).rows.map((p) => ({ id: p.id, tender: p.tender, amount: Number(p.amount), refunded: Number(p.refunded), offlineRisk: p.risk }));
     return {
       id: b.id,
       number: b.number,
@@ -450,6 +454,7 @@ export async function outletBill(pool: Pool, schema: string, billId: string, vie
       tip: Number(head.tip),
       roomCharge: head.guest ? { room: head.room, guest: head.guest } : null,
       pendingPaymentId: head.pending,
+      offlineProblem: head.offline_problem,
       payments,
       receiptToken: head.receipt,
       invoiceId: head.invoice,
