@@ -1,6 +1,8 @@
 import type { Pool, PoolClient } from "pg";
 import {
+  isWhatsAppType,
   replyAddress,
+  type WhatsAppType,
   ACCENTS,
   MESSAGE_TYPE_INFO,
   MESSAGE_TYPES,
@@ -25,7 +27,7 @@ import {
 import { DeliveryError, type DomainStatus, type MailEvent, type MailProvider, type SmsProvider, type WhatsAppProvider } from "@hoteloftware/messaging";
 import { dispatchOutboxes, OUTBOX_MAX_ATTEMPTS, queueMail } from "./mail-outbox";
 import { senderFor, type SenderOptions } from "./sender";
-import { countWhatsAppMessage, whatsAppRouteIn } from "./whatsapp";
+import { fallBackToEmailIn, stillByWhatsAppIn, templateTargetIn, whatsAppRouteIn } from "./whatsapp";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -357,6 +359,8 @@ export async function queueGuestMessageIn(
     /** The Conversation it belongs to, and whom it greets when not the stay's guest (the Booker) (ticket 42). */
     conversationId?: string;
     greetName?: string;
+    /** Staff chose WhatsApp (an approved template outside the 24 hours): refused rather than sent by email. */
+    requireWhatsApp?: boolean;
   },
 ): Promise<string | null> {
   const f = await factsOf(tx, input.reservationId);
@@ -399,7 +403,8 @@ export async function queueGuestMessageIn(
   // the channel's own setting (ticket 38) before the property's switch for all booking sites
   const channelOff = f.channel && !(f.channel_confirmation ?? s.switched[CHANNEL_SWITCH] ?? true) && (input.type === "confirmation" || input.type === "cancellation");
   // a service message to a guest who opted in goes by WhatsApp (an approved template) instead of email, never both (ticket 44)
-  const whatsApp = !input.toEmail && !channelOff ? await whatsAppRouteIn(tx, { propertyId: f.property_id, guestId: f.guest_id, phone: f.phone, type: input.type, language, values }) : null;
+  const whatsApp = !input.toEmail && !channelOff ? await whatsAppRouteIn(tx, { propertyId: f.property_id, guestId: f.guest_id, type: input.type, language, values }) : null;
+  if (input.requireWhatsApp && !whatsApp) throw new Error("This guest cannot get it by WhatsApp: send by email");
   const reason = whatsApp ? null : channelOff ? "channel" : !email ? "no_email" : email === f.email_bounced ? "bounced" : email === f.email_complained && !info.essential ? "complained" : null;
   const { rows } = await tx.query<{ id: string }>(
     `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by, secret_code, conversation_id, reply_to, transport, to_phone, template_params)
@@ -546,7 +551,7 @@ export async function dispatchMessages(
   pool: Pool,
   schema: string,
   tenantId: string,
-  providers: { mail: MailProvider; sms: SmsProvider; whatsapp?: { provider: WhatsAppProvider; cost: number } },
+  providers: { mail: MailProvider; sms: SmsProvider; whatsapp?: { provider: WhatsAppProvider } },
   options: SenderOptions,
   now = new Date(),
 ): Promise<{ sent: number; failed: number }> {
@@ -568,12 +573,13 @@ export async function dispatchMessages(
       `update guest_messages gm set status = 'sending', attempts = attempts + 1, claimed_at = $1
        from (select id from guest_messages where status = 'queued' and send_after <= $1 order by send_after limit 50 for update skip locked) d
        where gm.id = d.id
-       returning gm.id, gm.property_id, gm.type, gm.to_email, gm.subject, gm.html, gm.body_text, gm.invoice_id, gm.attempts, gm.secret_code, gm.reply_to, gm.transport, gm.to_phone, gm.template_params`,
+       returning gm.id, gm.property_id, gm.reservation_id, gm.type, gm.to_email, gm.subject, gm.html, gm.body_text, gm.invoice_id, gm.attempts, gm.secret_code, gm.reply_to, gm.transport, gm.to_phone, gm.template_params`,
       [now],
     );
     return rows as {
       id: string;
       property_id: string;
+      reservation_id: string;
       type: MessageType;
       to_email: string;
       subject: string;
@@ -585,14 +591,12 @@ export async function dispatchMessages(
       reply_to: string | null;
       transport: "email" | "whatsapp";
       to_phone: string | null;
-      template_params: { name: string; language: string; params: string[] } | null;
+      template_params: TemplateParams | null;
     }[];
   });
   for (const m of due) {
     if (m.transport === "whatsapp") {
-      const outcome = await sendByWhatsApp(pool, schema, tenantId, providers.whatsapp, m, now);
-      if (outcome === "sent") sent++;
-      else if (outcome === "failed") failed++;
+      if ((await sendByWhatsApp(pool, schema, providers.whatsapp, m, now)) === "sent") sent++;
       continue;
     }
     const { sender, document } = await withTenant(pool, schema, async (tx) => ({
@@ -641,26 +645,26 @@ export async function dispatchMessages(
 }
 
 /**
- * An automatic message by WhatsApp (an approved template): sent and counted;
- * a temporary failure is tried again like mail; a refusal (or no number to
- * send from) sends it by email instead, never both.
+ * An automatic message by WhatsApp (an approved template): still the way at
+ * sending time (Module on, consent not withdrawn), else email. A temporary
+ * failure of the send is tried again like mail; a refusal goes by email
+ * instead, never both. Once WhatsApp took it, it is never sent again (what
+ * follows the send cannot put it back in the queue). Meta's bill is counted
+ * from its delivery report.
  */
 async function sendByWhatsApp(
   pool: Pool,
   schema: string,
-  tenantId: string,
-  wa: { provider: WhatsAppProvider; cost: number } | undefined,
-  m: { id: string; property_id: string; type: MessageType; attempts: number; to_phone: string | null; template_params: { name: string; language: string; params: string[] } | null },
+  wa: { provider: WhatsAppProvider } | undefined,
+  m: { id: string; property_id: string; reservation_id: string; attempts: number; to_phone: string | null; template_params: TemplateParams | null },
   now: Date,
-): Promise<"sent" | "fallback" | "failed" | "later"> {
-  const account = await withTenant(pool, schema, async (tx) => (await tx.query<{ waba_id: string; phone_number_id: string }>("select waba_id, phone_number_id from whatsapp_accounts where property_id = $1", [m.property_id])).rows[0]);
-  let error = "WhatsApp is not connected";
+): Promise<"sent" | "fallback" | "later"> {
+  const account = await withTenant(pool, schema, (tx) => stillByWhatsAppIn(tx, m.property_id, m.reservation_id));
+  let error = account ? "WhatsApp is not configured" : "no longer by WhatsApp (consent or Module)";
   if (wa && account && m.to_phone && m.template_params) {
+    let messageId: string | null = null;
     try {
-      const r = await wa.provider.sendTemplate({ wabaId: account.waba_id, phoneNumberId: account.phone_number_id }, m.to_phone, m.template_params);
-      await withTenant(pool, schema, (tx) => tx.query("update guest_messages set status = case when status = 'delivered' then status else 'sent' end, sent_at = now(), provider_id = $2, reason = null where id = $1", [m.id, r.messageId]));
-      await countWhatsAppMessage(pool, tenantId, m.property_id, wa.cost);
-      return "sent";
+      messageId = (await wa.provider.sendTemplate(account, m.to_phone, m.template_params)).messageId;
     } catch (err) {
       error = err instanceof Error ? err.message.slice(0, 300) : String(err);
       if ((err instanceof DeliveryError ? err.retry : true) && m.attempts < MAX_ATTEMPTS) {
@@ -669,12 +673,29 @@ async function sendByWhatsApp(
         return "later";
       }
     }
+    if (messageId) {
+      // a failure to record it leaves the row "sending": never sent twice
+      await withTenant(pool, schema, (tx) => tx.query("update guest_messages set status = case when status = 'delivered' then status else 'sent' end, sent_at = now(), provider_id = $2, reason = null where id = $1", [m.id, messageId]));
+      return "sent";
+    }
   }
-  const r = await withTenant(pool, schema, (tx) =>
-    tx.query<{ status: string }>("update guest_messages set transport = 'email', status = case when to_email is null then 'failed' else 'queued' end, claimed_at = null, attempts = 0, reason = $2, send_after = now() where id = $1 returning status", [m.id, `whatsapp: ${error}`]),
-  );
-  return r.rows[0]?.status === "failed" ? "failed" : "fallback";
+  await withTenant(pool, schema, (tx) => fallBackToEmailIn(tx, { id: m.id }, error));
+  return "fallback";
 }
+
+/** A template from the composer (outside the 24 hours): the stay's values filled in, sent by WhatsApp or refused (ticket 44). */
+export async function sendWhatsAppTemplate(pool: Pool, schema: string, input: { propertyId: string; conversationId: string; type: WhatsAppType; links: PortalLinks | null }, userId: string, now = new Date()): Promise<string> {
+  if (!isWhatsAppType(input.type)) throw new Error("Choose an approved template");
+  return withTenant(pool, schema, async (tx) => {
+    const target = await templateTargetIn(tx, input.propertyId, input.conversationId);
+    if (!target) throw new Error("This guest cannot get templates by WhatsApp: send by email");
+    const id = await queueGuestMessageIn(tx, { reservationId: target.reservationId, type: input.type, triggerKey: `whatsapp:${now.toISOString()}`, userId, now, links: input.links, conversationId: input.conversationId, requireWhatsApp: true });
+    if (!id) throw new Error("This template was just sent");
+    return id;
+  });
+}
+
+type TemplateParams = { name: string; language: string; params: string[] };
 
 export interface BouncedMessage {
   reservationId: string;

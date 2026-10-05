@@ -16,19 +16,30 @@ create table whatsapp_templates (
   property_id uuid not null references properties(id),
   type text not null,
   language text not null constraint whatsapp_templates_language_check check (language in ('de', 'en')),
-  -- the name at Meta
+  -- the latest version at Meta: an edit is a new version (hs_<type>_v<n>), the approved one goes out until it is approved
   name text not null,
+  version integer not null default 1,
   -- with our {placeholders}
   text text not null,
   status text not null default 'in_review' constraint whatsapp_templates_status_check check (status in ('in_review', 'approved', 'rejected')),
   reason text,
   provider_id text,
+  -- the version that goes out (paused or disabled by Meta: none)
+  approved_name text,
   approved_text text,
+  approved_provider_id text,
   updated_at timestamptz not null default now(),
   updated_by text,
   constraint whatsapp_templates_key unique (property_id, type, language)
 );
 create index whatsapp_templates_provider_idx on whatsapp_templates(provider_id);
+
+-- billed by Meta (a delivered template message): counted once per message
+create table whatsapp_billed (
+  provider_id text primary key,
+  property_id uuid not null references properties(id),
+  at timestamptz not null default now()
+);
 
 -- the guest's number a Conversation talks to, and when the guest last wrote (the 24-hour window)
 alter table conversations add column whatsapp_phone text;

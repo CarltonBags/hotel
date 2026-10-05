@@ -28,6 +28,10 @@ export interface WebhookSource {
   verify: (headers: Record<string, string>, rawBody: string) => boolean;
   /** The provider's subscription check by GET (Meta's hub.challenge): the answer, or null. */
   challenge?: (query: URLSearchParams) => string | null;
+  /** A body carrying events for several hotels (Meta batches entries): one stored event per part, each routed on its own. */
+  split?: (body: unknown) => unknown[];
+  /** Its events carry guests' personal data: one no tenant takes is kept without its body. */
+  personal?: boolean;
 }
 
 export interface IntakeResult {
@@ -61,14 +65,28 @@ export async function receiveWebhook(
   } catch {
     body = null;
   }
-  const externalId = source.externalId(input.headers, body);
+  const parts = source.split ? source.split(body) : [body];
+  if (!parts.length) return { status: 400, duplicate: false };
+  let fresh = false;
+  for (const part of parts) {
+    const r = await storeEvent(pool, queue, source, input.headers, part, parts.length === 1 ? input.rawBody : JSON.stringify(part));
+    if (r.status === 400) return r;
+    fresh ||= !r.duplicate;
+  }
+  return fresh ? { status: 202, duplicate: false } : { status: 200, duplicate: true };
+}
+
+async function storeEvent(pool: Pool, queue: QueueLike, source: WebhookSource, headers: Record<string, string>, body: unknown, rawBody: string): Promise<IntakeResult> {
+  const externalId = source.externalId(headers, body);
   if (!externalId) return { status: 400, duplicate: false };
 
-  const ref = source.externalRef(body, input.headers);
+  const ref = source.externalRef(body, headers);
   const mapping = ref
     ? await pool.query<{ tenant_id: string }>("select tenant_id from control.external_ids where provider = $1 and external_id = $2", [source.name, ref])
     : null;
   const tenantId = mapping?.rows[0]?.tenant_id ?? null;
+  // personal data nobody takes is not kept
+  const keep = tenantId || !source.personal;
 
   // The stored event and its job commit together: an event is never left "received" without a job.
   const client = await pool.connect();
@@ -79,7 +97,7 @@ export async function receiveWebhook(
        values ($1, $2, $3, $4, $5, $6, $7)
        on conflict (source, external_id) do nothing
        returning id`,
-      [source.name, externalId, tenantId, JSON.stringify(redact(input.headers)), body === null ? null : JSON.stringify(body), input.rawBody, tenantId ? "received" : "ignored"],
+      [source.name, externalId, tenantId, JSON.stringify(redact(headers)), body === null || !keep ? null : JSON.stringify(body), keep ? rawBody : "", tenantId ? "received" : "ignored"],
     );
     if (!rows[0]) {
       await client.query("rollback");
@@ -100,6 +118,12 @@ export async function receiveWebhook(
   } finally {
     client.release();
   }
+}
+
+/** Guests' messages in stored events of these sources go after a week, also when processing failed (the rows stay as a record). */
+export async function prunePersonalEvents(pool: Pool, sources: string[], days = 7): Promise<number> {
+  const { rowCount } = await pool.query("update control.webhook_events set body = null, raw_body = '' where source = any($1) and received_at < now() - make_interval(days => $2) and (body is not null or raw_body <> '')", [sources, days]);
+  return rowCount ?? 0;
 }
 
 /**

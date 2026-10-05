@@ -11,7 +11,7 @@ type FB = { init: (o: object) => void; login: (cb: (r: { authResponse?: { code?:
  * stays in the app by coexistence); Meta names them in a message to this
  * window and hands a code, which the server exchanges.
  */
-export function EmbeddedSignup({ propertyId, appId, configId, label }: { propertyId: string; appId: string; configId: string; label: string }) {
+export function EmbeddedSignup({ propertyId, appId, configId, labels }: { propertyId: string; appId: string; configId: string; labels: { keep: string; fresh: string } }) {
   const session = useRef<{ wabaId?: string | undefined; phoneNumberId?: string | undefined }>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -43,7 +43,7 @@ export function EmbeddedSignup({ propertyId, appId, configId, label }: { propert
     w.FB!.init({ appId, autoLogAppEvents: true, xfbml: false, version: "v21.0" });
     return w.FB!;
   }
-  async function start() {
+  async function start(coexistence: boolean) {
     setBusy(true);
     setError(null);
     try {
@@ -57,13 +57,14 @@ export function EmbeddedSignup({ propertyId, appId, configId, label }: { propert
             setError("The signup was not finished");
             return;
           }
-          void connectAction(propertyId, { code, wabaId: s.wabaId, phoneNumberId: s.phoneNumberId }).then((res) => {
+          void connectAction(propertyId, { code, wabaId: s.wabaId, phoneNumberId: s.phoneNumberId, coexistence }).then((res) => {
             setBusy(false);
             if (res.error) setError(res.error);
             else window.location.reload();
           });
         },
-        { config_id: configId, response_type: "code", override_default_response_type: true, extras: { setup: {}, featureType: "whatsapp_business_app_onboarding", sessionInfoVersion: "3" } },
+        // coexistence: the number stays in the hotel's WhatsApp Business app; else a new number for the Cloud API
+        { config_id: configId, response_type: "code", override_default_response_type: true, extras: { setup: {}, sessionInfoVersion: "3", ...(coexistence ? { featureType: "whatsapp_business_app_onboarding" } : {}) } },
       );
     } catch (err) {
       setBusy(false);
@@ -72,9 +73,14 @@ export function EmbeddedSignup({ propertyId, appId, configId, label }: { propert
   }
   return (
     <div className="grid gap-2">
-      <button type="button" disabled={busy} onClick={() => void start()} className="h-10 justify-self-start rounded-full bg-[#1877f2] px-5 text-sm font-medium text-white disabled:opacity-60" data-wa-signup>
-        {label}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={busy} onClick={() => void start(true)} className="h-10 rounded-full bg-[#1877f2] px-5 text-sm font-medium text-white disabled:opacity-60" data-wa-signup="keep">
+          {labels.keep}
+        </button>
+        <button type="button" disabled={busy} onClick={() => void start(false)} className="h-10 rounded-full bg-surface px-5 text-sm font-medium disabled:opacity-60" data-wa-signup="new">
+          {labels.fresh}
+        </button>
+      </div>
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
     </div>
   );

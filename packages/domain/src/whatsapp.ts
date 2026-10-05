@@ -21,12 +21,29 @@ export function windowOpen(lastGuestMessage: Date | null, now: Date): boolean {
   return !!lastGuestMessage && now.getTime() - lastGuestMessage.getTime() <= WINDOW_HOURS * 3_600_000;
 }
 
-/** The number to message on WhatsApp, digits only as WhatsApp gives it ("+49 170…" and "0049 170…" alike): unlike a stored phone (normalisePhone), a national number is not enough. */
-export function whatsAppNumber(input: string): string | null {
+/** Country calling codes of the countries a property may be in, for numbers stored without one. */
+const CALLING_CODES: Record<string, string> = {
+  DE: "49", AT: "43", CH: "41", LI: "423", IT: "39", FR: "33", NL: "31", BE: "32", LU: "352", DK: "45", PL: "48", CZ: "420", SK: "421", HU: "36", SI: "386", HR: "385",
+  ES: "34", PT: "351", GB: "44", IE: "353", SE: "46", NO: "47", FI: "358", GR: "30", US: "1",
+};
+
+/**
+ * The number to message on WhatsApp, digits only as WhatsApp gives it ("+49
+ * 170…" and "0049 170…" alike); a national number ("0170…") counts in the
+ * property's country. Null when it cannot be told.
+ */
+export function whatsAppNumber(input: string, country?: string | null): string | null {
   const s = input.trim();
   const digits = s.replace(/[^\d]/g, "");
-  const intl = s.startsWith("+") ? digits : digits.startsWith("00") ? digits.slice(2) : s.startsWith("0") ? "" : digits;
+  const cc = country ? CALLING_CODES[country.toUpperCase()] : undefined;
+  const intl = s.startsWith("+") ? digits : digits.startsWith("00") ? digits.slice(2) : digits.startsWith("0") ? (cc ? cc + digits.slice(1) : "") : digits;
   return /^[1-9]\d{7,14}$/.test(intl) ? intl : null;
+}
+
+/** How a guest profile may hold a WhatsApp number of the property's country: international, or national with a leading 0. */
+export function storedForms(waNumber: string, country: string | null): string[] {
+  const cc = country ? CALLING_CODES[country.toUpperCase()] : undefined;
+  return cc && waNumber.startsWith(cc) ? [waNumber, `0${waNumber.slice(cc.length)}`] : [waNumber];
 }
 
 function luhn(digits: string): boolean {

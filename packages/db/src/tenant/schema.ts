@@ -2186,11 +2186,14 @@ export const whatsappTemplates = pgTable(
     type: text("type").notNull(),
     language: text("language").notNull(),
     name: text("name").notNull(),
+    version: integer("version").notNull().default(1),
     text: text("text").notNull(),
     status: text("status").notNull().default("in_review"),
     reason: text("reason"),
     providerId: text("provider_id"),
+    approvedName: text("approved_name"),
     approvedText: text("approved_text"),
+    approvedProviderId: text("approved_provider_id"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     updatedBy: text("updated_by"),
   },
@@ -2201,6 +2204,12 @@ export const whatsappTemplates = pgTable(
     index("whatsapp_templates_provider_idx").on(t.providerId),
   ],
 );
+
+export const whatsappBilled = pgTable("whatsapp_billed", {
+  providerId: text("provider_id").primaryKey(),
+  propertyId: uuid("property_id").notNull().references(() => properties.id),
+  at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const whatsappUnassigned = pgTable(
   "whatsapp_unassigned",
@@ -2328,4 +2337,5 @@ export const tenantSchema = {
   whatsappAccounts,
   whatsappTemplates,
   whatsappUnassigned,
+  whatsappBilled,
 };

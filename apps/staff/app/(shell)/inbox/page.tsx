@@ -8,7 +8,7 @@ import { pool } from "@/lib/db";
 import { fileLink } from "@/lib/files";
 import { loadShell } from "@/lib/shell";
 import { LiveRefresh } from "@/shell/LiveRefresh";
-import { claimAction, disputeAction, linkUnassignedAction, messageToTaskAction } from "./actions";
+import { claimAction, disputeAction, linkUnassignedAction, messageToTaskAction, sendTemplateAction } from "./actions";
 import { Composer, SeenMarker, TypingIndicator } from "./inbox-client";
 
 /**
@@ -186,8 +186,22 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
               seenUpTo={view.latestGuestMessageId}
               quickReplies={languageReplies}
               values={view.values}
-              whatsapp={wa?.possible ? { windowOpen: wa.windowOpen, templateReady: wa.templateReady } : null}
+              whatsapp={wa?.possible ? { windowOpen: wa.windowOpen } : null}
             />
+            {wa?.possible && !wa.windowOpen ? (
+              <ActionForm action={sendTemplateAction} submitLabel={m["wa.templateSend"]} className="flex flex-wrap items-center gap-2 pt-2 text-sm">
+                <input type="hidden" name="propertyId" value={property.id} />
+                <input type="hidden" name="conversationId" value={view.conversation.id} />
+                <span className="text-ink-60">{m["wa.windowClosedTemplates"]}</span>
+                <select name="type" required className="h-9 rounded-xl bg-surface-2 px-2" data-wa-template aria-label={m["wa.template"]}>
+                  {wa.templates.map((tp) => (
+                    <option key={tp} value={tp}>
+                      {m[`messages.type.${tp}`]}
+                    </option>
+                  ))}
+                </select>
+              </ActionForm>
+            ) : null}
           </>
         )}
       </section>

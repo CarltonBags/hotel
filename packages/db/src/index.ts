@@ -534,7 +534,6 @@ export {
 export {
   USAGE_KIND as WHATSAPP_USAGE_KIND,
   WHATSAPP_SOURCE,
-  WHATSAPP_TEMPLATE_TYPES,
   applyTemplateReview,
   applyWhatsAppStatus,
   connectWhatsApp,
@@ -556,6 +555,10 @@ export {
   type IncomingWhatsApp,
   type UnassignedWhatsApp,
   type WhatsAppConnection,
+  type WhatsAppState,
   type WhatsAppTemplateRow,
 } from "./tenant/whatsapp";
-export { linkUnassignedWhatsApp, receiveWhatsApp } from "./tenant/conversations";
+export { linkUnassignedWhatsApp, receiveWhatsApp, receiveWhatsAppEcho } from "./tenant/conversations";
+export { deleteOldUnassignedWhatsApp } from "./tenant/whatsapp";
+export { sendWhatsAppTemplate } from "./tenant/messages";
+export { claimProviderAccount } from "./control/external-ids";

@@ -2,8 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { TASKS_FROM_MESSAGES, deliverStaffWhatsApp, linkUnassignedWhatsApp, claimConversation, conversationOfReservation, markConversationSeen, messageToTask, postStaffMessage, setConversationDisputed, type TaskFromMessage } from "@hoteloftware/db";
-import { whatsAppMessageCost, whatsAppProvider } from "@hoteloftware/messaging";
+import { TASKS_FROM_MESSAGES, deliverStaffWhatsApp, sendWhatsAppTemplate, linkUnassignedWhatsApp, claimConversation, conversationOfReservation, markConversationSeen, messageToTask, postStaffMessage, setConversationDisputed, type TaskFromMessage } from "@hoteloftware/db";
+import { whatsAppProvider } from "@hoteloftware/messaging";
+import { fileStore } from "@hoteloftware/storage";
+import { isWhatsAppType } from "@hoteloftware/domain";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { guestLinks } from "@/lib/env";
@@ -35,7 +37,7 @@ export async function sendMessageAction(_prev: FormState, formData: FormData): P
     );
     try {
       // by WhatsApp it goes now; refused, it stays in the thread marked as not sent
-      if (posted.whatsapp) await deliverStaffWhatsApp(pool(), tenant.schemaName, whatsAppProvider(), { tenantId: tenant.id, propertyId, messageId: posted.messageId, portalBase: links.base, cost: whatsAppMessageCost() });
+      if (posted.whatsapp) await deliverStaffWhatsApp(pool(), tenant.schemaName, whatsAppProvider(), { propertyId, messageId: posted.messageId, read: (key) => fileStore().get(key) });
     } finally {
       await announceConversations(tenant.id, propertyId);
       revalidatePath("/inbox");
@@ -103,6 +105,19 @@ export async function linkUnassignedAction(_prev: FormState, formData: FormData)
     const propertyId = field(formData, "propertyId");
     const { tenant, session, actor } = await inbox(propertyId);
     await linkUnassignedWhatsApp(pool(), tenant.schemaName, propertyId, field(formData, "unassignedId"), field(formData, "reservationId"), { userId: session.user.id, actor }, guestLinks(tenant.slug));
+    await announceConversations(tenant.id, propertyId);
+    revalidatePath("/inbox");
+  });
+}
+
+/** Outside the 24 hours: an approved WhatsApp template with the stay's details (ticket 44); the worker sends it, by email if WhatsApp refuses. */
+export async function sendTemplateAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const propertyId = field(formData, "propertyId");
+    const { tenant, session } = await inbox(propertyId);
+    const type = field(formData, "type");
+    if (!isWhatsAppType(type)) throw new Error("Choose an approved template");
+    await sendWhatsAppTemplate(pool(), tenant.schemaName, { propertyId, conversationId: field(formData, "conversationId"), type, links: guestLinks(tenant.slug) }, session.user.id);
     await announceConversations(tenant.id, propertyId);
     revalidatePath("/inbox");
   });

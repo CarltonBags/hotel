@@ -44,7 +44,7 @@ export default async function WhatsAppSettingsPage() {
       <section className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm" data-wa-connection>
         {connection ? <p data-connected>{fill(m["wa.connected"], { number: connection.displayNumber, date: date(connection.connectedAt) })}</p> : <p>{m["wa.notConnected"]}</p>}
         <p className="text-ink-60">{m["wa.guide"]}</p>
-        {appId && configId ? <EmbeddedSignup propertyId={property.id} appId={appId} configId={configId} label={m["wa.connect"]} /> : null}
+        {appId && configId ? <EmbeddedSignup propertyId={property.id} appId={appId} configId={configId} labels={{ keep: m["wa.connectKeep"], fresh: m["wa.connectNew"] }} /> : null}
         {fake && !connection ? (
           <ActionForm action={connectTestAction} submitLabel={m["wa.connectTest"]} className="flex">
             {hidden}

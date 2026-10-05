@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asMetaTemplate, whatsAppNumber, sensitiveData, WHATSAPP_TYPES, windowOpen } from "../src/whatsapp";
+import { asMetaTemplate, storedForms, whatsAppNumber, sensitiveData, WHATSAPP_TYPES, windowOpen } from "../src/whatsapp";
 
 describe("WhatsApp (ticket 44)", () => {
   it("free text only within 24 hours after the guest's last message", () => {
@@ -14,6 +14,9 @@ describe("WhatsApp (ticket 44)", () => {
     expect(whatsAppNumber("0049 (170) 1234567")).toBe("491701234567");
     expect(whatsAppNumber("491701234567")).toBe("491701234567");
     expect(whatsAppNumber("0170 1234567")).toBeNull();
+    expect(whatsAppNumber("0170 1234567", "DE")).toBe("491701234567");
+    expect(storedForms("491701234567", "DE")).toEqual(["491701234567", "01701234567"]);
+    expect(storedForms("41791112233", "DE")).toEqual(["41791112233"]);
     expect(whatsAppNumber("abc")).toBeNull();
   });
 

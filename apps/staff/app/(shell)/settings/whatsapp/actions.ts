@@ -13,10 +13,10 @@ async function scope(propertyId: string) {
 }
 
 /** After Embedded Signup in the browser: the code and the account and number Meta named. */
-export async function connectAction(propertyId: string, input: { code: string; wabaId: string; phoneNumberId: string }): Promise<FormState> {
+export async function connectAction(propertyId: string, input: { code: string; wabaId: string; phoneNumberId: string; coexistence: boolean }): Promise<FormState> {
   return formAction(async () => {
     const { tenant, session } = await scope(propertyId);
-    await connectWhatsApp(pool(), tenant.schemaName, whatsAppProvider(), { tenantId: tenant.id, propertyId, code: String(input.code), wabaId: String(input.wabaId), phoneNumberId: String(input.phoneNumberId) }, session.user.id);
+    await connectWhatsApp(pool(), tenant.schemaName, whatsAppProvider(), { tenantId: tenant.id, propertyId, code: String(input.code), wabaId: String(input.wabaId), phoneNumberId: String(input.phoneNumberId), coexistence: input.coexistence === true }, session.user.id);
     revalidatePath("/settings/whatsapp");
   });
 }
@@ -28,7 +28,7 @@ export async function connectTestAction(_prev: FormState, formData: FormData): P
     const provider = whatsAppProvider();
     if (!(provider instanceof FakeWhatsAppProvider) || process.env.NODE_ENV === "production") throw new Error("Not available");
     const { tenant, session } = await scope(propertyId);
-    await connectWhatsApp(pool(), tenant.schemaName, provider, { tenantId: tenant.id, propertyId, code: "test", wabaId: `test_waba_${propertyId.slice(0, 8)}`, phoneNumberId: `test_pn_${propertyId.slice(0, 8)}` }, session.user.id);
+    await connectWhatsApp(pool(), tenant.schemaName, provider, { tenantId: tenant.id, propertyId, code: "test", wabaId: `test_waba_${propertyId.slice(0, 8)}`, phoneNumberId: `test_pn_${propertyId.slice(0, 8)}`, coexistence: true }, session.user.id);
     revalidatePath("/settings/whatsapp");
   });
 }
