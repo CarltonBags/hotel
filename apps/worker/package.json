@@ -15,10 +15,11 @@
     "@hoteloftware/db": "workspace:*",
     "@hoteloftware/domain": "workspace:*",
     "@hoteloftware/events": "workspace:*",
+    "@hoteloftware/fiscal": "workspace:*",
     "@hoteloftware/invoices": "workspace:*",
     "@hoteloftware/messaging": "workspace:*",
-    "@hoteloftware/storage": "workspace:*",
     "@hoteloftware/payments": "workspace:*",
+    "@hoteloftware/storage": "workspace:*",
     "pg": "^8.23.0",
     "pg-boss": "^10.4.2"
   },

@@ -581,3 +581,22 @@ export {
   type SelfCheckinStep,
   type SelfCheckinView,
 } from "./tenant/self-checkin";
+export {
+  FISCAL_USER,
+  closeFiscalDay,
+  fiscalArchive,
+  fiscalArchiveFile,
+  fiscalDaysToClose,
+  fiscalMonthsToArchive,
+  fiscalRegistration,
+  fiscalStatus,
+  receiptsToSign,
+  setFiscalScope,
+  setUpFiscal,
+  signReceipt,
+  type FiscalArchiveView,
+  type FiscalDeps,
+  type FiscalSignResult,
+  type FiscalStatus,
+  type ReceiptFiscal,
+} from "./tenant/fiscal";

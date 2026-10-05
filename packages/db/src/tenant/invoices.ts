@@ -348,7 +348,7 @@ export async function issueDepositInvoiceIfDue(pool: Pool, schema: string, payme
 }
 
 /** The stay's composition by Tax Code and the rate in force each night: what a deposit is taxed by. */
-async function stayComposition(tx: PoolClient, reservationId: string): Promise<{ taxCode: string; rate: number; gross: number }[]> {
+export async function stayComposition(tx: PoolClient, reservationId: string): Promise<{ taxCode: string; rate: number; gross: number }[]> {
   const rows = (await tx.query<{ code: string; rate: string; gross: string }>(
     `select t.code, tr.rate, sum(c.amount) as gross
      from reservation_night_components c
