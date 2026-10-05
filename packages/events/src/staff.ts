@@ -77,9 +77,9 @@ export async function notifySelfCheckin(
   for (const u of await usersWithRight(pool, tenant.id, "check_in", r.propertyId)) await publishNotification(pool, { tenantId: tenant.id, userId: u.id, kind: "self_checkin.done", title: "Self check-in complete", body, href });
 }
 
-/** The TSE could not sign (ticket 51): the Property Managers hear of the outage once, when it starts. */
+/** The TSE could not sign (ticket 51): who runs the property's cash desk hears of the outage once, when it starts (urgent: the Property Managers by SMS too). */
 export function notifyFiscalOutage(pool: Pool, tenant: { id: string; schemaName: string }, o: { propertyId: string; error: string }): Promise<void> {
-  return notifyWithRight(pool, tenant, "manage_cash", o.propertyId, {
+  return notifyWithRight(pool, tenant, "manage_cash_desk", o.propertyId, {
     kind: "fiscal.outage",
     title: "TSE outage: Receipts are not signed",
     body: `The desk goes on; Receipts carry the outage notice until the TSE answers again. Reason: ${o.error}`,

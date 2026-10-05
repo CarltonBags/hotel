@@ -42,7 +42,7 @@ const fiscalKey = (() => {
   try {
     return fiscalSecret();
   } catch {
-    console.warn("FISCAL_SECRET not set; Receipts are not signed");
+    console.warn("FISCAL_SECRET not set; new TSE clients cannot be registered");
     return null;
   }
 })();
@@ -56,7 +56,7 @@ const boss = await startQueue(pool, directUrl, {
   messaging: { mail, sms, whatsapp, platformDomain },
   // Channex with CHANNEX_API_KEY (staging unless CHANNEX_URL says otherwise), else the in-memory fake
   channelManager: channels,
-  ...(fiscalKey ? { fiscal: { provider: fiscalProvider(), secret: fiscalKey } } : {}),
+  fiscal: { provider: fiscalProvider(), secret: fiscalKey },
   channelWebhook: workerUrl && channelWebhookSecret ? { url: `${workerUrl}/webhooks/${channels.name}`, secret: channelWebhookSecret } : undefined,
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });

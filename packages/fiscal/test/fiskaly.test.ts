@@ -41,6 +41,26 @@ describe("fiskaly SIGN DE", () => {
     await expect(p.sign({ tssId: "t", clientId: "c", txId: "x", amountsPerVatRate: [], amountsPerPaymentType: [] })).rejects.toBeInstanceOf(FiscalUnavailable);
   });
 
+  it("a transaction that started but did not finish is cancelled, or taken as signed when the TSE finished it after all", async () => {
+    for (const [seen, expectSigned] of [["ACTIVE", false], ["FINISHED", true]] as const) {
+      const calls: string[] = [];
+      const f = (async (url: string, init: RequestInit) => {
+        calls.push(`${init.method} ${url.split("/api/v2")[1] ?? url}`);
+        if (url.endsWith("/auth")) return Response.json({ access_token: "t", access_token_expires_in: 86400 });
+        if (url.includes("tx_revision=2") && String(init.body).includes("FINISHED")) return new Response("{}", { status: 503 });
+        if (init.method === "GET") return Response.json(seen === "FINISHED" ? tx : { state: "ACTIVE", latest_revision: 1 });
+        return Response.json({ state: "ACTIVE" });
+      }) as unknown as typeof fetch;
+      const p = new FiskalyProvider("key", "secret", f);
+      const run = p.sign({ tssId: "t1", clientId: "c1", txId: "x1", amountsPerVatRate: [{ vatRate: "NORMAL", amount: "1.00" }], amountsPerPaymentType: [] });
+      if (expectSigned) await expect(run).resolves.toMatchObject({ number: 7 });
+      else {
+        await expect(run).rejects.toBeInstanceOf(FiscalUnavailable);
+        expect(calls.at(-1)).toBe("PUT /tss/t1/tx/x1?tx_revision=2");
+      }
+    }
+  });
+
   it("the admin PIN is derived, the PUK sealed", () => {
     const secret = "a-fiscal-secret-of-length";
     expect(adminPinFor(secret, "tss")).toBe(adminPinFor(secret, "tss"));

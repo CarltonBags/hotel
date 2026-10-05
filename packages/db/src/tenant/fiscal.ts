@@ -12,11 +12,14 @@ import {
   fiscalSerial,
   fiscalVat,
   receiptVatAmounts,
+  refundVatAmounts,
   type ClosingTransaction,
   type FiscalBusinessCase,
   type FiscalScope,
+  type VatAmount,
 } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
+import { inTestMode } from "./go-live";
 import { stayComposition } from "./invoices";
 import { withTenant } from "./with-tenant";
 
@@ -34,12 +37,12 @@ import { withTenant } from "./with-tenant";
 
 export interface FiscalDeps {
   provider: FiscalProvider;
-  /** The platform's secret for the admin PIN and the sealed PUK. */
-  secret: string;
+  /** The platform's secret for the admin PIN and the sealed PUK: needed to set up a TSE and register clients, not to sign. */
+  secret: string | null;
 }
 
-/** A claim older than this is taken over (the signer died midway). */
-const STALE_CLAIM_SECONDS = 30;
+/** A claim older than this is taken over (the signer died midway); well beyond a signature's 5 seconds. */
+const STALE_CLAIM_SECONDS = 90;
 /** Who the fiscal module's own writes are by. */
 export const FISCAL_USER = "fiscal-module";
 const SOFTWARE = { brand: "Hoteloftware", version: "1.0" };
@@ -101,28 +104,65 @@ async function unitIn(tx: PoolClient, propertyId: string): Promise<(FiscalUnitVi
 
 /**
  * Set up the property's TSE (Property Manager): created and initialised at
- * the provider, its admin PIN derived, its PUK sealed. Once per property.
+ * the provider, its admin PIN derived, its PUK sealed, its clients
+ * registered. Once per property: a second click waits for the first. Not in
+ * Test Mode (a TSE is a real one).
  */
 export async function setUpFiscal(pool: Pool, schema: string, deps: FiscalDeps, propertyId: string, userId: string): Promise<FiscalUnitView> {
   if (!isUuid(propertyId)) throw new Error("Property not found");
-  const p = await withTenant(pool, schema, async (tx) => {
-    const row = (await tx.query<{ country: string; cash: boolean }>("select country, cash_desk as cash from properties where id = $1", [propertyId])).rows[0];
-    return row ? { ...row, unit: await unitIn(tx, propertyId) } : null;
-  });
-  if (!p) throw new Error("Property not found");
-  if (p.unit) return p.unit;
-  if (p.country !== "DE") throw new Error("The TSE is for properties in Germany");
-  if (!p.cash) throw new Error("Switch the cash desk on first (Settings → Cash desk)");
-  const tssId = randomUUID();
-  const created = await deps.provider.createTss(tssId, adminPinFor(deps.secret, tssId));
-  return withTenant(pool, schema, async (tx) => {
+  const secret = deps.secret;
+  if (!secret) throw new Error("The fiscal module is not configured (FISCAL_SECRET)");
+  const unit = await withTenant(pool, schema, async (tx) => {
+    // one set-up at a time per property, held across the provider's calls (rare, and nothing else waits on it)
+    await tx.query("select pg_advisory_xact_lock(hashtext('fiscal-setup:' || $1))", [propertyId]);
+    const had = await unitIn(tx, propertyId);
+    if (had) return had;
+    const p = (await tx.query<{ country: string; cash: boolean }>("select country, cash_desk as cash from properties where id = $1", [propertyId])).rows[0];
+    if (!p) throw new Error("Property not found");
+    if (p.country !== "DE") throw new Error("The TSE is for properties in Germany");
+    if (!p.cash) throw new Error("Switch the cash desk on first (Settings → Cash desk)");
+    if (await inTestMode(tx)) throw new Error("Set up the TSE after go-live: in Test Mode nothing is signed");
+    const tssId = randomUUID();
+    const created = await deps.provider.createTss(tssId, adminPinFor(secret, tssId));
     await tx.query(
       `insert into fiscal_units (property_id, provider, tss_id, tss_serial, public_key, signature_algorithm, timestamp_format, puk_sealed, created_by)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (property_id) do nothing`,
-      [propertyId, deps.provider.name, tssId, created.serialNumber, created.publicKey, created.signatureAlgorithm, created.timestampFormat, seal(deps.secret, created.adminPuk), userId],
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [propertyId, deps.provider.name, tssId, created.serialNumber, created.publicKey, created.signatureAlgorithm, created.timestampFormat, seal(secret, created.adminPuk), userId],
     );
     return (await unitIn(tx, propertyId))!;
   });
+  await registerFiscalClients(pool, schema, deps, propertyId);
+  return unit;
+}
+
+/**
+ * Every active Cash Register (and the desk) as a client of the TSE, made
+ * and registered at the provider where not yet: at set-up, after a register
+ * is added, and by the worker. Registering needs the admin PIN, so it never
+ * runs inside a signature.
+ */
+export async function registerFiscalClients(pool: Pool, schema: string, deps: FiscalDeps, propertyId: string): Promise<{ registered: number; failed: string[] }> {
+  const todo = await withTenant(pool, schema, async (tx) => {
+    const unit = await unitIn(tx, propertyId);
+    if (!unit) return null;
+    const registers = (await tx.query<{ id: string }>("select id from cash_registers where property_id = $1 and active", [propertyId])).rows;
+    for (const r of [...registers.map((x) => x.id), null]) await clientIn(tx, propertyId, r);
+    const open = (await tx.query<{ id: string; serial: string }>("select id, serial from fiscal_clients where property_id = $1 and registered_at is null", [propertyId])).rows;
+    return { unit, open };
+  });
+  const out = { registered: 0, failed: [] as string[] };
+  if (!todo || !todo.open.length) return out;
+  if (!deps.secret) return { registered: 0, failed: todo.open.map((c) => `${c.serial}: FISCAL_SECRET is not set`) };
+  for (const c of todo.open) {
+    try {
+      await deps.provider.registerClient(todo.unit.tssId, c.id, c.serial, adminPinFor(deps.secret, todo.unit.tssId));
+      await withTenant(pool, schema, (tx) => tx.query("update fiscal_clients set registered_at = clock_timestamp() where id = $1 and registered_at is null", [c.id]));
+      out.registered++;
+    } catch (err) {
+      out.failed.push(`${c.serial}: ${err instanceof Error ? err.message : "error"}`);
+    }
+  }
+  return out;
 }
 
 /** What is signed: every Receipt, or cash and vouchers only (the switch for after gate 3). */
@@ -148,6 +188,46 @@ async function clientIn(tx: PoolClient, propertyId: string, registerId: string |
   return { id: c.id, serial: c.serial, registeredAt: c.registered_at, dsfinvkRegisteredAt: c.dsfinvk_registered_at };
 }
 
+/**
+ * What a Receipt is to be signed with, written in the payment's transaction
+ * together with the Receipt: in Germany, once the TSE is in use, outside
+ * Test Mode, for a tender in scope. Its Business Date is the one it was
+ * issued on; a refund carries the VAT of the payment it gives back.
+ */
+export async function recordFiscalIn(tx: PoolClient, receiptId: string): Promise<void> {
+  const r = (await tx.query<{ property_id: string; register_id: string | null; amount: string; currency: string; tender: string; refund_of: string | null; folio_id: string; reservation_id: string; status: string; test: boolean; country: string; business_date: string }>(
+    `select rc.property_id, rc.register_id, p.amount, trim(p.currency) as currency, p.tender, p.refund_of, p.folio_id, p.reservation_id, r.status, r.test, pr.country,
+            to_char(coalesce(pr.business_date, (now() at time zone pr.time_zone)::date), 'YYYY-MM-DD') as business_date
+     from receipts rc join payments p on p.id = rc.payment_id join reservations r on r.id = p.reservation_id join properties pr on pr.id = rc.property_id
+     where rc.id = $1`,
+    [receiptId],
+  )).rows[0];
+  if (!r || r.country !== "DE" || r.test || (await inTestMode(tx))) return;
+  const unit = await unitIn(tx, r.property_id);
+  if (!unit || !fiscalScopeCovers(unit.scope, r.tender)) return;
+  const amount = Number(r.amount);
+  let amounts: VatAmount[];
+  let businessCase: FiscalBusinessCase;
+  const original = r.refund_of
+    ? (await tx.query<{ amounts: VatAmount[]; business_case: FiscalBusinessCase }>("select f.amounts, f.business_case from fiscal_transactions f join receipts rc on rc.id = f.receipt_id where rc.payment_id = $1", [r.refund_of])).rows[0]
+    : undefined;
+  if (original) {
+    amounts = refundVatAmounts(amount, original.amounts);
+    businessCase = original.business_case;
+  } else {
+    // what the money pays for: the folio's Charges, or before check-in the stay itself (as its Deposit Invoice)
+    const charges = (await tx.query<{ rate: string; gross: string }>("select tax_rate as rate, sum(amount) as gross from charges where folio_id = $1 and voided_at is null group by tax_rate", [r.folio_id])).rows.map((c) => ({ rate: Number(c.rate), gross: Number(c.gross) }));
+    amounts = receiptVatAmounts(amount, charges.length ? charges : await stayComposition(tx, r.reservation_id));
+    businessCase = r.status === "confirmed" ? "Anzahlungseinstellung" : "Umsatz";
+  }
+  const client = await clientIn(tx, r.property_id, r.register_id);
+  await tx.query(
+    `insert into fiscal_transactions (receipt_id, property_id, client_id, business_date, business_case, tender, currency, amount, amounts)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (receipt_id) do nothing`,
+    [receiptId, r.property_id, client.id, r.business_date, businessCase, r.tender, r.currency, amount, JSON.stringify(amounts)],
+  );
+}
+
 export type FiscalSignResult =
   | { state: "none" }
   | { state: "signing" }
@@ -155,116 +235,109 @@ export type FiscalSignResult =
   | { state: "failed"; propertyId: string; error: string; outageStarted: boolean };
 
 /**
- * Sign one Receipt (idempotent: a Receipt is signed once, a failed one never
- * later). Nothing to sign outside Germany, before the TSE is set up, in Test
- * Mode, or for a tender outside the scope.
+ * Sign one Receipt right after its payment (the desk's action, the worker
+ * for any left over): one signer at a time holds the claim and only that
+ * signer writes the outcome. A failed Receipt is never signed later, except
+ * that a TSE found to have signed it after all is followed. Within the
+ * provider's 5 seconds; a client not yet registered waits for the worker.
  */
 export async function signReceipt(pool: Pool, schema: string, deps: FiscalDeps, receiptId: string): Promise<FiscalSignResult> {
   if (!isUuid(receiptId)) return { state: "none" };
-  const claim = await withTenant(pool, schema, async (tx) => {
-    const r = (await tx.query<{ property_id: string; register_id: string | null; issued_at: Date; payment_id: string; amount: string; currency: string; tender: string; refund_of: string | null; folio_id: string; reservation_id: string; status: string; test: boolean; country: string; business_date: string }>(
-      `select rc.property_id, rc.register_id, rc.issued_at, p.id as payment_id, p.amount, trim(p.currency) as currency, p.tender, p.refund_of, p.folio_id, p.reservation_id, r.status, r.test, pr.country,
-              to_char(coalesce(pr.business_date, (now() at time zone pr.time_zone)::date), 'YYYY-MM-DD') as business_date
-       from receipts rc join payments p on p.id = rc.payment_id join reservations r on r.id = p.reservation_id join properties pr on pr.id = rc.property_id
-       where rc.id = $1 for update of rc`,
+  const claim = randomUUID();
+  const held = await withTenant(pool, schema, async (tx) => {
+    const f = (await tx.query<{ state: string; stale: boolean; attempts: number; property_id: string; client_id: string; amounts: VatAmount[]; tender: string; currency: string; amount: string }>(
+      `select state, coalesce(claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}), true) as stale, attempts, property_id, client_id, amounts, tender, trim(currency) as currency, amount
+       from fiscal_transactions where receipt_id = $1 for update`,
       [receiptId],
     )).rows[0];
-    if (!r || r.country !== "DE" || r.test) return null;
-    const unit = await unitIn(tx, r.property_id);
-    // Receipts from before the TSE was in use stay as they were
-    if (!unit || r.issued_at < unit.inUseSince || !fiscalScopeCovers(unit.scope, r.tender)) return null;
-    const had = (await tx.query<{ state: string; stale: boolean }>(`select state, claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}) as stale from fiscal_transactions where receipt_id = $1`, [receiptId])).rows[0];
-    if (had && had.state !== "signing") return { done: had.state as "signed" | "failed", propertyId: r.property_id };
-    if (had && !had.stale) return { busy: true as const };
-    const client = await clientIn(tx, r.property_id, r.register_id);
-    if (had) {
-      await tx.query("update fiscal_transactions set claimed_at = clock_timestamp(), attempts = attempts + 1 where receipt_id = $1", [receiptId]);
-    } else {
-      const amount = Number(r.amount);
-      // what the money pays for: the folio's Charges, or before check-in the stay itself (as its Deposit Invoice)
-      const charges = (await tx.query<{ rate: string; gross: string }>("select tax_rate as rate, sum(amount) as gross from charges where folio_id = $1 and voided_at is null group by tax_rate", [r.folio_id])).rows.map((c) => ({ rate: Number(c.rate), gross: Number(c.gross) }));
-      const parts = charges.length ? charges : await stayComposition(tx, r.reservation_id);
-      const businessCase: FiscalBusinessCase = r.status === "confirmed" ? "Anzahlungseinstellung" : "Umsatz";
-      await tx.query(
-        `insert into fiscal_transactions (receipt_id, property_id, client_id, state, business_date, business_case, tender, currency, amount, amounts)
-         values ($1, $2, $3, 'signing', $4, $5, $6, $7, $8, $9)`,
-        [receiptId, r.property_id, client.id, r.business_date, businessCase, r.tender, r.currency, amount, JSON.stringify(receiptVatAmounts(amount, parts))],
-      );
-    }
-    const row = (await tx.query<{ amounts: { rate: number | null; amount: number }[]; tender: string; currency: string; amount: string }>("select amounts, tender, currency, amount from fiscal_transactions where receipt_id = $1", [receiptId])).rows[0]!;
-    return { propertyId: r.property_id, unit, client, retry: !!had, row };
+    if (!f) return { kind: "none" as const };
+    if (f.state === "signed" || f.state === "failed") return { kind: "done" as const, signed: f.state === "signed", propertyId: f.property_id };
+    if (f.state === "signing" && !f.stale) return { kind: "busy" as const };
+    const client = (await tx.query<{ serial: string; registered: boolean }>("select serial, registered_at is not null as registered from fiscal_clients where id = $1", [f.client_id])).rows[0]!;
+    if (!client.registered) return { kind: "busy" as const };
+    const unit = (await unitIn(tx, f.property_id))!;
+    await tx.query("update fiscal_transactions set state = 'signing', claim = $2, claimed_at = clock_timestamp(), attempts = attempts + 1 where receipt_id = $1", [receiptId, claim]);
+    return { kind: "claimed" as const, row: f, unit, retry: f.attempts > 0 };
   });
-  if (!claim) return { state: "none" };
-  if ("busy" in claim) return { state: "signing" };
-  if ("done" in claim) {
-    if (claim.done === "signed") return { state: "signed", propertyId: claim.propertyId };
-    return { state: "failed", propertyId: claim.propertyId, error: FISCAL_OUTAGE_NOTICE, outageStarted: false };
-  }
-  const { unit, client, row } = claim;
+  if (held.kind === "none") return { state: "none" };
+  if (held.kind === "busy") return { state: "signing" };
+  if (held.kind === "done") return held.signed ? { state: "signed", propertyId: held.propertyId } : { state: "failed", propertyId: held.propertyId, error: FISCAL_OUTAGE_NOTICE, outageStarted: false };
+  const { row, unit } = held;
   let signed: SignedTx | null = null;
   let error = "";
   try {
-    if (!client.registeredAt) {
-      await deps.provider.registerClient(unit.tssId, client.id, client.serial, adminPinFor(deps.secret, unit.tssId));
-      await withTenant(pool, schema, (tx) => tx.query("update fiscal_clients set registered_at = clock_timestamp() where id = $1 and registered_at is null", [client.id]));
-    }
     const pay = fiscalPayment(row.tender);
     signed = await deps.provider.sign({
       tssId: unit.tssId,
-      clientId: client.id,
+      clientId: row.client_id,
       txId: receiptId,
-      retry: claim.retry,
+      retry: held.retry,
       amountsPerVatRate: row.amounts.map((a) => ({ vatRate: fiscalVat(a.rate).tse, amount: fiscalAmount(a.amount) })),
       amountsPerPaymentType: [{ paymentType: pay.tse, amount: fiscalAmount(Number(row.amount)), currency: row.currency }],
     });
   } catch (err) {
-    error = (err instanceof FiscalUnavailable || err instanceof Error ? err.message : "TSE not available").slice(0, 200) || "TSE not available";
+    error = (err instanceof FiscalUnavailable || err instanceof Error ? err.message : "").slice(0, 200) || "TSE not available";
   }
   return withTenant(pool, schema, async (tx) => {
+    const propertyId = row.property_id;
     if (signed) {
-      await tx.query(
-        `update fiscal_transactions set state = 'signed', number = $2, time_start = $3, time_end = $4, signature = $5, signature_counter = $6, algorithm = $7, public_key = $8,
-           tss_serial = $9, client_serial = $10, timestamp_format = $11, qr_code_data = $12, finished_at = clock_timestamp() where receipt_id = $1 and state = 'signing'`,
-        [receiptId, signed.number, signed.timeStart, signed.timeEnd, signed.signature, signed.signatureCounter, signed.algorithm, signed.publicKey, signed.tssSerial, signed.clientSerial, signed.timestampFormat, signed.qrCodeData],
-      );
-      // the TSE answers again: the outage ends
-      await tx.query("update fiscal_outages set ended_at = clock_timestamp() where client_id = $1 and ended_at is null", [client.id]);
-      return { state: "signed", propertyId: claim.propertyId };
+      const values = [receiptId, signed.number, signed.timeStart, signed.timeEnd, signed.signature, signed.signatureCounter, signed.algorithm, signed.publicKey, signed.tssSerial, signed.clientSerial, signed.timestampFormat, signed.qrCodeData, claim];
+      const set = `state = 'signed', claim = null, number = $2, time_start = $3, time_end = $4, signature = $5, signature_counter = $6, algorithm = $7, public_key = $8,
+        tss_serial = $9, client_serial = $10, timestamp_format = $11, qr_code_data = $12, error = null, finished_at = clock_timestamp()`;
+      // ours to write; or another signer marked it failed meanwhile while the TSE did sign it: the TSE's word stands
+      const n = (await tx.query(`update fiscal_transactions set ${set} where receipt_id = $1 and (claim = $13 or state = 'failed')`, values)).rowCount;
+      if (!n) return { state: "signing" };
+      // the TSE answers again: every open outage of the property ends
+      await tx.query("update fiscal_outages set ended_at = clock_timestamp() where property_id = $1 and ended_at is null", [propertyId]);
+      return { state: "signed", propertyId };
     }
-    await tx.query("update fiscal_transactions set state = 'failed', error = $2, finished_at = clock_timestamp() where receipt_id = $1 and state = 'signing'", [receiptId, error]);
-    const started = (await tx.query("insert into fiscal_outages (property_id, client_id, error) values ($1, $2, $3) on conflict (client_id) where ended_at is null do nothing returning id", [claim.propertyId, client.id, error])).rowCount;
-    return { state: "failed", propertyId: claim.propertyId, error, outageStarted: !!started };
+    const n = (await tx.query("update fiscal_transactions set state = 'failed', claim = null, error = $2, finished_at = clock_timestamp() where receipt_id = $1 and claim = $3", [receiptId, error, claim])).rowCount;
+    // another signer took it over: its outcome stands
+    if (!n) return { state: "signing" };
+    const started = (await tx.query("insert into fiscal_outages (property_id, client_id, error) values ($1, $2, $3) on conflict (client_id) where ended_at is null do nothing returning id", [propertyId, row.client_id, error])).rowCount;
+    return { state: "failed", propertyId, error, outageStarted: !!started };
   });
 }
 
-/** Receipts not signed yet (nobody opened them, or the signer died midway): signed by the worker. */
+/** The Receipts of a payment still to sign (the desk signs right after taking it). */
+export async function receiptsOfPaymentToSign(pool: Pool, schema: string, paymentId: string): Promise<string[]> {
+  if (!isUuid(paymentId)) return [];
+  return withTenant(pool, schema, async (tx) =>
+    (await tx.query<{ id: string }>("select f.receipt_id as id from fiscal_transactions f join receipts rc on rc.id = f.receipt_id where rc.payment_id = $1 and f.state in ('open', 'signing')", [paymentId])).rows.map((r) => r.id),
+  );
+}
+
+/** Receipts not signed yet (the desk's attempt did not happen, or the signer died midway): signed by the worker. */
 export async function receiptsToSign(pool: Pool, schema: string, limit = 50): Promise<string[]> {
   return withTenant(pool, schema, async (tx) =>
     (await tx.query<{ id: string }>(
-      `select rc.id from receipts rc join fiscal_units u on u.property_id = rc.property_id join payments p on p.id = rc.payment_id join reservations r on r.id = p.reservation_id
-       left join fiscal_transactions f on f.receipt_id = rc.id
-       where rc.issued_at >= u.in_use_since and not r.test and (u.scope = 'all' or p.tender = 'cash')
-         and (f.receipt_id is null or (f.state = 'signing' and f.claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS})))
-       order by rc.issued_at limit $1`,
+      `select receipt_id as id from fiscal_transactions
+       where state = 'open' or (state = 'signing' and claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}))
+       order by created_at limit $1`,
       [limit],
     )).rows.map((r) => r.id),
   );
 }
 
+/** Properties whose TSE is in use (the worker's per-tenant work is skipped without one). */
+export async function fiscalProperties(pool: Pool, schema: string): Promise<string[]> {
+  return withTenant(pool, schema, async (tx) => (await tx.query<{ property_id: string }>("select property_id from fiscal_units")).rows.map((r) => r.property_id));
+}
+
 /** What a Receipt prints of its signature: the TSE's data with the QR code, or the outage notice. */
 export type ReceiptFiscal =
-  | { state: "signed"; number: number; timeStart: Date; timeEnd: Date; signature: string; signatureCounter: number; algorithm: string; publicKey: string; tssSerial: string; clientSerial: string; timestampFormat: string; qrCodeData: string; amounts: { rate: number | null; amount: number }[] }
-  | { state: "failed"; notice: string; clientSerial: string; amounts: { rate: number | null; amount: number }[] }
-  | { state: "signing" };
+  | { state: "signed"; number: number; timeStart: Date; timeEnd: Date; signature: string; signatureCounter: number; algorithm: string; publicKey: string; tssSerial: string; clientSerial: string; timestampFormat: string; qrCodeData: string; amounts: VatAmount[]; businessCase: FiscalBusinessCase }
+  | { state: "failed"; notice: string; clientSerial: string; amounts: VatAmount[]; businessCase: FiscalBusinessCase }
+  | { state: "signing"; amounts: VatAmount[]; businessCase: FiscalBusinessCase };
 
 export async function receiptFiscalIn(tx: PoolClient, receiptId: string): Promise<ReceiptFiscal | null> {
-  const f = (await tx.query<{ state: string; number: string | null; time_start: Date | null; time_end: Date | null; signature: string | null; signature_counter: string | null; algorithm: string | null; public_key: string | null; tss_serial: string | null; client_serial: string | null; serial: string; timestamp_format: string | null; qr_code_data: string | null; amounts: { rate: number | null; amount: number }[] }>(
+  const f = (await tx.query<{ state: string; number: string | null; time_start: Date | null; time_end: Date | null; signature: string | null; signature_counter: string | null; algorithm: string | null; public_key: string | null; tss_serial: string | null; client_serial: string | null; serial: string; timestamp_format: string | null; qr_code_data: string | null; amounts: VatAmount[]; business_case: FiscalBusinessCase }>(
     "select f.*, c.serial from fiscal_transactions f join fiscal_clients c on c.id = f.client_id where f.receipt_id = $1",
     [receiptId],
   )).rows[0];
   if (!f) return null;
-  if (f.state === "signing") return { state: "signing" };
-  if (f.state === "failed") return { state: "failed", notice: FISCAL_OUTAGE_NOTICE, clientSerial: f.serial, amounts: f.amounts };
+  if (f.state === "open" || f.state === "signing") return { state: "signing", amounts: f.amounts, businessCase: f.business_case };
+  if (f.state === "failed") return { state: "failed", notice: FISCAL_OUTAGE_NOTICE, clientSerial: f.serial, amounts: f.amounts, businessCase: f.business_case };
   return {
     state: "signed",
     number: Number(f.number),
@@ -279,6 +352,7 @@ export async function receiptFiscalIn(tx: PoolClient, receiptId: string): Promis
     timestampFormat: f.timestamp_format!,
     qrCodeData: f.qr_code_data!,
     amounts: f.amounts,
+    businessCase: f.business_case,
   };
 }
 
@@ -294,7 +368,9 @@ export async function closeFiscalDay(pool: Pool, schema: string, deps: FiscalDep
     if (!unit) return null;
     const clients = (await tx.query<{ id: string; serial: string; name: string | null; dsfinvk_registered_at: Date | null; currency: string }>(
       `select c.id, c.serial, g.name, c.dsfinvk_registered_at, trim(p.currency) as currency from fiscal_clients c join properties p on p.id = c.property_id left join cash_registers g on g.id = c.register_id
-       where c.property_id = $1 and exists (select 1 from fiscal_transactions f where f.client_id = c.id and f.business_date = $2 and f.state <> 'signing')
+       where c.property_id = $1 and exists (select 1 from fiscal_transactions f where f.client_id = c.id and f.business_date = $2)
+         -- a Receipt of the day still being signed: the day waits for it
+         and not exists (select 1 from fiscal_transactions f where f.client_id = c.id and f.business_date = $2 and f.state in ('open', 'signing'))
          and not exists (select 1 from fiscal_closings z where z.client_id = c.id and z.business_date = $2 and z.state = 'completed')`,
       [propertyId, businessDate],
     )).rows;
@@ -308,23 +384,27 @@ export async function closeFiscalDay(pool: Pool, schema: string, deps: FiscalDep
         await deps.provider.registerCashRegister(c.id, work.unit.tssId, { brand: SOFTWARE.brand, model: c.name ?? "Rezeption", software: SOFTWARE, currency: c.currency });
         await withTenant(pool, schema, (tx) => tx.query("update fiscal_clients set dsfinvk_registered_at = clock_timestamp() where id = $1 and dsfinvk_registered_at is null", [c.id]));
       }
-      const { closingId, payload } = await withTenant(pool, schema, async (tx) => {
+      const { closingId, rowId, payload } = await withTenant(pool, schema, async (tx) => {
         await tx.query("select 1 from fiscal_clients where id = $1 for update", [c.id]);
-        let z = (await tx.query<{ id: string; export_number: number }>("select id, export_number from fiscal_closings where client_id = $1 and business_date = $2", [c.id, businessDate])).rows[0];
+        let z = (await tx.query<{ id: string; export_number: number; attempt_id: string; state: string }>("select id, export_number, attempt_id, state from fiscal_closings where client_id = $1 and business_date = $2", [c.id, businessDate])).rows[0];
         if (!z) {
-          z = (await tx.query<{ id: string; export_number: number }>(
-            "insert into fiscal_closings (property_id, client_id, business_date, export_number) values ($1, $2, $3, (select coalesce(max(export_number), 0) + 1 from fiscal_closings where client_id = $2)) returning id, export_number",
+          z = (await tx.query<{ id: string; export_number: number; attempt_id: string; state: string }>(
+            "insert into fiscal_closings (property_id, client_id, business_date, export_number) values ($1, $2, $3, (select coalesce(max(export_number), 0) + 1 from fiscal_closings where client_id = $2)) returning id, export_number, attempt_id, state",
             [propertyId, c.id, businessDate],
           )).rows[0]!;
+        } else if (z.state === "failed") {
+          // the provider refused the last attempt: sent anew, under a new id
+          z = (await tx.query<{ id: string; export_number: number; attempt_id: string; state: string }>("update fiscal_closings set state = 'pending', error = null, attempt_id = gen_random_uuid() where id = $1 returning id, export_number, attempt_id, state", [z.id])).rows[0]!;
         }
         const txs = (await tx.query<{ receipt_id: string; export_id: string; number: string | null; error: string | null; time_start: Date | null; time_end: Date | null; claimed_at: Date; business_case: FiscalBusinessCase; tender: string; currency: string; amounts: { rate: number | null; amount: number }[] }>(
-          "select receipt_id, export_id, number, error, time_start, time_end, claimed_at, business_case, tender, currency, amounts from fiscal_transactions where client_id = $1 and business_date = $2 and state <> 'signing' order by export_id",
+          "select receipt_id, export_id, number, error, time_start, time_end, coalesce(claimed_at, created_at) as claimed_at, business_case, tender, currency, amounts from fiscal_transactions where client_id = $1 and business_date = $2 order by export_id",
           [c.id, businessDate],
         )).rows;
         const transactions: ClosingTransaction[] = txs.map((t) => ({
           exportId: Number(t.export_id),
           number: t.number === null ? null : Number(t.number),
-          tssTxId: t.receipt_id,
+          // a Receipt the TSE never signed has no TSE transaction to name
+          tssTxId: t.number === null ? null : t.receipt_id,
           error: t.error,
           timeStart: t.time_start ?? t.claimed_at,
           timeEnd: t.time_end ?? t.claimed_at,
@@ -333,11 +413,11 @@ export async function closeFiscalDay(pool: Pool, schema: string, deps: FiscalDep
           currency: t.currency.trim(),
           amounts: t.amounts,
         }));
-        return { closingId: z.id, payload: dsfinvkClosing({ clientId: c.id, exportNumber: z.export_number, businessDate, createdAt: new Date(), currency: c.currency, transactions }) };
+        return { closingId: z.attempt_id, rowId: z.id, payload: dsfinvkClosing({ clientId: c.id, exportNumber: z.export_number, businessDate, createdAt: new Date(), currency: c.currency, transactions }) };
       });
       const s = await deps.provider.closing(closingId, payload);
       await withTenant(pool, schema, (tx) =>
-        tx.query("update fiscal_closings set state = $2, error = $3, finished_at = case when $2 = 'pending' then null else clock_timestamp() end where id = $1", [closingId, s.state === "completed" ? "completed" : s.state === "failed" ? "failed" : "pending", s.state === "failed" ? s.error : null]),
+        tx.query("update fiscal_closings set state = $2, error = $3, finished_at = case when $2 = 'pending' then null else clock_timestamp() end where id = $1", [rowId, s.state === "completed" ? "completed" : s.state === "failed" ? "failed" : "pending", s.state === "failed" ? s.error : null]),
       );
       if (s.state === "completed") out.completed++;
       else if (s.state === "failed") out.failed.push(`${c.serial}: ${s.error}`);
@@ -353,8 +433,11 @@ export async function fiscalDaysToClose(pool: Pool, schema: string): Promise<{ p
   return withTenant(pool, schema, async (tx) =>
     (await tx.query<{ property_id: string; d: string }>(
       `select distinct f.property_id, to_char(f.business_date, 'YYYY-MM-DD') as d from fiscal_transactions f join properties p on p.id = f.property_id
-       where f.state <> 'signing' and f.business_date < coalesce(p.business_date, (now() at time zone p.time_zone)::date)
-         and not exists (select 1 from fiscal_closings z where z.client_id = f.client_id and z.business_date = f.business_date and z.state = 'completed')
+       where f.state in ('signed', 'failed') and f.business_date < coalesce(p.business_date, (now() at time zone p.time_zone)::date)
+         and not exists (select 1 from fiscal_transactions o where o.client_id = f.client_id and o.business_date = f.business_date and o.state in ('open', 'signing'))
+         -- done, or refused within the hour (asked again later, not every minute)
+         and not exists (select 1 from fiscal_closings z where z.client_id = f.client_id and z.business_date = f.business_date
+                         and (z.state = 'completed' or (z.state = 'failed' and z.finished_at > now() - interval '1 hour')))
        order by 2 limit 50`,
     )).rows.map((r) => ({ propertyId: r.property_id, businessDate: r.d })),
   );
@@ -377,20 +460,22 @@ export async function fiscalArchive(
     const unit = await unitIn(tx, input.propertyId);
     if (!unit) throw new Error("Set up the TSE first");
     await tx.query("insert into fiscal_archives (property_id, kind, period_from, period_to, requested_by) values ($1, $2, $3, $4, $5) on conflict do nothing", [input.propertyId, input.kind, input.from, input.to, userId]);
-    const row = (await tx.query<{ id: string; state: string }>("select id, state from fiscal_archives where property_id = $1 and kind = $2 and period_from = $3 and period_to = $4 for update", [input.propertyId, input.kind, input.from, input.to])).rows[0]!;
-    // a failed one is asked again
-    if (row.state === "failed") await tx.query("update fiscal_archives set state = 'pending', error = null where id = $1", [row.id]);
-    return { id: row.id, state: row.state, tssId: unit.tssId };
+    let row = (await tx.query<{ id: string; state: string; attempt_id: string }>("select id, state, attempt_id from fiscal_archives where property_id = $1 and kind = $2 and period_from = $3 and period_to = $4 for update", [input.propertyId, input.kind, input.from, input.to])).rows[0]!;
+    // a failed one is asked again, under a new id at the provider
+    if (row.state === "failed") row = (await tx.query<{ id: string; state: string; attempt_id: string }>("update fiscal_archives set state = 'pending', error = null, attempt_id = gen_random_uuid() where id = $1 returning id, state, attempt_id", [row.id])).rows[0]!;
+    // the period in the property's own time: a German month starts at local midnight
+    const span = (await tx.query<{ f: Date; t: Date }>("select ($1::date)::timestamp at time zone p.time_zone as f, ($2::date + 1)::timestamp at time zone p.time_zone as t from properties p where p.id = $3", [input.from, input.to, input.propertyId])).rows[0]!;
+    return { id: row.id, attemptId: row.attempt_id, state: row.state, tssId: unit.tssId, from: span.f, to: new Date(span.t.getTime() - 1000) };
   });
   if (a.state !== "completed") {
     try {
       const s =
         input.kind === "tss"
-          ? await deps.provider.tssExport(a.tssId, a.id, new Date(`${input.from}T00:00:00Z`), new Date(`${input.to}T23:59:59Z`))
-          : await deps.provider.dsfinvkExport(a.id, input.from, input.to);
+          ? await deps.provider.tssExport(a.tssId, a.attemptId, a.from, a.to)
+          : await deps.provider.dsfinvkExport(a.attemptId, input.from, input.to);
       if (s.state === "completed" && s.file) {
         const key = tenantKey(deps.tenantId, "fiscal_archive", a.id);
-        await deps.store.put(key, s.file, input.kind === "tss" ? "application/x-tar" : "application/x-tar");
+        await deps.store.put(key, s.file, "application/x-tar");
         await withTenant(pool, schema, (tx) => tx.query("update fiscal_archives set state = 'completed', file_key = $2, bytes = $3, finished_at = clock_timestamp() where id = $1", [a.id, key, s.file!.length]));
       } else if (s.state === "failed") {
         await withTenant(pool, schema, (tx) => tx.query("update fiscal_archives set state = 'failed', error = $2, finished_at = clock_timestamp() where id = $1", [a.id, s.error]));
@@ -419,16 +504,18 @@ export async function fiscalArchiveFile(pool: Pool, schema: string, store: FileS
   return bytes ? { propertyId: r.property_id, kind: r.kind, periodFrom: r.period_from, periodTo: r.period_to, bytes } : null;
 }
 
-/** Months whose signed data is not archived yet (from the TSE's first month to last month). */
-export async function fiscalMonthsToArchive(pool: Pool, schema: string, today: string): Promise<{ propertyId: string; from: string; to: string }[]> {
+/** Months not archived yet, from the TSE's first month to last month: the TSE's signed data and the DSFinV-K export (a refused one again after a day). */
+export async function fiscalMonthsToArchive(pool: Pool, schema: string, today: string): Promise<{ propertyId: string; kind: "tss" | "dsfinvk"; from: string; to: string }[]> {
   return withTenant(pool, schema, async (tx) =>
-    (await tx.query<{ property_id: string; f: string; t: string }>(
-      `select u.property_id, to_char(m, 'YYYY-MM-DD') as f, to_char(m + interval '1 month' - interval '1 day', 'YYYY-MM-DD') as t
-       from fiscal_units u cross join lateral generate_series(date_trunc('month', u.in_use_since)::date, date_trunc('month', $1::date)::date - interval '1 month', interval '1 month') m
-       where not exists (select 1 from fiscal_archives a where a.property_id = u.property_id and a.kind = 'tss' and a.period_from = m::date and a.state = 'completed')
-       order by 2 limit 24`,
+    (await tx.query<{ property_id: string; kind: "tss" | "dsfinvk"; f: string; t: string }>(
+      `select u.property_id, k.kind, to_char(m, 'YYYY-MM-DD') as f, to_char(m + interval '1 month' - interval '1 day', 'YYYY-MM-DD') as t
+       from fiscal_units u cross join (values ('tss'), ('dsfinvk')) k(kind)
+       cross join lateral generate_series(date_trunc('month', u.in_use_since)::date, date_trunc('month', $1::date)::date - interval '1 month', interval '1 month') m
+       where not exists (select 1 from fiscal_archives a where a.property_id = u.property_id and a.kind = k.kind and a.period_from = m::date
+                         and (a.state = 'completed' or (a.state = 'failed' and a.finished_at > now() - interval '20 hours')))
+       order by 3, 2 limit 24`,
       [today],
-    )).rows.map((r) => ({ propertyId: r.property_id, from: r.f, to: r.t })),
+    )).rows.map((r) => ({ propertyId: r.property_id, kind: r.kind, from: r.f, to: r.t })),
   );
 }
 

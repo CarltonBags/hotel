@@ -8,10 +8,31 @@ export { FiskalyProvider } from "./fiskaly";
 export { adminPinFor, seal, unseal } from "./secrets";
 
 /** A provider that is not set up: every signature fails, so Receipts carry the outage notice and the managers hear of it. */
-class UnconfiguredFiscalProvider extends FakeFiscalProvider {
-  override down = true;
-  override async createTss(): Promise<never> {
+class UnconfiguredFiscalProvider implements FiscalProvider {
+  readonly name = "unconfigured";
+  private fail(): never {
     throw new FiscalUnavailable("The fiscal provider is not configured (FISKALY_API_KEY, FISKALY_API_SECRET)");
+  }
+  async createTss(): Promise<never> {
+    this.fail();
+  }
+  async registerClient(): Promise<never> {
+    this.fail();
+  }
+  async sign(): Promise<never> {
+    this.fail();
+  }
+  async registerCashRegister(): Promise<never> {
+    this.fail();
+  }
+  async closing(): Promise<never> {
+    this.fail();
+  }
+  async tssExport(): Promise<never> {
+    this.fail();
+  }
+  async dsfinvkExport(): Promise<never> {
+    this.fail();
   }
 }
 

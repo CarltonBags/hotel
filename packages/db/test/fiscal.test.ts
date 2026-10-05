@@ -21,9 +21,9 @@ import { setRates } from "../src/tenant/rates";
 import { createGuest } from "../src/tenant/guests";
 import { createBooking } from "../src/tenant/reservations";
 import { checkIn, postServiceCharge } from "../src/tenant/folios";
-import { takePayment } from "../src/tenant/payments";
+import { refundPayment, takePayment } from "../src/tenant/payments";
 import { createCashRegister, openShift, receiptByToken, setCashDesk } from "../src/tenant/cash";
-import { closeFiscalDay, fiscalArchive, fiscalArchiveFile, fiscalDaysToClose, fiscalRegistration, fiscalStatus, receiptsToSign, setFiscalScope, setUpFiscal, signReceipt } from "../src/tenant/fiscal";
+import { closeFiscalDay, fiscalArchive, fiscalArchiveFile, fiscalDaysToClose, fiscalRegistration, fiscalStatus, receiptsToSign, registerFiscalClients, setFiscalScope, setUpFiscal, signReceipt } from "../src/tenant/fiscal";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -88,19 +88,49 @@ describe("Fiscal module Germany", () => {
   it("a cash Receipt is signed with its VAT per rate and shows the TSE data and QR code; signing again changes nothing", async () => {
     front = await createCashRegister(pool, s(), berlin, "Front desk 1");
     await openShift(pool, s(), { registerId: front, count: { "50": 4 } }, asFd());
+    // a register added after the set-up: its first Receipt waits until the register is a registered client
+    const early = await receiptOf((await takePayment(pool, s(), payments, { reservationId: res, tender: "cash", amount: 1 }, fd)).id);
+    expect(await signReceipt(pool, s(), deps, early.id)).toEqual({ state: "signing" });
+    expect(await registerFiscalClients(pool, s(), deps, berlin)).toEqual({ registered: 1, failed: [] });
+    expect(await signReceipt(pool, s(), deps, early.id)).toMatchObject({ state: "signed" });
     // the folio holds 107 at 7 % (the night) and 119 at 19 % (minibar): 226 paid in cash
     const paid = await takePayment(pool, s(), payments, { reservationId: res, tender: "cash", amount: 226 }, fd);
     const rc = await receiptOf(paid.id);
     expect(await signReceipt(pool, s(), deps, rc.id)).toMatchObject({ state: "signed" });
     expect(await signReceipt(pool, s(), deps, rc.id)).toMatchObject({ state: "signed" });
-    expect(fiscal.signed.size).toBe(1);
+    expect(fiscal.signed.size).toBe(2);
     const sent = fiscal.signed.get(rc.id)!.input;
     expect(sent.amountsPerVatRate).toEqual([{ vatRate: "NORMAL", amount: "119.00" }, { vatRate: "REDUCED_1", amount: "107.00" }]);
     expect(sent.amountsPerPaymentType).toEqual([{ paymentType: "CASH", amount: "226.00", currency: "EUR" }]);
     const view = await receiptByToken(pool, s(), rc.token);
-    expect(view?.fiscal).toMatchObject({ state: "signed", number: 1, signatureCounter: 2, clientSerial: expect.stringMatching(/^HS-[0-9A-F]{32}$/), qrCodeData: expect.stringMatching(/^V0;/) });
+    expect(view?.fiscal).toMatchObject({ state: "signed", number: 2, signatureCounter: 4, businessCase: "Umsatz", clientSerial: expect.stringMatching(/^HS-[0-9A-F]{32}$/), qrCodeData: expect.stringMatching(/^V0;/) });
     // a signed transaction never changes
     await expect(pool.query(`update ${s()}.fiscal_transactions set signature = 'x'`)).rejects.toThrow(/never changes/);
+  });
+
+  it("a refund carries the VAT of the payment it gives back", async () => {
+    const paid = await takePayment(pool, s(), payments, { reservationId: res, tender: "cash", amount: 100 }, fd);
+    const first = await receiptOf(paid.id);
+    expect(await signReceipt(pool, s(), deps, first.id)).toMatchObject({ state: "signed" });
+    const back = await refundPayment(pool, s(), payments, { paymentId: paid.id, amount: 50, reason: "Overpaid" }, { userId: fd, unlimited: true });
+    const rc = await receiptOf(back.id);
+    expect(await signReceipt(pool, s(), deps, rc.id)).toMatchObject({ state: "signed" });
+    // half of each rate's share of the 100 paid (52.65 at 19 %, 47.35 at 7 %), to the cent, together -50
+    const given = fiscal.signed.get(first.id)!.input.amountsPerVatRate;
+    const back50 = fiscal.signed.get(rc.id)!.input.amountsPerVatRate;
+    expect(back50.map((a) => a.vatRate)).toEqual(given.map((a) => a.vatRate));
+    back50.forEach((a, i) => expect(Math.abs(Number(a.amount) + Number(given[i]!.amount) / 2)).toBeLessThanOrEqual(0.01));
+    expect(back50.reduce((x, a) => x + Number(a.amount), 0)).toBeCloseTo(-50, 5);
+  });
+
+  it("a signer that died midway is taken over; a live claim is left alone", async () => {
+    const rc = await receiptOf((await takePayment(pool, s(), payments, { reservationId: res, tender: "cash", amount: 4 }, fd)).id);
+    await pool.query(`update ${s()}.fiscal_transactions set state = 'signing', claim = gen_random_uuid(), claimed_at = now() where receipt_id = $1`, [rc.id]);
+    expect(await signReceipt(pool, s(), deps, rc.id)).toEqual({ state: "signing" });
+    expect(await receiptsToSign(pool, s())).not.toContain(rc.id);
+    await pool.query(`update ${s()}.fiscal_transactions set claimed_at = now() - interval '5 minutes' where receipt_id = $1`, [rc.id]);
+    expect(await receiptsToSign(pool, s())).toContain(rc.id);
+    expect(await signReceipt(pool, s(), deps, rc.id)).toMatchObject({ state: "signed" });
   });
 
   it("an outage: the payment goes through, the Receipt carries the notice, the outage is logged from start to end", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dsfinvkClosing, fiscalScopeCovers, fiscalSerial, fiscalVat, receiptVatAmounts } from "../src";
+import { refundVatAmounts, dsfinvkClosing, fiscalScopeCovers, fiscalSerial, fiscalVat, receiptVatAmounts } from "../src";
 
 describe("fiscal module Germany", () => {
   it("a payment is shared over the VAT rates of what it pays for, to the cent", () => {
@@ -10,6 +10,8 @@ describe("fiscal module Germany", () => {
     ]);
     // a refund keeps the signs
     expect(receiptVatAmounts(-100, [{ rate: 7, gross: 300 }, { rate: 19, gross: 50 }]).reduce((s, a) => s + a.amount, 0)).toBeCloseTo(-100, 5);
+    // a refund follows the payment it gives back
+    expect(refundVatAmounts(-50, [{ rate: 19, amount: 14.29 }, { rate: 7, amount: 85.71 }])).toEqual([{ rate: 19, amount: -7.15 }, { rate: 7, amount: -42.85 }]);
     // nothing to share by: VAT not determinable
     expect(receiptVatAmounts(40, [])).toEqual([{ rate: null, amount: 40 }]);
   });

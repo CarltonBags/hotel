@@ -37,16 +37,20 @@ begin
 end $$;
 create trigger fiscal_clients_fixed before update or delete on fiscal_clients for each row execute function fiscal_clients_fixed();
 
--- a Receipt's signature (or its outage): claimed while signing, then signed or failed, never changed after
+-- a Receipt's signature (or its outage): written with the Receipt (what it signs, on its Business Date), claimed by
+-- one signer at a time, then signed or failed; never changed after, except that a TSE found to have signed it after
+-- all is followed (failed -> signed)
 create table fiscal_transactions (
   receipt_id uuid primary key references receipts(id),
   -- BON_ID of the DSFinV-K export: ascending, never the TSE's own id
   export_id bigint generated always as identity unique,
   property_id uuid not null references properties(id),
   client_id uuid not null references fiscal_clients(id),
-  state text not null constraint fiscal_transactions_state_check check (state in ('signing', 'signed', 'failed')),
-  claimed_at timestamptz not null default clock_timestamp(),
-  attempts integer not null default 1,
+  state text not null default 'open' constraint fiscal_transactions_state_check check (state in ('open', 'signing', 'signed', 'failed')),
+  -- the signer holding it: only that signer writes the outcome
+  claim uuid,
+  claimed_at timestamptz,
+  attempts integer not null default 0,
   business_date date not null,
   business_case text not null constraint fiscal_transactions_case_check check (business_case in ('Umsatz', 'Anzahlungseinstellung')),
   tender text not null,
@@ -54,6 +58,7 @@ create table fiscal_transactions (
   amount numeric(12, 2) not null,
   -- per VAT rate: [{rate, amount}], rate null when not determinable
   amounts jsonb not null,
+  created_at timestamptz not null default clock_timestamp(),
   number bigint,
   time_start timestamptz,
   time_end timestamptz,
@@ -68,17 +73,23 @@ create table fiscal_transactions (
   error text,
   finished_at timestamptz,
   constraint fiscal_transactions_signed_check check (state <> 'signed' or (signature is not null and qr_code_data is not null and number is not null)),
-  constraint fiscal_transactions_failed_check check (state <> 'failed' or error is not null)
+  constraint fiscal_transactions_failed_check check (state <> 'failed' or error is not null),
+  constraint fiscal_transactions_claim_check check ((state = 'signing') = (claim is not null))
 );
-create index fiscal_transactions_day_idx on fiscal_transactions(client_id, business_date) where state <> 'signing';
+create index fiscal_transactions_day_idx on fiscal_transactions(client_id, business_date);
+create index fiscal_transactions_unsigned_idx on fiscal_transactions(created_at) where state in ('open', 'signing');
 
 create function fiscal_transactions_fixed() returns trigger language plpgsql set search_path from current as $$
 begin
-  if tg_op = 'DELETE' or old.state <> 'signing' then
+  if tg_op = 'DELETE' then
+    if clearing_test_records() then return old; end if;
+    raise exception 'A fiscal transaction is never deleted';
+  end if;
+  if old.state = 'signed' or (old.state = 'failed' and new.state <> 'signed') then
     raise exception 'A signed or failed fiscal transaction never changes';
   end if;
-  if (new.receipt_id, new.export_id, new.property_id, new.client_id, new.business_date, new.business_case, new.tender, new.currency, new.amount, new.amounts)
-     is distinct from (old.receipt_id, old.export_id, old.property_id, old.client_id, old.business_date, old.business_case, old.tender, old.currency, old.amount, old.amounts) then
+  if (new.receipt_id, new.export_id, new.property_id, new.client_id, new.business_date, new.business_case, new.tender, new.currency, new.amount, new.amounts, new.created_at)
+     is distinct from (old.receipt_id, old.export_id, old.property_id, old.client_id, old.business_date, old.business_case, old.tender, old.currency, old.amount, old.amounts, old.created_at) then
     raise exception 'A fiscal transaction keeps what it signs';
   end if;
   return new;
@@ -104,6 +115,8 @@ create table fiscal_closings (
   business_date date not null,
   -- Z_NR: ascending per client, never reset
   export_number integer not null,
+  -- the provider's id of the current attempt: a closing the provider refused is sent anew under a new id
+  attempt_id uuid not null default gen_random_uuid(),
   state text not null default 'pending' constraint fiscal_closings_state_check check (state in ('pending', 'completed', 'failed')),
   error text,
   created_at timestamptz not null default clock_timestamp(),
@@ -120,6 +133,8 @@ create table fiscal_archives (
   period_from date not null,
   period_to date not null,
   state text not null default 'pending' constraint fiscal_archives_state_check check (state in ('pending', 'completed', 'failed')),
+  -- the provider's id of the current attempt: a failed export is asked anew under a new id
+  attempt_id uuid not null default gen_random_uuid(),
   file_key text,
   bytes integer,
   error text,

@@ -1,18 +1,24 @@
 import type { Pool } from "pg";
-import { closeFiscalDay, fiscalArchive, fiscalDaysToClose, fiscalMonthsToArchive, receiptsToSign, signReceipt, FISCAL_USER, type FiscalDeps, type Tenant } from "@hoteloftware/db";
+import { FISCAL_USER, closeFiscalDay, fiscalArchive, fiscalDaysToClose, fiscalMonthsToArchive, fiscalProperties, receiptsToSign, registerFiscalClients, signReceipt, type FiscalDeps, type Tenant } from "@hoteloftware/db";
 import { todayIn } from "@hoteloftware/domain";
 import { notifyFiscalOutage } from "@hoteloftware/events";
 import type { FileStore } from "@hoteloftware/storage";
 
 /**
- * The fiscal module in the worker (ticket 51), every minute per tenant:
- * Receipts nobody opened yet are signed (an outage starting is told to the
- * managers); Business Dates behind the open one are closed for DSFinV-K;
- * at night, months not yet archived are fetched from the provider and kept.
+ * The fiscal module in the worker (ticket 51), every minute for a tenant
+ * with a TSE in use: clients registered, Receipts the desk could not sign
+ * signed (an outage starting is told to the managers), Business Dates
+ * behind the open one closed for DSFinV-K.
  */
-export async function runFiscal(pool: Pool, tenant: Tenant, deps: FiscalDeps & { store: FileStore }, now = new Date()): Promise<{ signed: number; failed: number; closed: number }> {
+export async function runFiscal(pool: Pool, tenant: Tenant, deps: FiscalDeps): Promise<{ signed: number; failed: number; closed: number }> {
   const s = tenant.schemaName;
   const out = { signed: 0, failed: 0, closed: 0 };
+  const properties = await fiscalProperties(pool, s);
+  if (!properties.length) return out;
+  for (const p of properties) {
+    const r = await registerFiscalClients(pool, s, deps, p);
+    for (const f of r.failed) console.error(`[fiscal] ${tenant.slug} client ${f}`);
+  }
   for (const id of await receiptsToSign(pool, s)) {
     const r = await signReceipt(pool, s, deps, id);
     if (r.state === "signed") out.signed++;
@@ -26,13 +32,20 @@ export async function runFiscal(pool: Pool, tenant: Tenant, deps: FiscalDeps & {
     out.closed += r.completed;
     for (const f of r.failed) console.error(`[fiscal] ${tenant.slug} closing ${d.businessDate}: ${f}`);
   }
-  // exports can hold up signing at the provider: only at night
-  const hour = Number(new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hour12: false, timeZone: "Europe/Berlin" }).format(now));
-  if (hour >= 2 && hour < 5) {
-    for (const m of await fiscalMonthsToArchive(pool, s, todayIn("Europe/Berlin"))) {
-      const a = await fiscalArchive(pool, s, { ...deps, tenantId: tenant.id }, { propertyId: m.propertyId, kind: "tss", from: m.from, to: m.to }, FISCAL_USER);
-      if (a.state === "failed") console.error(`[fiscal] ${tenant.slug} archive ${m.from}: ${a.error}`);
-    }
-  }
   return out;
+}
+
+/**
+ * At night (exports can hold up signing at the provider): each month's TSE
+ * data and DSFinV-K export fetched and kept outside the provider, which
+ * keeps them only for a while; asked again until the provider has them.
+ */
+export async function archiveFiscal(pool: Pool, tenant: Tenant, deps: FiscalDeps & { store: FileStore }): Promise<number> {
+  let done = 0;
+  for (const m of await fiscalMonthsToArchive(pool, tenant.schemaName, todayIn("Europe/Berlin"))) {
+    const a = await fiscalArchive(pool, tenant.schemaName, { ...deps, tenantId: tenant.id }, { propertyId: m.propertyId, kind: m.kind, from: m.from, to: m.to }, FISCAL_USER);
+    if (a.state === "completed") done++;
+    if (a.state === "failed") console.error(`[fiscal] ${tenant.slug} ${m.kind} archive ${m.from}: ${a.error}`);
+  }
+  return done;
 }

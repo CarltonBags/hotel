@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import QRCode from "qrcode";
 import { receiptByToken, signReceipt } from "@hoteloftware/db";
-import { formatCurrency, localeFor, roundMoney } from "@hoteloftware/domain";
+import { formatCurrency, localeFor, vatSplit } from "@hoteloftware/domain";
 import { notifyFiscalOutage } from "@hoteloftware/events";
 import { pool } from "@/lib/db";
 import { fiscalDeps } from "@/lib/fiscal";
@@ -24,16 +24,16 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
   const { token } = await params;
   let r = await receiptByToken(pool(), tenant.schemaName, token);
   if (!r) notFound();
-  const deps = fiscalDeps();
-  if (deps && (!r.fiscal || r.fiscal.state === "signing")) {
-    // signed here when first shown (the worker signs any nobody opens); the desk never waits more than the provider's timeout
-    const signed = await signReceipt(pool(), tenant.schemaName, deps, r.id).catch((err) => (console.error("[fiscal] sign", err), null));
+  if (r.fiscal?.state === "signing") {
+    // normally signed with the payment; one still open is tried once more here (the worker signs any left)
+    const signed = await signReceipt(pool(), tenant.schemaName, fiscalDeps(), r.id).catch((err) => (console.error("[fiscal] sign", err), null));
     if (signed?.state === "failed" && signed.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: signed.propertyId, error: signed.error }).catch(() => undefined);
     if (signed && signed.state !== "none") r = (await receiptByToken(pool(), tenant.schemaName, token)) ?? r;
   }
   const f = r.fiscal;
   const tse = f?.state === "signed" ? await QRCode.toString(f.qrCodeData, { type: "svg", margin: 1, errorCorrectionLevel: "L" }) : null;
   const unix = (d: Date) => Math.floor(d.getTime() / 1000);
+  const day = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}.`;
   const scheme = env.authUrl.startsWith("https") ? "https" : "http";
   const url = `${scheme}://${tenant.slug}.${env.appDomain}/receipt/${r.token}`;
   const qr = await QRCode.toString(url, { type: "svg", margin: 1 });
@@ -60,6 +60,11 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
         <dd className="text-right">{r.guestName}</dd>
         <dt>Buchung / Booking</dt>
         <dd className="text-right">{r.confirmationNumber}</dd>
+        {/* the service paid for (KassenSichV: type and quantity) */}
+        <dt>Leistung / Service</dt>
+        <dd className="text-right" data-receipt-service>
+          1 × {f?.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} {day(r.stay.arrival)}–{day(r.stay.departure)}
+        </dd>
         <dt>Zahlungsart / Tender</dt>
         <dd className="text-right">{tender}</dd>
         <dt className="font-bold">{r.refund ? "Erstattet / Refunded" : "Bezahlt / Paid"}</dt>
@@ -67,7 +72,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
           {money(Math.abs(r.amount))}
         </dd>
       </dl>
-      {f && f.state !== "signing" ? (
+      {f ? (
         <table className="w-full" data-receipt-vat>
           <thead>
             <tr>
@@ -79,13 +84,13 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
           </thead>
           <tbody>
             {f.amounts.map((a) => {
-              const net = a.rate ? roundMoney(a.amount / (1 + a.rate / 100)) : a.amount;
+              const v = vatSplit(a.amount, a.rate);
               return (
                 <tr key={String(a.rate)}>
                   <td>{a.rate === null ? "n. b." : `${String(a.rate).replace(".", ",")} %`}</td>
-                  <td className="text-right">{money(Math.abs(net))}</td>
-                  <td className="text-right">{money(Math.abs(roundMoney(a.amount - net)))}</td>
-                  <td className="text-right">{money(Math.abs(a.amount))}</td>
+                  <td className="text-right">{money(Math.abs(v.excl))}</td>
+                  <td className="text-right">{money(Math.abs(v.vat))}</td>
+                  <td className="text-right">{money(Math.abs(v.incl))}</td>
                 </tr>
               );
             })}

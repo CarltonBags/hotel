@@ -34,12 +34,31 @@ export function fiscalVat(rate: number | null): { tse: (typeof VAT)[number]["tse
   return { tse: v.tse, dsfinvk: v.dsfinvk };
 }
 
+/** An amount at one VAT rate; rate null: not determinable. */
+export interface VatAmount {
+  rate: number | null;
+  amount: number;
+}
+
+/** Net and VAT within a gross amount at a rate. */
+export function vatSplit(incl: number, rate: number | null): { incl: number; excl: number; vat: number } {
+  const excl = rate ? roundMoney(incl / (1 + rate / 100)) : roundMoney(incl);
+  return { incl: roundMoney(incl), excl, vat: roundMoney(incl - excl) };
+}
+
+/** A refund is shared over the rates of the payment it gives back, to the cent. */
+export function refundVatAmounts(refund: number, original: VatAmount[]): VatAmount[] {
+  if (!original.length) return [{ rate: null, amount: roundMoney(refund) }];
+  const shares = apportion(refund, original.map((a) => Math.abs(a.amount)));
+  return original.map((a, i) => ({ rate: a.rate, amount: shares[i]! }));
+}
+
 /**
  * A Receipt's amount per VAT rate: the payment shared out over what it pays
  * for (the stay's VAT for a deposit, the folio's Charges after check-in), to
  * the cent; nothing to share by: VAT not determinable.
  */
-export function receiptVatAmounts(amount: number, parts: { rate: number; gross: number }[]): { rate: number | null; amount: number }[] {
+export function receiptVatAmounts(amount: number, parts: { rate: number; gross: number }[]): VatAmount[] {
   const byRate = new Map<number, number>();
   for (const p of parts) if (p.gross > 0) byRate.set(p.rate, roundMoney((byRate.get(p.rate) ?? 0) + p.gross));
   if (!byRate.size) return [{ rate: null, amount: roundMoney(amount) }];
@@ -78,16 +97,16 @@ export interface ClosingTransaction {
   businessCase: FiscalBusinessCase;
   paymentType: "Bar" | "Unbar";
   currency: string;
-  amounts: { rate: number | null; amount: number }[];
+  amounts: VatAmount[];
 }
 
 const vatOf = (incl: number, rate: number | null) => {
-  const excl = rate ? roundMoney(incl / (1 + rate / 100)) : incl;
-  return { incl_vat: roundMoney(incl), excl_vat: excl, vat: roundMoney(incl - excl) };
+  const v = vatSplit(incl, rate);
+  return { incl_vat: v.incl, excl_vat: v.excl, vat: v.vat };
 };
 
-function perVat(amounts: { rate: number | null; amount: number }[]) {
-  const m = new Map<number, { rate: number | null; amount: number }>();
+function perVat(amounts: VatAmount[]) {
+  const m = new Map<number, VatAmount>();
   for (const a of amounts) {
     const id = fiscalVat(a.rate).dsfinvk;
     m.set(id, { rate: a.rate, amount: roundMoney((m.get(id)?.amount ?? 0) + a.amount) });
@@ -104,7 +123,7 @@ function perVat(amounts: { rate: number | null; amount: number }[]) {
 export function dsfinvkClosing(input: { clientId: string; exportNumber: number; businessDate: string; createdAt: Date; currency: string; transactions: ClosingTransaction[] }): Record<string, unknown> {
   const txs = [...input.transactions].sort((a, b) => a.exportId - b.exportId);
   if (!txs.length) throw new Error("A closing needs at least one Receipt");
-  const cases = new Map<FiscalBusinessCase, { rate: number | null; amount: number }[]>();
+  const cases = new Map<FiscalBusinessCase, VatAmount[]>();
   for (const t of txs) cases.set(t.businessCase, [...(cases.get(t.businessCase) ?? []), ...t.amounts]);
   const total = (ts: ClosingTransaction[]) => roundMoney(ts.reduce((s, t) => s + t.amounts.reduce((x, a) => x + a.amount, 0), 0));
   const payTypes = new Map<string, number>();
