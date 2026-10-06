@@ -869,7 +869,7 @@ export interface RoomChargeGuest {
   remaining: number;
 }
 
-async function roomChargeFactsIn(tx: PoolClient, propertyId: string, reservationId: string): Promise<{ status: string; blocked: boolean; covered: boolean; chargedTonight: number; limit: number; lastName: string; room: string | null }> {
+export async function roomChargeFactsIn(tx: PoolClient, propertyId: string, reservationId: string): Promise<{ status: string; blocked: boolean; covered: boolean; chargedTonight: number; limit: number; lastName: string; room: string | null }> {
   const r = (await tx.query<{ status: string; blocked: boolean; covered: boolean; charged: string; limit: string; last_name: string; room: string | null }>(
     `select r.status, r.room_charge_blocked as blocked, g.last_name, p.spending_limit as limit,
        (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = r.id and a.from_date <= p.business_date and a.to_date > p.business_date limit 1) as room,
@@ -945,7 +945,7 @@ export async function chargeBillToRoom(pool: Pool, schema: string, billId: strin
     const ids = await postRoomChargeIn(
       tx,
       input.reservationId,
-      b.id,
+      { outletBillId: b.id },
       a.perTax.map((t) => ({
         description: `${label}${t.discount ? ` (−${a.discountPercent} %)` : ""}`,
         taxCodeId: a.lines.find((l) => l.taxCode === t.taxCode)!.taxCodeId,

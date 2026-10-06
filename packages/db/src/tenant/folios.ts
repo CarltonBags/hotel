@@ -207,6 +207,7 @@ async function folioOfReservation(tx: PoolClient, res: ResRow, folioId: string):
 interface NewCharge {
   /** A Room Charge from an outlet (ticket 61): the bill, its items as detail. */
   outletBillId?: string | null;
+  tillPostingId?: string | null;
   detail?: unknown;
   serviceId: string | null;
   description: string;
@@ -228,9 +229,9 @@ async function insertCharge(tx: PoolClient, res: ResRow, userId: string, c: NewC
   const folioId = routeCharge(c.category, rules.rows.map((r) => ({ category: r.category, folioId: r.folio_id })), folios.rows[0]!.id);
   const taxRate = await rateOn(tx, c.taxCodeId, c.serviceDate);
   const { rows } = await tx.query<{ id: string }>(
-    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, component, posted_by, outlet_bill_id, detail)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) returning id`,
-    [folioId, res.id, res.property_id, c.serviceId, c.description, c.serviceDate, c.quantity, c.unitPrice, c.amount, c.taxCodeId, taxRate, c.revenueAccount, c.category, c.origin, c.component ?? null, userId, c.outletBillId ?? null, c.detail === undefined ? null : JSON.stringify(c.detail)],
+    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, component, posted_by, outlet_bill_id, detail, till_posting_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) returning id`,
+    [folioId, res.id, res.property_id, c.serviceId, c.description, c.serviceDate, c.quantity, c.unitPrice, c.amount, c.taxCodeId, taxRate, c.revenueAccount, c.category, c.origin, c.component ?? null, userId, c.outletBillId ?? null, c.detail === undefined ? null : JSON.stringify(c.detail), c.tillPostingId ?? null],
   );
   const id = rows[0]!.id;
   await tx.query("insert into charge_events (charge_id, user_id, action, detail) values ($1, $2, 'post', $3)", [id, userId, JSON.stringify({ folioId })]);
@@ -685,14 +686,15 @@ async function correctIn(tx: PoolClient, chargeId: string, reason: string, userI
 }
 
 /**
- * A Room Charge (ticket 61): an outlet bill on the stay's folio, one Charge
- * per Tax Code with the items as detail, routed like any extra, on the
- * Business Date. The caller has checked the stay may take it.
+ * A Room Charge (ticket 61): an outlet bill, or an external till's posting
+ * (ticket 65), on the stay's folio, one Charge per Tax Code with the items
+ * as detail, routed like any extra, on the Business Date. The caller has
+ * checked the stay may take it.
  */
 export async function postRoomChargeIn(
   tx: PoolClient,
   reservationId: string,
-  billId: string,
+  source: { outletBillId: string } | { tillPostingId: string },
   charges: { description: string; taxCodeId: string; revenueAccount: string; amount: number; detail: unknown }[],
   userId: string,
 ): Promise<string[]> {
@@ -702,7 +704,7 @@ export async function postRoomChargeIn(
   const ids: string[] = [];
   for (const c of charges) {
     ids.push(
-      await insertCharge(tx, res, userId, { serviceId: null, description: c.description, serviceDate: res.businessDate, quantity: 1, unitPrice: c.amount, amount: c.amount, taxCodeId: c.taxCodeId, revenueAccount: c.revenueAccount, category: "extras", origin: "outlet", outletBillId: billId, detail: c.detail }),
+      await insertCharge(tx, res, userId, { serviceId: null, description: c.description, serviceDate: res.businessDate, quantity: 1, unitPrice: c.amount, amount: c.amount, taxCodeId: c.taxCodeId, revenueAccount: c.revenueAccount, category: "extras", origin: "outlet", ...source, detail: c.detail }),
     );
   }
   return ids;

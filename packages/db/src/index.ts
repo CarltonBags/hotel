@@ -633,3 +633,23 @@ export { ORDER_SIGN_SECONDS, signOutletOrders } from "./tenant/fiscal-orders";
 export { applyOutletOps, outletSnapshot, type OpResult, type OutletOp, type OutletSnapshot } from "./tenant/outlet-sync";
 export { addSpaHours, appointmentsOfReservation, billAppointment, bookAppointment, bookAppointmentIn, cancelAppointment, changeSpaHours, markNoShow, saveSpaRoom, saveTherapist, saveTreatment, setSpaCancelHours, spaDay, spaGuests, spaSetup, type AppointmentInput, type SpaAppointment, type SpaDay } from "./tenant/spa";
 export { PortalSpaRefusal, bookPortalAppointment, cancelPortalAppointment, portalSpa, type PortalSpa, type PortalSpaRefusalCode } from "./tenant/portal-spa";
+export {
+  TillRefusal,
+  createTillConnection,
+  postTillCharge,
+  reconcileTillPosting,
+  recordTillRefusal,
+  rotateTillKey,
+  tillByKey,
+  tillConnectionsOf,
+  tillGuests,
+  tillPostings,
+  updateTillConnection,
+  type TillConnection,
+  type TillConnectionInput,
+  type TillGuest,
+  type TillPosted,
+  type TillPostingInput,
+  type TillPostingRow,
+  type TillRefusalCode,
+} from "./tenant/tills";

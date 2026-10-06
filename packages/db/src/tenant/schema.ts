@@ -827,6 +827,7 @@ export const charges = pgTable(
     corrects: uuid("corrects").references((): AnyPgColumn => charges.id),
     outletBillId: uuid("outlet_bill_id").references((): AnyPgColumn => outletBills.id),
     detail: jsonb("detail"),
+    tillPostingId: uuid("till_posting_id").references((): AnyPgColumn => tillPostings.id),
   },
   (t) => [
     index("charges_folio_idx").on(t.folioId),
@@ -3041,3 +3042,60 @@ export const tenantSchema = {
   spaHours,
   spaAppointments,
 };
+
+export const tillConnections = pgTable(
+  "till_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    keyHash: text("key_hash").notNull(),
+    keyHint: text("key_hint").notNull(),
+    businessReference: text("business_reference").notNull().default(""),
+    revenueAccount: text("revenue_account").notNull().default("8400"),
+    tipAccount: text("tip_account").notNull().default("1590"),
+    taxCodes: jsonb("tax_codes").notNull().default({}),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    check("till_connections_kind_check", sql`${t.kind} in ('api', 'lightspeed')`),
+    check("till_connections_name_check", sql`length(trim(${t.name})) between 1 and 60`),
+    unique("till_connections_key_hash_key").on(t.keyHash),
+    unique("till_connections_property_id_name_key").on(t.propertyId, t.name),
+  ],
+);
+
+export const tillPostings = pgTable(
+  "till_postings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    connectionId: uuid("connection_id").notNull().references(() => tillConnections.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    externalId: text("external_id").notNull(),
+    kind: text("kind").notNull(),
+    reservationId: uuid("reservation_id").references(() => reservations.id),
+    receiptNumber: text("receipt_number").notNull().default(""),
+    fiscalId: text("fiscal_id").notNull().default(""),
+    originalId: uuid("original_id").references((): AnyPgColumn => tillPostings.id),
+    total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+    tip: numeric("tip", { precision: 12, scale: 2 }).notNull().default("0"),
+    status: text("status").notNull(),
+    error: text("error"),
+    payload: jsonb("payload").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    reconciledAt: timestamp("reconciled_at", { withTimezone: true }),
+    reconciledBy: text("reconciled_by"),
+    reconcileNote: text("reconcile_note"),
+  },
+  (t) => [
+    check("till_postings_kind_check", sql`${t.kind} in ('charge', 'reversal')`),
+    check("till_postings_status_check", sql`${t.status} in ('posted', 'rejected')`),
+    check("till_postings_reconciled_check", sql`${t.reconciledAt} is null or ${t.status} = 'rejected'`),
+    unique("till_postings_connection_id_external_id_key").on(t.connectionId, t.externalId),
+    index("till_postings_open_idx").on(t.propertyId, t.receivedAt).where(sql`${t.status} = 'rejected' and ${t.reconciledAt} is null`),
+    uniqueIndex("till_postings_reversed_key").on(t.originalId).where(sql`${t.status} = 'posted'`),
+  ],
+);
