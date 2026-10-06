@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "migrate": "tsx src/cli/migrate.ts",
     "provision": "tsx src/cli/provision.ts",
-    "check-tenant-sql": "tsx src/cli/check-tenant-sql.ts"
+    "check-tenant-sql": "tsx src/cli/check-tenant-sql.ts",
+    "publish-bridge-plugin": "tsx src/cli/publish-bridge-plugin.ts"
   },
   "dependencies": {
     "@hoteloftware/channels": "workspace:*",
@@ -31,6 +32,7 @@
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@hoteloftware/bridge-kit": "workspace:*",
     "@types/node": "^20",
     "@types/pg": "^8.23.1",
     "dotenv": "^18.0.4",

@@ -16,6 +16,7 @@ import { fileStore } from "@hoteloftware/storage";
 import type { ChannelManager } from "@hoteloftware/channels";
 import { pullChannelBookings, pushTenantChannels } from "./channels";
 import { archiveFiscal, runFiscal } from "./fiscal";
+import { alertLostBridges } from "./bridge";
 import { syncLockKeys, type FiscalDeps, type LockDeps } from "@hoteloftware/db";
 
 export const QUEUES = {
@@ -62,6 +63,9 @@ export const QUEUES = {
   /** Every minute: door keys brought in line with check-ins, extensions, room moves and check-outs, one job per tenant (ticket 67). */
   locksAll: "locks.sync.all",
   locks: "locks.sync",
+  /** Every minute: Site Bridges gone quiet alert their Property Managers (ticket 68). */
+  bridgesAll: "bridges.health.all",
+  bridges: "bridges.health",
 } as const;
 
 /**
@@ -357,6 +361,20 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
         .catch((err: unknown) => console.error("[locks] notify", err));
     });
   }
+
+  await boss.work<TenantJobData>(QUEUES.bridges, async (jobs) => {
+    for (const job of jobs) {
+      const tenant = await findTenantById(pool, job.data.tenantId);
+      if (!tenant) continue;
+      const n = await alertLostBridges(pool, tenant);
+      if (n) console.log(`[bridges] ${tenant.slug}: ${n} Site Bridge(s) lost`);
+    }
+  });
+  await boss.work(QUEUES.bridgesAll, async () => {
+    const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+    for (const t of rows) await boss.send(QUEUES.bridges, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `bridges:${t.id}`, singletonSeconds: 50 });
+  });
+  await boss.schedule(QUEUES.bridgesAll, "* * * * *", {}, { tz: "Europe/Berlin" });
 
   await boss.work<TenantJobData>(QUEUES.groups, async (jobs) => {
     for (const job of jobs) {

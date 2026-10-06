@@ -46,6 +46,7 @@ export default async function LockSettingsPage() {
           {hidden}
           <Select label={m["locks.system"]} name="system" options={selectableLockSystems().map((s) => ({ value: s, label: label(`locks.system.${s}`) }))} defaultValue={setup.system} />
           <Field label={m["locks.otherName"]} name="otherName" defaultValue={setup.otherName} />
+          <Field label={m["locks.bridgePlugin"]} name="bridgePlugin" defaultValue={setup.bridgePlugin} />
           <Select label={m["locks.handover"]} name="handover" options={KEY_HANDOVERS.map((h) => ({ value: h, label: label(`locks.handover.${h}`) }))} defaultValue={setup.handover} />
           <Field label={m["locks.grace"]} name="graceMinutes" type="number" defaultValue={String(setup.graceMinutes)} />
           <Field label={m["locks.secret"]} name="secret" type="password" defaultValue="" autoComplete="off" />

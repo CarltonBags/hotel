@@ -479,7 +479,33 @@ export const senderDomains = control.table("sender_domains", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const bridgeTokens = control.table("bridge_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  bridgeId: uuid("bridge_id").notNull().unique("bridge_tokens_bridge_id_key"),
+});
+
+export const bridgePluginVersions = control.table(
+  "bridge_plugin_versions",
+  {
+    name: text("name").notNull(),
+    version: text("version").notNull(),
+    kind: text("kind").notNull(),
+    code: text("code").notNull(),
+    sha256: text("sha256").notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.name, t.version] }),
+    check("bridge_plugin_versions_name_check", sql`${t.name} ~ '^[a-z0-9-]{2,40}$'`),
+    check("bridge_plugin_versions_version_check", sql`${t.version} ~ '^\\d+\\.\\d+\\.\\d+$'`),
+    check("bridge_plugin_versions_kind_check", sql`${t.kind} in ('lock', 'till')`),
+  ],
+);
+
 export const controlSchema = {
+  bridgeTokens,
+  bridgePluginVersions,
   senderDomains,
   supportStaff,
   supportAccesses,
@@ -514,4 +540,3 @@ export const controlSchema = {
   subscriptionReminders,
   tenantDeletions,
 };
-

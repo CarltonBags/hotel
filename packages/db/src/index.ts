@@ -654,3 +654,20 @@ export {
   type TillRefusalCode,
 } from "./tenant/tills";
 export { issueCardKey, lockSetup, readKeyCard, reservationKeys, revokeRoomKey, saveLockSettings, setDeskEncoder, setLateCheckout, setLockDoor, syncLockKeys, type LockDeps, type LockSettingsInput, type LockSetup, type ReservationKeys } from "./tenant/locks";
+export {
+  awaitBridgeCommand,
+  bridgeCheckIn,
+  bridgeHasWork,
+  bridgeLockPlugin,
+  bridgePluginCode,
+  enrollSiteBridge,
+  lostSiteBridges,
+  pushBridgePlugin,
+  revokeSiteBridge,
+  sendBridgeCommand,
+  siteBridges,
+  type BridgeCommand,
+  type BridgePluginReport,
+  type SiteBridgeView,
+} from "./tenant/site-bridge";
+export { bridgeByToken, bridgePluginVersions, publishBridgePlugin } from "./control/site-bridge";

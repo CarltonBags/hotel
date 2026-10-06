@@ -20,7 +20,7 @@ export async function lockSettingsAction(_prev: FormState, formData: FormData): 
       pool(),
       p.tenant.schemaName,
       propertyId,
-      { system: field(formData, "system"), otherName: field(formData, "otherName"), handover: field(formData, "handover"), graceMinutes: Number(field(formData, "graceMinutes")), secret: field(formData, "secret") || null },
+      { system: field(formData, "system"), otherName: field(formData, "otherName"), handover: field(formData, "handover"), graceMinutes: Number(field(formData, "graceMinutes")), secret: field(formData, "secret") || null, bridgePlugin: field(formData, "bridgePlugin") },
       viewerOf(p),
       lockDeps(),
     );

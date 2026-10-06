@@ -15,6 +15,22 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  apps/bridge:
+    dependencies:
+      '@hoteloftware/bridge-kit':
+        specifier: workspace:*
+        version: link:../../packages/bridge-kit
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   apps/guest:
     dependencies:
       '@hoteloftware/ui':
@@ -235,6 +251,28 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)
 
+  packages/bridge-kit:
+    dependencies:
+      '@hoteloftware/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@hoteloftware/locks':
+        specifier: workspace:*
+        version: link:../locks
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)
+
   packages/channels:
     devDependencies:
       '@types/node':
@@ -283,6 +321,9 @@ importers:
         specifier: ^8.23.0
         version: 8.23.0
     devDependencies:
+      '@hoteloftware/bridge-kit':
+        specifier: workspace:*
+        version: link:../bridge-kit
       '@types/node':
         specifier: ^20
         version: 20.19.43
