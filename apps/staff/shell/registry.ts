@@ -102,6 +102,7 @@ export const MODULES: ModuleDef[] = [
   { id: "outlets", group: "front_desk", label: "module.outlets", icon: "UtensilsCrossed", hue: "#e2552b", href: "/outlet", requiresProperty: "outlet_cash", requiresModule: "point_of_sale" },
   { id: "till_postings", group: "cash_billing", label: "module.till_postings", icon: "Receipt", hue: "#e2552b", href: "/till-postings", requiresProperty: "post_charges" },
   { id: "settings_tills", group: "settings", label: "module.settings_tills", icon: "Share2", hue: "#e2552b", href: "/settings/tills", requiresProperty: "manage_outlets" },
+  { id: "settings_locks", group: "settings", label: "module.settings_locks", icon: "KeyRound", hue: "#b98900", href: "/settings/locks", requiresProperty: "manage_property_settings" },
   { id: "settings_channels", group: "settings", label: "module.settings_channels", icon: "Share2", hue: "#4f5bd5", href: "/settings/channels", requiresProperty: "manage_rates" },
   { id: "settings_canton", group: "settings", label: "module.settings_canton", icon: "FileSignature", hue: "#e0457b", href: "/settings/canton", requiresProperty: "manage_property_settings" },
   { id: "settings_whatsapp", group: "settings", label: "module.settings_whatsapp", icon: "MessageCircle", hue: "#1fa971", href: "/settings/whatsapp", requiresProperty: "manage_property_settings", requiresModule: "whatsapp" },

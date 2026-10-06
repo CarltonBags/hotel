@@ -57,6 +57,8 @@ const boss = await startQueue(pool, directUrl, {
   // Channex with CHANNEX_API_KEY (staging unless CHANNEX_URL says otherwise), else the in-memory fake
   channelManager: channels,
   fiscal: { provider: fiscalProvider(), at: atFiscalProvider(), secret: fiscalKey },
+  // door-lock credentials and door PINs are sealed with the platform's auth secret (ticket 67)
+  locks: { sealKey: required("BETTER_AUTH_SECRET") },
   channelWebhook: workerUrl && channelWebhookSecret ? { url: `${workerUrl}/webhooks/${channels.name}`, secret: channelWebhookSecret } : undefined,
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });
