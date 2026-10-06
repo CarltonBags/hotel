@@ -22,6 +22,7 @@ import {
 import { paymentProvider } from "@hoteloftware/payments";
 import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
+import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { signPaymentReceipts } from "@/lib/fiscal";
 import { formAction, type FormState } from "@/lib/form";
@@ -54,16 +55,18 @@ const done = async (tenantId: string, reservation: { id: string; propertyId: str
 
 export async function takePaymentAction(
   reservationId: string,
-  input: { folioId: string; tender: string; amount: number; readerId?: string; reference?: string },
+  input: { folioId: string; tender: string; amount: number; readerId?: string; reference?: string; voucherCode?: string },
 ): Promise<FormState & { paymentId?: string; pending?: boolean }> {
   let extra: { paymentId?: string; pending?: boolean } = {};
   const state = await formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "take_payments");
+    // redeeming a Voucher is the desk's (matrix "Sell and redeem Vouchers at the desk"), not every role that takes payments
+    if (input?.tender === "voucher") await authorize("sell_vouchers", reservation.propertyId);
     const p = await takePayment(
       pool(),
       schema,
       paymentProvider(),
-      { reservationId: reservation.id, folioId: String(input?.folioId ?? "") || undefined, tender: String(input?.tender), amount: Number(input?.amount), readerId: input?.readerId ? String(input.readerId) : undefined, reference: String(input?.reference ?? "") },
+      { reservationId: reservation.id, folioId: String(input?.folioId ?? "") || undefined, tender: String(input?.tender), amount: Number(input?.amount), readerId: input?.readerId ? String(input.readerId) : undefined, reference: String(input?.reference ?? ""), voucherCode: input?.voucherCode ? String(input.voucherCode) : undefined },
       userId,
     );
     extra = { paymentId: p.id, pending: p.status === "pending" };

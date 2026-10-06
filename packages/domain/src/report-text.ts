@@ -88,9 +88,12 @@ export const REPORT_TEXT = {
   cashIn: { en: "Cash in", de: "Einnahmen" },
   cashOut: { en: "Cash out", de: "Ausgaben" },
   paidOuts: { en: "Paid-outs", de: "Auszahlungen" },
+  vouchersSold: { en: "Vouchers sold (liability)", de: "Gutscheinverkauf (Verbindlichkeit)" },
+  voucherLiability: { en: "Vouchers sold (every tender), liability account", de: "Verkaufte Gutscheine (alle Zahlungsarten), Verbindlichkeitskonto" },
+  vouchersOpen: { en: "Vouchers outstanding at the period's end (company)", de: "Offene Gutscheine am Periodenende (Firma)" },
   deposits: { en: "Bank deposits", de: "Bankeinzahlungen" },
   differences: { en: "Cash Differences", de: "Kassendifferenzen" },
   user: { en: "User", de: "Benutzer" },
   shifts: { en: "Shifts", de: "Schichten" },
-  cashNote: { en: "Cash Book by Business Date; Cash Differences of the Shifts closed in the period, per user.", de: "Kassenbuch nach Geschäftstag; Kassendifferenzen der im Zeitraum geschlossenen Schichten, je Benutzer." },
+  cashNote: { en: "Cash Book by Business Date; Cash Differences of the Shifts closed in the period, per user. Vouchers sold are a liability, not revenue, on the account shown; the column “Vouchers sold” per register counts the cash sales.", de: "Kassenbuch nach Geschäftstag; Kassendifferenzen der im Zeitraum geschlossenen Schichten, je Benutzer. Verkaufte Gutscheine sind eine Verbindlichkeit, kein Umsatz, auf dem genannten Konto; die Spalte „Gutscheinverkauf“ je Kasse zählt die Barverkäufe." },
 } satisfies Record<string, Text>;

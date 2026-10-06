@@ -364,7 +364,8 @@ export async function stayComposition(tx: PoolClient, reservationId: string): Pr
 }
 
 /** Tenders whose money the hotel receives: a payment by them before check-in needs a Deposit Invoice. */
-const RECEIVED = new Set(["card_terminal", "card_online", "bank_transfer", "ota_virtual_card"]);
+// a Voucher redeemed before check-in is money for the stay as much as a card's (its VAT arises now)
+const RECEIVED = new Set(["card_terminal", "card_online", "bank_transfer", "ota_virtual_card", "voucher"]);
 
 /**
  * Before money is taken ahead of check-in: the stay must be taxable as a

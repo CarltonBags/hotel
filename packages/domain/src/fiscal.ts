@@ -83,7 +83,10 @@ export function fiscalAmount(n: number): string {
 }
 
 /** Money paid before the stay began is a deposit (Anzahlung); after, it settles the stay's sales. */
-export type FiscalBusinessCase = "Anzahlungseinstellung" | "Umsatz";
+export type FiscalBusinessCase = "Anzahlungseinstellung" | "Umsatz" | "MehrzweckgutscheinKauf";
+
+/** A closing line's text, per business case. */
+const CLOSING_TEXT: Record<FiscalBusinessCase, string> = { Umsatz: "Zahlung Aufenthalt", Anzahlungseinstellung: "Anzahlung Aufenthalt", MehrzweckgutscheinKauf: "Wertgutschein Verkauf" };
 
 export interface ClosingTransaction {
   /** BON_ID: ascending per tenant, never the TSE's own id. */
@@ -149,7 +152,7 @@ export function dsfinvkClosing(input: { clientId: string; exportNumber: number; 
         full_amount_incl_vat: total([t]),
         payment_types: [{ type: t.paymentType, currency_code: t.currency, amount: total([t]) }],
         amounts_per_vat_id: perVat(t.amounts),
-        lines: [{ business_case: { type: t.businessCase, amounts_per_vat_id: perVat(t.amounts) }, lineitem_export_id: "1", storno: false, text: t.businessCase === "Umsatz" ? "Zahlung Aufenthalt" : "Anzahlung Aufenthalt", item: { number: "1", quantity: 1, price_per_unit: total([t]) } }],
+        lines: [{ business_case: { type: t.businessCase, amounts_per_vat_id: perVat(t.amounts) }, lineitem_export_id: "1", storno: false, text: CLOSING_TEXT[t.businessCase], item: { number: "1", quantity: 1, price_per_unit: total([t]) } }],
       },
       security: t.tssTxId && !t.error ? { tss_tx_id: t.tssTxId } : { error_message: (t.error ?? "TSE nicht erreichbar").slice(0, 200) },
     })),

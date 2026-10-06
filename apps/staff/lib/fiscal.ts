@@ -22,10 +22,12 @@ export function fiscalDeps(): FiscalDeps {
  */
 export async function signPaymentReceipts(tenant: { id: string; schemaName: string }, paymentId: string | undefined): Promise<void> {
   if (!paymentId) return;
-  const deps = fiscalDeps();
-  for (const id of await receiptsOfPaymentToSign(pool(), tenant.schemaName, paymentId).catch(() => [])) {
-    const r = await signReceipt(pool(), tenant.schemaName, deps, id).catch((err) => (console.error("[fiscal] sign", err), null));
-    if (r?.state === "failed" && r.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: r.propertyId, error: r.error }).catch(() => undefined);
-    if (r?.state === "refused" && r.newly) await notifyReceiptRefused(pool(), tenant, { propertyId: r.propertyId, error: r.error ?? "" }).catch(() => undefined);
-  }
+  for (const id of await receiptsOfPaymentToSign(pool(), tenant.schemaName, paymentId).catch(() => [])) await signIssuedReceipt(tenant, id);
+}
+
+/** Sign a Receipt right after it was issued (a Voucher sold, ticket 53). */
+export async function signIssuedReceipt(tenant: { id: string; schemaName: string }, receiptId: string): Promise<void> {
+  const r = await signReceipt(pool(), tenant.schemaName, fiscalDeps(), receiptId).catch((err) => (console.error("[fiscal] sign", err), null));
+  if (r?.state === "failed" && r.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: r.propertyId, error: r.error }).catch(() => undefined);
+  if (r?.state === "refused" && r.newly) await notifyReceiptRefused(pool(), tenant, { propertyId: r.propertyId, error: r.error ?? "" }).catch(() => undefined);
 }

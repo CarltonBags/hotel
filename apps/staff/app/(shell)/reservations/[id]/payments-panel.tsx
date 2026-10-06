@@ -248,7 +248,7 @@ export function PaymentsPanel({
           ) : null}
           <label className="grid gap-1">
             <span className="text-ink-80">{m["pay.tender"]}</span>
-            <select value={tender} onChange={(e) => setTender(e.target.value)} className={input}>
+            <select value={tender} onChange={(e) => (setTender(e.target.value), setReference(""))} className={input}>
               {DESK_TENDERS.filter((t) => t !== "cash" || cash).map((t) => (
                 <option key={t} value={t}>
                   {m[`pay.tender.${t}`]}
@@ -266,6 +266,12 @@ export function PaymentsPanel({
             ) : (
               <span className="text-xs text-danger">{m["pay.noReader"]}</span>
             )
+          ) : tender === "voucher" ? (
+            <label className="grid gap-1">
+              <span className="text-ink-80">{m["pay.voucherCode"]}</span>
+              {/* the Voucher's code, as on the guest's email (ticket 53) */}
+              <input value={reference} onChange={(e) => setReference(e.target.value)} maxLength={20} placeholder="XXXX-XXXX-XXXX" className={`${input} font-mono uppercase`} data-voucher-code />
+            </label>
           ) : (
             <label className="grid gap-1">
               <span className="text-ink-80">{m["pay.reference"]}</span>
@@ -275,7 +281,12 @@ export function PaymentsPanel({
           <button
             type="button"
             disabled={pending || !(amountValue > 0) || (viaReader && !reader)}
-            onClick={() => run(() => takePaymentAction(reservationId, { folioId: folio?.id ?? "", tender, amount: amountValue, readerId: reader, reference }), () => (setAmount(""), setReference("")))}
+            onClick={() =>
+              run(
+                () => takePaymentAction(reservationId, tender === "voucher" ? { folioId: folio?.id ?? "", tender, amount: amountValue, voucherCode: reference } : { folioId: folio?.id ?? "", tender, amount: amountValue, readerId: reader, reference }),
+                () => (setAmount(""), setReference("")),
+              )
+            }
             className={`${button} bg-accent text-white disabled:opacity-40`}
           >
             {m["pay.submit"]}

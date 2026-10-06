@@ -76,6 +76,7 @@ export const MODULES: ModuleDef[] = [
   { id: "cash_book", group: "cash_billing", label: "module.cash_book", icon: "Wallet", hue: "#1fa971", href: "/cash", requiresProperty: "view_cash_desk" },
   soon("open_folios", "cash_billing", "module.open_folios", "Receipt", "#0071e3", 26),
   { id: "receivables", group: "cash_billing", label: "module.receivables", icon: "FileText", hue: "#4f5bd5", href: "/receivables", requiresProperty: "manage_receivables" },
+  { id: "vouchers", group: "cash_billing", label: "module.vouchers", icon: "Gift", hue: "#e0457b", href: "/vouchers", requiresProperty: "sell_vouchers" },
   { id: "payments", group: "cash_billing", label: "module.payments", icon: "CreditCard", hue: "#e0457b", href: "/payments", requiresProperty: "take_payments" },
   { id: "night_audit", group: "cash_billing", label: "module.night_audit", icon: "MoonStar", hue: "#7c5cff", href: "/night-audit", requiresProperty: "run_night_audit" },
   { id: "approvals", group: "cash_billing", label: "module.approvals", icon: "ClipboardCheck", hue: "#e0900b", href: "/approvals", requiresProperty: "approve_requests" },

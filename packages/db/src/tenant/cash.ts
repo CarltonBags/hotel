@@ -129,12 +129,12 @@ async function lockRegister(tx: PoolClient, registerId: string, propertyId?: str
 
 async function book(
   tx: PoolClient,
-  m: { registerId: string; propertyId: string; shiftId: string | null; kind: CashMovementKind; amount: number; userId: string; paymentId?: string; counterpart?: string; reason?: string; account?: string; photo?: { bytes: Buffer; type: string } | null; approvedBy?: string | null },
+  m: { registerId: string; propertyId: string; shiftId: string | null; kind: CashMovementKind; amount: number; userId: string; paymentId?: string; voucherId?: string; counterpart?: string; reason?: string; account?: string; photo?: { bytes: Buffer; type: string } | null; approvedBy?: string | null },
 ): Promise<void> {
   await tx.query(
-    `insert into cash_movements (register_id, property_id, shift_id, kind, amount, payment_id, counterpart_register_id, reason, account, receipt_photo, receipt_photo_type, approved_by, by_user)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-    [m.registerId, m.propertyId, m.shiftId, m.kind, roundMoney(m.amount), m.paymentId ?? null, m.counterpart ?? null, m.reason ?? "", m.account ?? "", m.photo?.bytes ?? null, m.photo?.type ?? null, m.approvedBy ?? null, m.userId],
+    `insert into cash_movements (register_id, property_id, shift_id, kind, amount, payment_id, counterpart_register_id, reason, account, receipt_photo, receipt_photo_type, approved_by, by_user, voucher_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+    [m.registerId, m.propertyId, m.shiftId, m.kind, roundMoney(m.amount), m.paymentId ?? null, m.counterpart ?? null, m.reason ?? "", m.account ?? "", m.photo?.bytes ?? null, m.photo?.type ?? null, m.approvedBy ?? null, m.userId, m.voucherId ?? null],
   );
 }
 
@@ -369,6 +369,16 @@ export async function recordCashMovement(pool: Pool, schema: string, input: Cash
  * there is no cash at the desk.
  */
 export async function bookCashPaymentIn(tx: PoolClient, payment: { id: string; propertyId: string; amount: number }, userId: string): Promise<string> {
+  return bookCashIn(tx, { propertyId: payment.propertyId, amount: payment.amount, paymentId: payment.id, kind: payment.amount > 0 ? "payment" : "refund" }, userId);
+}
+
+/** A Voucher sold for cash (ticket 53): into the Cash Book of the user's open Shift, booked to the Legal Entity's liability account. */
+export async function bookVoucherSaleIn(tx: PoolClient, voucher: { id: string; propertyId: string; amount: number; account: string }, userId: string): Promise<string> {
+  return bookCashIn(tx, { propertyId: voucher.propertyId, amount: voucher.amount, voucherId: voucher.id, kind: "voucher_sale", account: voucher.account, reason: "Wertgutschein" }, userId);
+}
+
+async function bookCashIn(tx: PoolClient, m: { propertyId: string; amount: number; kind: CashMovementKind; paymentId?: string; voucherId?: string; account?: string; reason?: string }, userId: string): Promise<string> {
+  const payment = m;
   const settings = await settingsOf(tx, payment.propertyId);
   if (!settings.enabled) throw new Error("The cash desk is off at this property");
   const shift = (await tx.query<{ id: string; register_id: string }>("select id, register_id from cash_shifts where property_id = $1 and user_id = $2 and closed_at is null", [payment.propertyId, userId])).rows[0];
@@ -378,26 +388,40 @@ export async function bookCashPaymentIn(tx: PoolClient, payment: { id: string; p
   if (r.openShift?.id !== shift.id) throw new Error("Open your Shift on a Cash Register to take or give back cash");
   if (r.openShift.counted) throw new Error("Your Shift is counted for closing; close it and open a new one");
   if (payment.amount < 0 && -payment.amount > r.balance) throw new Error(`There is not that much cash in ${r.name}`);
-  await book(tx, { registerId: r.id, propertyId: payment.propertyId, shiftId: shift.id, kind: payment.amount > 0 ? "payment" : "refund", amount: payment.amount, userId, paymentId: payment.id });
+  const { kind, amount, paymentId, voucherId, account, reason } = m;
+  await book(tx, { registerId: r.id, propertyId: m.propertyId, shiftId: shift.id, kind, amount, userId, ...(paymentId ? { paymentId } : {}), ...(voucherId ? { voucherId } : {}), ...(account ? { account } : {}), ...(reason ? { reason } : {}) });
   return r.id;
 }
 
 /** A Receipt for a desk payment, numbered without gaps per property, in the payment's transaction. */
 export async function issueReceiptIn(tx: PoolClient, payment: { id: string; propertyId: string }, registerId: string | null, userId: string): Promise<void> {
-  // one Receipt per payment; a number is taken only for a Receipt that is written
-  if ((await tx.query("select 1 from receipts where payment_id = $1", [payment.id])).rowCount) return;
+  await issueIn(tx, { paymentId: payment.id, propertyId: payment.propertyId }, registerId, userId);
+}
+
+/** A Receipt for a Voucher sold (ticket 53), in the sale's transaction. */
+export async function issueVoucherReceiptIn(tx: PoolClient, voucher: { id: string; propertyId: string }, registerId: string | null, userId: string): Promise<string> {
+  return issueIn(tx, { voucherId: voucher.id, propertyId: voucher.propertyId }, registerId, userId);
+}
+
+async function issueIn(tx: PoolClient, subject: { paymentId?: string; voucherId?: string; propertyId: string }, registerId: string | null, userId: string): Promise<string> {
+  const payment = subject;
+  // one Receipt per payment or sale; a number is taken only for a Receipt that is written
+  const had = (await tx.query<{ id: string }>(subject.paymentId ? "select id from receipts where payment_id = $1" : "select id from receipts where voucher_id = $1", [subject.paymentId ?? subject.voucherId])).rows[0];
+  if (had) return had.id;
   await tx.query("insert into receipt_numbers (property_id) values ($1) on conflict do nothing", [payment.propertyId]);
   const n = (await tx.query<{ last: number }>("update receipt_numbers set last = last + 1 where property_id = $1 returning last", [payment.propertyId])).rows[0]!.last;
-  const receipt = (await tx.query<{ id: string }>("insert into receipts (property_id, number, payment_id, register_id, token, issued_by) values ($1, $2, $3, $4, $5, $6) returning id", [
+  const receipt = (await tx.query<{ id: string }>("insert into receipts (property_id, number, payment_id, voucher_id, register_id, token, issued_by) values ($1, $2, $3, $4, $5, $6, $7) returning id", [
     payment.propertyId,
     n,
-    payment.id,
+    subject.paymentId ?? null,
+    subject.voucherId ?? null,
     registerId,
     randomBytes(18).toString("base64url"),
     userId,
   ])).rows[0]!;
   // Germany: what the TSE is to sign, on the Business Date of the Receipt (ticket 51); signed right after the payment
   await recordFiscalIn(tx, receipt.id);
+  return receipt.id;
 }
 
 export interface CashBookRow {
@@ -504,9 +528,12 @@ export interface ReceiptView {
   cardBrand: string | null;
   cardLast4: string | null;
   refund: boolean;
-  confirmationNumber: string;
-  /** The stay paid for: the service the Receipt names. */
-  stay: { arrival: string; departure: string };
+  /** Null for a Voucher sold. */
+  confirmationNumber: string | null;
+  /** The stay paid for: the service the Receipt names (null for a Voucher sold). */
+  stay: { arrival: string; departure: string } | null;
+  /** A Voucher sold (ticket 53): its code's last group. */
+  voucherSale: { codeEnd: string } | null;
   /** Initial and surname: the Receipt may be opened by anyone holding its code. */
   guestName: string;
   token: string;
@@ -515,11 +542,15 @@ export interface ReceiptView {
   fiscal: ReceiptFiscal | null;
 }
 
+// a Receipt is of a payment (on a stay) or of a Voucher sold (ticket 53)
 const RECEIPT_SELECT = `select rc.id, rc.number, rc.issued_at, rc.token, pr.name as property_name, pr.time_zone, le.name as le_name, le.address_line1, le.postal_code, le.city, le.country, le.vat_id,
-    p.amount, p.currency, p.tender, p.card_brand, p.card_last4, p.refund_of is not null as refund, b.confirmation_number, g.first_name, g.last_name,
+    coalesce(p.amount, v.amount) as amount, coalesce(p.currency, v.currency) as currency, coalesce(p.tender, v.tender) as tender, p.card_brand, p.card_last4, p.refund_of is not null as refund,
+    b.confirmation_number, coalesce(g.first_name, split_part(v.buyer_name, ' ', 1)) as first_name,
+    coalesce(g.last_name, nullif(regexp_replace(v.buyer_name, '^[^ ]+ *', ''), ''), v.buyer_name) as last_name, v.code as voucher_code,
     to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure
-  from receipts rc join payments p on p.id = rc.payment_id join properties pr on pr.id = rc.property_id join legal_entities le on le.id = pr.legal_entity_id
-  join reservations r on r.id = p.reservation_id join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id`;
+  from receipts rc join properties pr on pr.id = rc.property_id join legal_entities le on le.id = pr.legal_entity_id
+  left join payments p on p.id = rc.payment_id left join vouchers v on v.id = rc.voucher_id
+  left join reservations r on r.id = p.reservation_id left join bookings b on b.id = r.booking_id left join guests g on g.id = r.primary_guest_id`;
 
 function toReceipt(r: Record<string, unknown>, fiscal: ReceiptFiscal | null = null): ReceiptView {
   return {
@@ -535,8 +566,9 @@ function toReceipt(r: Record<string, unknown>, fiscal: ReceiptFiscal | null = nu
     cardBrand: (r.card_brand as string | null) ?? null,
     cardLast4: (r.card_last4 as string | null) ?? null,
     refund: r.refund as boolean,
-    confirmationNumber: r.confirmation_number as string,
-    stay: { arrival: r.arrival as string, departure: r.departure as string },
+    confirmationNumber: (r.confirmation_number as string | null) ?? null,
+    stay: r.arrival ? { arrival: r.arrival as string, departure: r.departure as string } : null,
+    voucherSale: r.voucher_code ? { codeEnd: String(r.voucher_code).slice(-4) } : null,
     guestName: `${String(r.first_name ?? "").slice(0, 1)}${r.first_name ? ". " : ""}${r.last_name as string}`.trim(),
     timeZone: r.time_zone as string,
     fiscal,

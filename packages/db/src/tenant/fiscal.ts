@@ -200,6 +200,13 @@ export async function clientIn(tx: PoolClient, propertyId: string, registerId: s
  * issued on; a refund carries the VAT of the payment it gives back.
  */
 export async function recordFiscalIn(tx: PoolClient, receiptId: string): Promise<void> {
+  const v = (await tx.query<{ property_id: string; register_id: string | null; amount: string; currency: string; tender: string; test: boolean; country: string; business_date: string }>(
+    `select rc.property_id, rc.register_id, v.amount, trim(v.currency) as currency, v.tender, v.test, pr.country,
+            to_char(coalesce(pr.business_date, (now() at time zone pr.time_zone)::date), 'YYYY-MM-DD') as business_date
+     from receipts rc join vouchers v on v.id = rc.voucher_id join properties pr on pr.id = rc.property_id where rc.id = $1`,
+    [receiptId],
+  )).rows[0];
+  if (v) return recordVoucherSaleIn(tx, receiptId, v);
   const r = (await tx.query<{ property_id: string; register_id: string | null; amount: string; currency: string; tender: string; refund_of: string | null; folio_id: string; reservation_id: string; status: string; test: boolean; country: string; business_date: string }>(
     `select rc.property_id, rc.register_id, p.amount, trim(p.currency) as currency, p.tender, p.refund_of, p.folio_id, p.reservation_id, r.status, r.test, pr.country,
             to_char(coalesce(pr.business_date, (now() at time zone pr.time_zone)::date), 'YYYY-MM-DD') as business_date
@@ -232,6 +239,23 @@ export async function recordFiscalIn(tx: PoolClient, receiptId: string): Promise
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (receipt_id) do nothing`,
     // Austria: corrections only by cancellation receipts, so a refund is one
     [receiptId, r.property_id, client.id, r.business_date, businessCase, r.tender, r.currency, amount, JSON.stringify(amounts), r.country === "AT" && r.refund_of ? "cancellation" : "normal"],
+  );
+}
+
+/**
+ * A Voucher sold (ticket 53): not revenue but a multi-purpose voucher bought,
+ * so no VAT (it arises when it is redeemed); signed in Germany (the narrower
+ * scope covers vouchers too) and in Austria.
+ */
+async function recordVoucherSaleIn(tx: PoolClient, receiptId: string, v: { property_id: string; register_id: string | null; amount: string; currency: string; tender: string; test: boolean; country: string; business_date: string }): Promise<void> {
+  if ((v.country !== "DE" && v.country !== "AT") || v.test || (await inTestMode(tx))) return;
+  if (v.country === "DE" && !(await unitIn(tx, v.property_id))) return;
+  const client = await clientIn(tx, v.property_id, v.register_id);
+  const amount = Number(v.amount);
+  await tx.query(
+    `insert into fiscal_transactions (receipt_id, property_id, client_id, business_date, business_case, tender, currency, amount, amounts)
+     values ($1, $2, $3, $4, 'MehrzweckgutscheinKauf', $5, $6, $7, $8) on conflict (receipt_id) do nothing`,
+    [receiptId, v.property_id, client.id, v.business_date, v.tender, v.currency, amount, JSON.stringify([{ rate: 0, amount }])],
   );
 }
 

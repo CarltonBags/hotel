@@ -163,8 +163,8 @@ export async function goLive(pool: Pool, tenant: { id: string; schemaName: strin
     // money, documents and the Cash Book reference each other: one statement, constraints checked at its end
     await tx.query(
       `with m as (delete from receivable_matches), rm as (delete from reminders), rc as (delete from receipts), cm as (delete from cash_movements),
-         ch as (delete from card_holds), ce as (delete from charge_events), c as (delete from charges), i as (delete from invoices)
-       delete from payments`,
+         ch as (delete from card_holds), ce as (delete from charge_events), c as (delete from charges), i as (delete from invoices), p as (delete from payments)
+       delete from vouchers`,
     );
     for (const table of ["cash_shifts", "night_audits", "approvals", "housekeeping_tasks", "housekeeping_plans", "maintenance_issues", "lost_items", "phone_changes", "tourism_reports", "city_tax_nights", "room_cleanliness_changes", "receipt_numbers"]) {
       await tx.query(`delete from ${table}`);

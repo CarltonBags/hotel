@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createLegalEntity, setInvoiceNumberRange, updateLegalEntity, type LegalEntityInput } from "@hoteloftware/db";
+import { createLegalEntity, setInvoiceNumberRange, setVoucherLiabilityAccount, updateLegalEntity, type LegalEntityInput } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { field, formAction, type FormState } from "@/lib/form";
@@ -45,6 +45,16 @@ export async function saveNumberRange(_prev: FormState, formData: FormData): Pro
     if (!format) return { ok: true, message: "Unchanged." };
     const start = field(formData, "startAt");
     await setInvoiceNumberRange(pool(), tenant.schemaName, field(formData, "legalEntityId"), kind, format, start ? Number(start) : undefined);
+    revalidatePath("/settings/legal-entities");
+    return { ok: true, message: "Saved." };
+  });
+}
+
+/** The account sold Vouchers are booked to: a liability of the Legal Entity (ticket 53). */
+export async function saveVoucherAccount(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const { tenant } = await authorize("manage_legal_entities");
+    await setVoucherLiabilityAccount(pool(), tenant.schemaName, field(formData, "legalEntityId"), field(formData, "account"));
     revalidatePath("/settings/legal-entities");
     return { ok: true, message: "Saved." };
   });

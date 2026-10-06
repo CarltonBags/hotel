@@ -39,7 +39,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
   const qr = await QRCode.toString(url, { type: "svg", margin: 1 });
   const money = (n: number) => formatCurrency(n, r.currency, "de", r.legalEntity.country);
   const locale = localeFor("de", r.legalEntity.country);
-  const tender = r.tender === "cash" ? "Bar / Cash" : r.tender === "card_terminal" ? `Karte / Card${r.cardBrand ? ` ${r.cardBrand.toUpperCase()} •••• ${r.cardLast4}` : ""}` : r.tender;
+  const tender = r.tender === "voucher" ? "Gutschein / Voucher" : r.tender === "bank_transfer" ? "Überweisung / Bank transfer" : r.tender === "cash" ? "Bar / Cash" : r.tender === "card_terminal" ? `Karte / Card${r.cardBrand ? ` ${r.cardBrand.toUpperCase()} •••• ${r.cardLast4}` : ""}` : r.tender;
   return (
     <main className="mx-auto grid max-w-sm gap-3 bg-white p-6 font-mono text-[13px] text-black print:p-0">
       <header className="text-center">
@@ -58,12 +58,18 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
       <dl className="grid grid-cols-2 gap-1">
         <dt>Gast / Guest</dt>
         <dd className="text-right">{r.guestName}</dd>
-        <dt>Buchung / Booking</dt>
-        <dd className="text-right">{r.confirmationNumber}</dd>
+        {r.confirmationNumber ? (
+          <>
+            <dt>Buchung / Booking</dt>
+            <dd className="text-right">{r.confirmationNumber}</dd>
+          </>
+        ) : null}
         {/* the service paid for (KassenSichV: type and quantity) */}
         <dt>Leistung / Service</dt>
         <dd className="text-right" data-receipt-service>
-          1 × {f && "businessCase" in f && f.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} {day(r.stay.arrival)}–{day(r.stay.departure)}
+          {r.voucherSale
+            ? `1 × Wertgutschein / Voucher ••••-${r.voucherSale.codeEnd}`
+            : `1 × ${f && "businessCase" in f && f.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} ${r.stay ? `${day(r.stay.arrival)}–${day(r.stay.departure)}` : ""}`}
         </dd>
         <dt>Zahlungsart / Tender</dt>
         <dd className="text-right">{tender}</dd>

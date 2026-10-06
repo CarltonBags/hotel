@@ -624,3 +624,4 @@ export {
   type AtSetUpInput,
   type AtSystemReceiptView,
 } from "./tenant/fiscal-at";
+export { listVouchers, sellVoucher, setVoucherLiabilityAccount, voucherByCode, type SoldVoucher, type VoucherRow, type VoucherSale } from "./tenant/vouchers";

@@ -15,7 +15,8 @@ export interface ReceiptDocument {
   cardBrand: string | null;
   cardLast4: string | null;
   refund: boolean;
-  confirmationNumber: string;
+  /** Null for a Voucher sold (ticket 53). */
+  confirmationNumber: string | null;
   guestName: string;
 }
 
@@ -39,7 +40,7 @@ export async function renderReceiptPdf(r: ReceiptDocument): Promise<Uint8Array> 
   y -= 6;
   line(`${r.refund ? "Refund receipt" : "Receipt"} ${r.number}`, 11, bold);
   line(new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short", timeZone: r.timeZone }).format(r.issuedAt));
-  line(`Booking ${r.confirmationNumber} · ${r.guestName}`);
+  line(r.confirmationNumber ? `Booking ${r.confirmationNumber} · ${r.guestName}` : `Wertgutschein / Voucher · ${r.guestName}`);
   y -= 6;
   line(`${r.amount.toFixed(2)} ${r.currency}`, 14, bold);
   line(r.tender === "cash" ? "Cash" : `Card ${r.cardBrand ?? ""} ${r.cardLast4 ? `…${r.cardLast4}` : ""}`.trim());

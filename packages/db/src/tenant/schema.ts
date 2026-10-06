@@ -32,6 +32,7 @@ export const legalEntities = pgTable("legal_entities", {
   taxNumber: text("tax_number").notNull().default(""),
   invoiceEmail: text("invoice_email").notNull().default(""),
   invoicePhone: text("invoice_phone").notNull().default(""),
+  voucherLiabilityAccount: text("voucher_liability_account").notNull().default(""),
 });
 
 export const properties = pgTable(
@@ -917,12 +918,15 @@ export const payments = pgTable(
     businessDate: date("business_date").notNull(),
     saveCard: boolean("save_card").notNull().default(false),
     declineNoticedAt: timestamp("decline_noticed_at", { withTimezone: true }),
+    voucherId: uuid("voucher_id").references((): AnyPgColumn => vouchers.id),
   },
   (t) => [
     index("payments_folio_idx").on(t.folioId),
     index("payments_reservation_idx").on(t.reservationId),
     index("payments_intent_idx").on(t.providerIntentId).where(sql`${t.providerIntentId} is not null`),
-    check("payments_tender_check", sql`${t.tender} in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect', 'cash', 'website_tool')`),
+    check("payments_tender_check", sql`${t.tender} in ('card_terminal', 'card_online', 'bank_transfer', 'on_account', 'ota_virtual_card', 'ota_collect', 'cash', 'website_tool', 'voucher')`),
+    check("payments_voucher_check", sql`(${t.tender} = 'voucher') = (${t.voucherId} is not null)`),
+    index("payments_voucher_idx").on(t.voucherId).where(sql`${t.voucherId} is not null`),
     check("payments_amount_check", sql`${t.amount} <> 0`),
     check("payments_status_check", sql`${t.status} in ('pending', 'succeeded', 'failed', 'refund_pending_balance')`),
     check("payments_refund_check", sql`(${t.refundOf} is null) = (${t.amount} > 0)`),
@@ -1496,11 +1500,12 @@ export const cashMovements = pgTable(
     at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     byUser: text("by_user").notNull(),
     businessDate: date("business_date").notNull(),
+    voucherId: uuid("voucher_id").references((): AnyPgColumn => vouchers.id),
   },
   (t) => [
     index("cash_movements_register_idx").on(t.registerId, t.at),
     index("cash_movements_shift_idx").on(t.shiftId),
-    check("cash_movements_kind_check", sql`${t.kind} in ('float', 'payment', 'refund', 'paid_out', 'deposit', 'change_in', 'transfer_out', 'transfer_in', 'tip_out', 'difference')`),
+    check("cash_movements_kind_check", sql`${t.kind} in ('float', 'payment', 'refund', 'paid_out', 'deposit', 'change_in', 'transfer_out', 'transfer_in', 'tip_out', 'difference', 'voucher_sale')`),
   ],
 );
 
@@ -1515,14 +1520,15 @@ export const receipts = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
     number: integer("number").notNull(),
-    paymentId: uuid("payment_id").notNull().unique().references(() => payments.id),
+    paymentId: uuid("payment_id").unique().references(() => payments.id),
     registerId: uuid("register_id").references(() => cashRegisters.id),
     token: text("token").notNull().unique(),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     issuedBy: text("issued_by").notNull(),
     emailedTo: text("emailed_to"),
+    voucherId: uuid("voucher_id").unique().references((): AnyPgColumn => vouchers.id),
   },
-  (t) => [unique("receipts_property_id_number_key").on(t.propertyId, t.number)],
+  (t) => [unique("receipts_property_id_number_key").on(t.propertyId, t.number), check("receipts_subject_check", sql`(${t.paymentId} is null) <> (${t.voucherId} is null)`)],
 );
 
 export const closedPeriods = pgTable(
@@ -1600,7 +1606,7 @@ export const mailOutbox = pgTable(
   "mail_outbox",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    toUserId: text("to_user_id").notNull(),
+    toUserId: text("to_user_id"),
     toEmail: text("to_email").notNull(),
     subject: text("subject").notNull(),
     body: text("body").notNull(),
@@ -1614,8 +1620,9 @@ export const mailOutbox = pgTable(
     html: text("html"),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
     propertyId: uuid("property_id").references(() => properties.id),
+    voucherId: uuid("voucher_id").references((): AnyPgColumn => vouchers.id, { onDelete: "cascade" }),
   },
-  (t) => [check("mail_outbox_attachment_check", sql`(${t.attachment} is null) = (${t.attachmentName} is null)`), index("mail_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
+  (t) => [check("mail_outbox_recipient_check", sql`(${t.toUserId} is null) <> (${t.voucherId} is null)`), check("mail_outbox_attachment_check", sql`(${t.attachment} is null) = (${t.attachmentName} is null)`), index("mail_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
 );
 
 export const propertyOutages = pgTable(
@@ -2335,7 +2342,7 @@ export const fiscalTransactions = pgTable(
   (t) => [
     check("fiscal_transactions_receipt_type_check", sql`${t.receiptType} in ('normal', 'cancellation')`),
     check("fiscal_transactions_state_check", sql`${t.state} in ('open', 'signing', 'signed', 'failed')`),
-    check("fiscal_transactions_case_check", sql`${t.businessCase} in ('Umsatz', 'Anzahlungseinstellung')`),
+    check("fiscal_transactions_case_check", sql`${t.businessCase} in ('Umsatz', 'Anzahlungseinstellung', 'MehrzweckgutscheinKauf')`),
     check("fiscal_transactions_signed_check", sql`${t.state} <> 'signed' or (${t.qrCodeData} is not null and ((${t.signature} is not null and ${t.number} is not null) or ${t.receiptNumber} is not null))`),
     check("fiscal_transactions_failed_check", sql`${t.state} <> 'failed' or ${t.error} is not null`),
     check("fiscal_transactions_claim_check", sql`(${t.state} = 'signing') = (${t.claim} is not null)`),
@@ -2439,6 +2446,35 @@ export const fiscalSystemReceipts = pgTable(
     check("fiscal_system_receipts_type_check", sql`${t.receiptType} in ('INITIALIZATION', 'MONTHLY_CLOSE', 'YEARLY_CLOSE', 'DECOMMISSION', 'SIGNATURE_CREATION_UNIT_FAULT_CLEARANCE')`),
     check("fiscal_system_receipts_validation_check", sql`${t.validation} in ('SUCCESS', 'ERROR')`),
     unique("fiscal_system_receipts_client_id_provider_receipt_id_key").on(t.clientId, t.providerReceiptId),
+  ],
+);
+
+export const vouchers = pgTable(
+  "vouchers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    legalEntityId: uuid("legal_entity_id").notNull().references(() => legalEntities.id),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    code: text("code").notNull().unique(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).notNull(),
+    tender: text("tender").notNull(),
+    reference: text("reference").notNull().default(""),
+    buyerName: text("buyer_name").notNull().default(""),
+    buyerEmail: text("buyer_email").notNull().default(""),
+    recipientName: text("recipient_name").notNull().default(""),
+    recipientEmail: text("recipient_email").notNull(),
+    message: text("message").notNull().default(""),
+    registerId: uuid("register_id").references(() => cashRegisters.id),
+    soldBy: text("sold_by").notNull(),
+    soldAt: timestamp("sold_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    test: boolean("test").notNull().default(sql`in_test_mode()`),
+  },
+  (t) => [
+    check("vouchers_code_check", sql`${t.code} ~ '^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$'`),
+    check("vouchers_amount_check", sql`${t.amount} > 0`),
+    check("vouchers_tender_check", sql`${t.tender} in ('cash', 'card_terminal', 'bank_transfer')`),
+    index("vouchers_legal_entity_idx").on(t.legalEntityId, sql`${t.soldAt} desc`),
   ],
 );
 
@@ -2560,4 +2596,5 @@ export const tenantSchema = {
   fiscalArchives,
   fiscalAtUnits,
   fiscalSystemReceipts,
+  vouchers,
 };
