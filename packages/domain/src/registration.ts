@@ -68,11 +68,15 @@ export function registrationNeeds(country: RegistrationCountry, persons: Registr
 export const TABLET_STEPS = ["welcome", "details", "companions", "review", "done"] as const;
 export type TabletStep = (typeof TABLET_STEPS)[number];
 
-/** A record is deleted: Germany from day 365 after departure (at the latest by day 455), Austria after 7 years. */
-export function registrationDeletionDue(country: RegistrationCountry, departure: string, today: string): boolean {
-  if (country === "DE") return today >= addDays(departure, 365);
+/** The day a registration record (and a guest's document picture) is deleted: Germany day 365 after departure (at the latest by day 455), Austria after 7 years. */
+export function registrationRetentionUntil(country: RegistrationCountry, departure: string): string {
+  if (country === "DE") return addDays(departure, 365);
   const [y, m, d] = departure.split("-");
-  return today >= `${Number(y) + 7}-${m}-${d}`;
+  return `${Number(y) + 7}-${m}-${d}`;
+}
+
+export function registrationDeletionDue(country: RegistrationCountry, departure: string, today: string): boolean {
+  return today >= registrationRetentionUntil(country, departure);
 }
 
 /** Complete when the guest's part is done, it is confirmed (signature, or signed on paper in Germany) and the ID Check is recorded. */

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { can } from "@hoteloftware/domain";
 import Link from "next/link";
 import { findGuest, findGuestDuplicates, guestHistory, listGuestMerges, listGuestReservations, listProperties, listTenantUsers, searchGuests } from "@hoteloftware/db";
+import { CHANNEL_USER, PORTAL_USER } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
 import { requireAllowedAnywhere, workingPropertyId } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -95,7 +96,7 @@ export default async function GuestPage({ params, searchParams }: { params: Prom
           <ul className="mt-2 grid gap-1 text-sm">
             {history.map((h, i) => (
               <li key={i}>
-                <span className="text-ink-60">{fmt.format(h.at)}</span> · {names.get(h.userId) ?? h.userId} · {h.field}: {h.oldValue ?? "—"} → {h.newValue ?? "—"}
+                <span className="text-ink-60">{fmt.format(h.at)}</span> · {h.userId === PORTAL_USER ? m["guests.enteredByGuest"] : h.userId === CHANNEL_USER ? m["guests.fromChannel"] : (names.get(h.userId) ?? h.userId)} · {h.field}: {h.oldValue ?? "—"} → {h.newValue ?? "—"}
               </li>
             ))}
           </ul>

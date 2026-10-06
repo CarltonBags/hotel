@@ -41,9 +41,9 @@ describe("guest messages", () => {
     for (const t of MESSAGE_TYPES) for (const l of ["de", "en"] as const) expect(missingPlaceholders(t, SHIPPED_TEXTS[t][l]), `${t} ${l}`).toEqual([]);
   });
 
-  it("messages with a Portal Link wait for the Guest Portal", () => {
+  it("with the Guest Portal every message can go, those with a Portal Link too", () => {
     expect(messageSendable("confirmation")).toBe(true);
-    expect(messageSendable("pre_arrival")).toBe(false);
+    expect(messageSendable("pre_arrival")).toBe(true);
   });
 
   it("urgent SMS: Property Managers, Owner and Tenant Admin; not the desk", () => {

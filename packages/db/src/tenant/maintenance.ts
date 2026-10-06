@@ -202,6 +202,11 @@ export async function maySeeFile(tx: PoolClient, fileId: string, viewer: Viewer)
   const f = await fileIn(tx, fileId);
   if (!f) return false;
   if (f.createdBy === viewer.userId) return true;
+  if (f.kind === "id_document") {
+    // a guest's document picture: whoever checks guests in at the stay's property
+    const { rows } = await tx.query<{ property_id: string }>("select r.property_id from reservation_documents d join reservations r on r.id = d.reservation_id where d.file_id = $1", [fileId]);
+    return rows.some((r) => can(viewer.actor, "check_in", r.property_id));
+  }
   const { rows } = await tx.query<{ property_id: string }>("select property_id from maintenance_issues where photo_file_id = $1 or fix_photo_file_id = $1", [fileId]);
   return rows.some((r) => seesIssues(viewer, r.property_id));
 }

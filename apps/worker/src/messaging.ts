@@ -16,13 +16,22 @@ export const MAIL_SOURCE = "mail";
 // tenants whose mail events are routable from this process; the mapping is written once
 const mapped = new Set<string>();
 
-export async function runMessaging(pool: Pool, tenant: { id: string; schemaName: string }, providers: { mail: MailProvider; sms: SmsProvider }, platformDomain: string): Promise<{ queued: number; sent: number; failed: number }> {
+/** Where a tenant's Guest Portal answers: its subdomain, with the scheme of the app's own address. */
+export function portalBase(slug: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!env.APP_DOMAIN) return null;
+  // the same rule as the app's tenantUrl: https when the app's own address is
+  const scheme = (env.BETTER_AUTH_URL ?? "").startsWith("https") ? "https" : "http";
+  return `${scheme}://${slug}.${env.APP_DOMAIN}`;
+}
+
+export async function runMessaging(pool: Pool, tenant: { id: string; slug: string; schemaName: string }, providers: { mail: MailProvider; sms: SmsProvider }, platformDomain: string): Promise<{ queued: number; sent: number; failed: number }> {
   // the provider's events carry the tenant id; the intake maps it back
   if (!mapped.has(tenant.id)) {
     await mapProviderAccount(pool, MAIL_SOURCE, tenant.id, tenant.id);
     mapped.add(tenant.id);
   }
-  const queued = await scanGuestMessages(pool, tenant.schemaName);
+  const base = portalBase(tenant.slug);
+  const queued = await scanGuestMessages(pool, tenant.schemaName, new Date(), base ? { base } : null);
   const r = await dispatchMessages(pool, tenant.schemaName, tenant.id, providers, { platformDomain });
   return { queued, ...r };
 }

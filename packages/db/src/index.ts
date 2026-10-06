@@ -470,6 +470,7 @@ export {
   messageText,
   messagingSettings,
   previewMessage,
+  queueGuestMessageIn,
   recordMailEvent,
   reservationMessages,
   resetMessageText,
@@ -482,6 +483,7 @@ export {
   type BouncedMessage,
   type GuestMessageRow,
   type MessageStatus,
+  type PortalLinks,
   type MessagingSettings,
   type MessagingSettingsInput,
 } from "./tenant/messages";
@@ -489,3 +491,4 @@ export { FileRefused, MAX_FILE_BYTES, deleteExpiredFiles, findFile, storeFile, t
 export { fixIssue, listIssues, reportIssue, seesIssues, takeIssue, visibleFile, type FixedIssue, type IssueFix, type IssueReport, type IssueRow } from "./tenant/maintenance";
 export { channelConnection, channelOverview, connectChannels, connectedProperties, enqueueFullPushOf, enqueueFullPushes, pruneChannelOutbox, pushChannels, type ChannelConnection, type ChannelOverview, type PushResult } from "./tenant/channels";
 export { CHANNEL_USER, applyChannelRevision, channelProblems, channelSettings, ensureBookingWebhook, processChannelFeed, resolveChannelProblem, setChannelSetting, setGoogleChannel, type AppliedRevision, type ChannelProblem, type ChannelSetting, type FeedResult } from "./tenant/channel-bookings";
+export { MAX_COMPANIONS, PORTAL_USER, addPortalDocument, addPortalExtra, invitePortalGuest, portalInvoice, portalKeys, portalPhoto, portalSettings, portalSummary, portalView, type BookingRoom, type Companion, setPortalSettings, type PortalSummary, requestPortalCode, revokePortalLink, savePrecheckin, verifyPortalCode, type PortalView, type PrecheckinInput } from "./tenant/portal";

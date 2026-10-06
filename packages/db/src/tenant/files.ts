@@ -8,7 +8,7 @@ import { withTenant } from "./with-tenant";
  * scan), stored under the tenant's prefix, recorded here, handed out through
  * short-lived signed links, and deleted on their retention day.
  */
-export type FileKind = "issue_photo" | "fix_photo";
+export type FileKind = "issue_photo" | "fix_photo" | "id_document" | "portal_photo";
 
 // photos only, for now; documents come with the tickets that store them
 const TYPES = ["image/jpeg", "image/png", "image/webp"];

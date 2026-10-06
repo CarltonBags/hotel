@@ -21,6 +21,8 @@ export const MESSAGE_TYPES = [
   "welcome",
   "departure_eve",
   "thanks",
+  "portal_invitation",
+  "portal_code",
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 
@@ -59,10 +61,13 @@ export const MESSAGE_TYPE_INFO: Record<MessageType, MessageTypeInfo> = {
   welcome: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: false },
   departure_eve: { timing: "evening", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: true },
   thanks: { timing: "sending_hours", switchable: true, defaultOn: false, critical: false, essential: false, repeatable: false, needsPortal: true },
+  // the Booker invites a room's guest; the one-time code when the guest has no link at hand (ticket 40)
+  portal_invitation: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: true },
+  portal_code: { timing: "at_once", switchable: false, defaultOn: true, critical: false, essential: true, repeatable: true, needsPortal: false },
 };
 
-/** The Guest Portal hands out Portal Links from ticket 40; until then messages that need one stay unsent. */
-export const PORTAL_LINKS_READY = false;
+/** The Guest Portal hands out Portal Links (ticket 40); before it, messages that needed one stayed unsent. */
+export const PORTAL_LINKS_READY = true;
 
 /** Whether a type can go now: its Portal Link exists. */
 export function messageSendable(type: MessageType): boolean {
@@ -87,7 +92,7 @@ export interface MessageText {
 }
 
 /** The placeholders a text may use. The Portal Link and the reply address are wired with tickets 40 and 43. */
-export const PLACEHOLDERS = ["guest_name", "hotel_name", "confirmation", "arrival", "departure", "amount", "document_number", "portal_link", "reply_address", "checkout_time"] as const;
+export const PLACEHOLDERS = ["guest_name", "hotel_name", "confirmation", "arrival", "departure", "amount", "document_number", "portal_link", "reply_address", "checkout_time", "code"] as const;
 export type Placeholder = (typeof PLACEHOLDERS)[number];
 
 /** The texts we ship, per type and language; a property edits subject and blocks, never layout or footer. */
@@ -144,6 +149,14 @@ export const SHIPPED_TEXTS: Record<MessageType, Record<MessageLanguage, MessageT
     de: { subject: "Danke für Ihren Besuch im {hotel_name}", blocks: ["Guten Tag {guest_name},", "vielen Dank für Ihren Aufenthalt. Ihre Rechnung finden Sie hier: {portal_link}"] },
     en: { subject: "Thank you for staying at {hotel_name}", blocks: ["Dear {guest_name},", "thank you for your stay. Your invoice is here: {portal_link}"] },
   },
+  portal_invitation: {
+    de: { subject: "Ihr Aufenthalt im {hotel_name} vom {arrival}", blocks: ["Guten Tag,", "für Sie ist ein Zimmer im {hotel_name} vom {arrival} bis {departure} gebucht. Hier können Sie vorab einchecken und Ihre Angaben machen: {portal_link}"] },
+    en: { subject: "Your stay at {hotel_name} from {arrival}", blocks: ["Hello,", "a room at {hotel_name} from {arrival} to {departure} is booked for you. Check in ahead and give your details here: {portal_link}"] },
+  },
+  portal_code: {
+    de: { subject: "Ihr Code für {hotel_name}: {code}", blocks: ["Guten Tag {guest_name},", "Ihr Code zum Öffnen Ihrer Buchung {confirmation}: {code}", "Er gilt 10 Minuten. Haben Sie ihn nicht angefordert, können Sie diese Nachricht ignorieren."] },
+    en: { subject: "Your code for {hotel_name}: {code}", blocks: ["Dear {guest_name},", "your code to open your booking {confirmation}: {code}", "It is valid for 10 minutes. If you did not ask for it, you can ignore this message."] },
+  },
 };
 
 export function fillPlaceholders(text: string, values: Partial<Record<Placeholder, string>>): string {
@@ -165,6 +178,8 @@ export const REQUIRED_PLACEHOLDERS: Record<MessageType, Placeholder[]> = {
   welcome: [],
   departure_eve: ["checkout_time"],
   thanks: ["portal_link"],
+  portal_invitation: ["portal_link"],
+  portal_code: ["code"],
 };
 
 /** Mandatory placeholders an edited text left out. */

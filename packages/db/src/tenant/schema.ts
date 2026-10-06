@@ -39,6 +39,9 @@ export const properties = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     downtimeOptions: jsonb("downtime_options").notNull().default(sql`'{}'`),
+    portalInfo: jsonb("portal_info").notNull().default(sql`'{}'`),
+    portalDocumentImages: boolean("portal_document_images").notNull().default(false),
+    portalPhotoFileId: uuid("portal_photo_file_id").references((): AnyPgColumn => storedFiles.id, { onDelete: "set null" }),
     legalEntityId: uuid("legal_entity_id")
       .notNull()
       .references(() => legalEntities.id),
@@ -608,9 +611,11 @@ export const bookings = pgTable(
     channelCardBrand: text("channel_card_brand"),
     channelCardLast4: char("channel_card_last4", { length: 4 }),
     channelNotes: text("channel_notes").notNull().default(""),
+    portalKey: text("portal_key").notNull().default(sql`replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')`),
   },
   (t) => [
     check("bookings_channel_collect_check", sql`${t.channelCollect} in ('property', 'channel')`),
+    uniqueIndex("bookings_portal_key").on(t.portalKey),
     unique("bookings_confirmation_number_key").on(t.confirmationNumber),
     index("bookings_property_idx").on(t.propertyId, t.createdAt.desc()),
     check("bookings_booker_check", sql`(${t.bookerGuestId} is null) <> (${t.bookerCompanyId} is null)`),
@@ -652,6 +657,9 @@ export const reservations = pgTable(
     statsExcludedBy: text("stats_excluded_by"),
     statsExcludedAt: timestamp("stats_excluded_at", { withTimezone: true }),
     channelRoomKey: text("channel_room_key"),
+    portalKey: text("portal_key").notNull().default(sql`replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')`),
+    arrivalTime: text("arrival_time"),
+    precheckinAt: timestamp("precheckin_at", { withTimezone: true }),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -664,6 +672,8 @@ export const reservations = pgTable(
     check("reservations_fee_status_check", sql`${t.cancellationFeeStatus} in ('open', 'confirmed', 'waived')`),
     check("reservations_fee_pair_check", sql`(${t.cancellationFee} is null) = (${t.cancellationFeeStatus} is null)`),
     check("reservations_city_tax_pass_on_check", sql`${t.cityTaxPassOn} in ('on_top', 'absorbed')`),
+    uniqueIndex("reservations_portal_key").on(t.portalKey),
+    check("reservations_arrival_time_check", sql`${t.arrivalTime} ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'`),
   ],
 );
 
@@ -1324,7 +1334,7 @@ export const storedFiles = pgTable(
     deleteAfter: date("delete_after"),
   },
   (t) => [
-    check("stored_files_kind_check", sql`${t.kind} in ('issue_photo', 'fix_photo')`),
+    check("stored_files_kind_check", sql`${t.kind} in ('issue_photo', 'fix_photo', 'id_document', 'portal_photo')`),
     check("stored_files_size_check", sql`${t.size} > 0`),
     index("stored_files_retention_idx").on(t.deleteAfter).where(sql`${t.deleteAfter} is not null`),
   ],
@@ -1808,6 +1818,7 @@ export const guestMessages = pgTable(
     providerId: text("provider_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     createdBy: text("created_by"),
+    secretCode: text("secret_code"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     failedAt: timestamp("failed_at", { withTimezone: true }),
@@ -1950,6 +1961,62 @@ export const ariOutbox = pgTable(
   ],
 );
 
+export const reservationCompanions = pgTable(
+  "reservation_companions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    firstName: text("first_name").notNull().default(""),
+    lastName: text("last_name").notNull(),
+    dateOfBirth: date("date_of_birth"),
+    nationality: char("nationality", { length: 2 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [check("reservation_companions_name_check", sql`length(trim(${t.lastName})) > 0`), index("reservation_companions_reservation_idx").on(t.reservationId)],
+);
+
+export const portalCodes = pgTable(
+  "portal_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    codeHash: text("code_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    forBooking: boolean("for_booking").notNull().default(false),
+  },
+  (t) => [index("portal_codes_reservation_idx").on(t.reservationId, t.createdAt.desc())],
+);
+
+export const messagingConsents = pgTable(
+  "messaging_consents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    guestId: uuid("guest_id").notNull().references(() => guests.id, { onDelete: "cascade" }),
+    transport: text("transport").notNull(),
+    granted: boolean("granted").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    source: text("source").notNull(),
+    wording: text("wording").notNull(),
+  },
+  (t) => [check("messaging_consents_transport_check", sql`${t.transport} in ('email', 'whatsapp')`), index("messaging_consents_guest_idx").on(t.guestId, t.transport, t.at.desc())],
+);
+
+export const reservationDocuments = pgTable(
+  "reservation_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    guestId: uuid("guest_id").references(() => guests.id),
+    fileId: uuid("file_id").notNull().references(() => storedFiles.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("reservation_documents_reservation_idx").on(t.reservationId)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -2044,4 +2111,8 @@ export const tenantSchema = {
   channelSettings,
   channelBookings,
   channelBookingRevisions,
+  reservationCompanions,
+  portalCodes,
+  messagingConsents,
+  reservationDocuments,
 };
