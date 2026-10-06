@@ -8,8 +8,8 @@ export { NukiLocks } from "./nuki";
 export { SimulatedLocks } from "./simulated";
 export { sealLockSecret, unsealLockSecret } from "./seal";
 
-/** The lock systems; "other" is a system without a plugin yet: keys by its own software. */
-export const LOCK_SYSTEMS = ["none", "simulated", "nuki", "other"] as const;
+/** The lock systems; "bridge": one on the hotel's network, through the Site Bridge's plugin; "other": no plugin yet, keys by its own software. */
+export const LOCK_SYSTEMS = ["none", "simulated", "nuki", "bridge", "other"] as const;
 export type LockSystem = (typeof LOCK_SYSTEMS)[number];
 
 /** The systems with a plugin (the database's queue trigger names the same). */

@@ -3113,9 +3113,10 @@ export const propertyLocks = pgTable(
     secretSealed: text("secret_sealed"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     updatedBy: text("updated_by").notNull(),
+    bridgePlugin: text("bridge_plugin").notNull().default(""),
   },
   (t) => [
-    check("property_locks_system_check", sql`${t.system} in ('none', 'simulated', 'nuki', 'other')`),
+    check("property_locks_system_check", sql`${t.system} in ('none', 'simulated', 'nuki', 'bridge', 'other')`),
     check("property_locks_other_name_check", sql`length(${t.otherName}) <= 60`),
     check("property_locks_handover_check", sql`${t.handover} in ('reception', 'kiosk_encoder', 'digital_key', 'door_pin')`),
     check("property_locks_grace_check", sql`${t.graceMinutes} between 0 and 720`),
@@ -3191,3 +3192,42 @@ export const lockSync = pgTable("lock_sync", {
   attempts: integer("attempts").notNull().default(0),
   error: text("error"),
 });
+
+export const siteBridges = pgTable(
+  "site_bridges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    name: text("name").notNull(),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    enrolledBy: text("enrolled_by").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    version: text("version"),
+    plugins: jsonb("plugins").notNull().default([]),
+    wanted: jsonb("wanted").notNull().default({}),
+    alertedAt: timestamp("alerted_at", { withTimezone: true }),
+  },
+  (t) => [check("site_bridges_name_check", sql`length(trim(${t.name})) between 1 and 60`), index("site_bridges_property_idx").on(t.propertyId).where(sql`${t.revokedAt} is null`)],
+);
+
+export const bridgeCommands = pgTable(
+  "bridge_commands",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bridgeId: uuid("bridge_id").notNull().references(() => siteBridges.id),
+    kind: text("kind").notNull(),
+    payload: jsonb("payload").notNull(),
+    state: text("state").notNull().default("queued"),
+    result: jsonb("result"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("bridge_commands_kind_check", sql`${t.kind} in ('lock', 'plugin_install')`),
+    check("bridge_commands_state_check", sql`${t.state} in ('queued', 'sent', 'done', 'failed')`),
+    index("bridge_commands_open_idx").on(t.bridgeId, t.createdAt).where(sql`${t.state} in ('queued', 'sent')`),
+  ],
+);

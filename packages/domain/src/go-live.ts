@@ -34,6 +34,8 @@ export interface GoLiveFacts {
     signatureUnit: boolean;
     /** The property's own calendar date: its first Business Date at go-live, from which the price horizon counts. */
     today: string;
+    /** Its locks or till run through the Site Bridge: whether a Bridge is connected (absent: not used). */
+    siteBridge?: "online" | "offline" | null;
   }[];
   /** Active staff users, the Owner included. */
   staffUsers: number;
@@ -74,6 +76,8 @@ export function goLiveChecklist(f: GoLiveFacts): ChecklistItem[] {
     // Austria: Receipts are electronic by default but printed on request, so every desk has a printer
     item("receipt_printer", "required", f.properties.filter((p) => p.country === "AT" && !p.receiptPrinter).map((p) => p.name)),
     item("signature_unit", "required", f.properties.filter((p) => p.country === "AT" && !p.signatureUnit).map((p) => p.name)),
+    // locks or a till on the hotel's network: the Site Bridge connected (ADR 0014)
+    item("site_bridge", "if_used", f.properties.filter((p) => p.siteBridge === "offline").map((p) => p.name), f.properties.some((p) => p.siteBridge)),
     item("card_provider", "if_used", card.filter((le) => !le.card!.chargesEnabled).map((le) => le.name), card.length > 0),
     item("devices", "optional", f.devices > 0 ? [] : ["—"]),
   ];

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Pool } from "pg";
 import { latestNotificationId, notificationsAfter, verifyEventsToken, type Notification } from "@hoteloftware/events";
 import { EventsListener } from "./listener";
+import { bridgePluginDownload, bridgePoll } from "./bridge";
 import { receiveWebhook, testSource, type QueueLike, type WebhookSource } from "./webhooks";
 
 export interface WorkerServerOptions {
@@ -65,7 +66,8 @@ function sseFrame(n: Notification): string {
 }
 
 /**
- * The worker's HTTP face: /health, /events (SSE) and /webhooks/<source>.
+ * The worker's HTTP face: /health, /events (SSE), /webhooks/<source> and
+ * the Site Bridge's /bridge/v1/….
  * Everything else the worker does (jobs, schedules) runs beside it.
  */
 export async function startWorkerServer(options: WorkerServerOptions): Promise<WorkerServer> {
@@ -147,6 +149,16 @@ export async function startWorkerServer(options: WorkerServerOptions): Promise<W
           reconnectHooks.delete(schedule);
           streams.delete(res);
         });
+        return;
+      }
+      // the Site Bridge calls out to us (ticket 68)
+      if (req.method === "POST" && url.pathname === "/bridge/v1/poll") {
+        await bridgePoll(options.pool, req, res, () => readBody(req));
+        return;
+      }
+      const plugin = req.method === "GET" ? /^\/bridge\/v1\/plugins\/([a-z0-9-]{2,40})\/(\d+\.\d+\.\d+)$/.exec(url.pathname) : null;
+      if (plugin) {
+        await bridgePluginDownload(options.pool, req, res, plugin[1]!, plugin[2]!);
         return;
       }
       if (req.method === "GET" && url.pathname.startsWith("/webhooks/")) {

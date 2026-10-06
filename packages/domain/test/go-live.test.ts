@@ -76,4 +76,11 @@ describe("trial", () => {
     expect(testModeMailRecipient({ testMode: true, trialUserEmail: "owner@hotel.example" }, "Owner@Hotel.example")).toBe("Owner@Hotel.example");
     expect(testModeMailRecipient({ testMode: false, trialUserEmail: "owner@hotel.example" }, "guest@example.com")).toBe("guest@example.com");
   });
+
+  it("a property whose locks or till run through the Site Bridge needs it connected before going live", () => {
+    const berlin = ready.properties[0]!;
+    expect(goLiveChecklist(ready).find((i) => i.id === "site_bridge")).toMatchObject({ used: false, done: true });
+    expect(goLiveBlockers(goLiveChecklist({ ...ready, properties: [{ ...berlin, siteBridge: "offline" }] }))).toMatchObject([{ id: "site_bridge", missing: ["Berlin"] }]);
+    expect(goLiveBlockers(goLiveChecklist({ ...ready, properties: [{ ...berlin, siteBridge: "online" }] }))).toEqual([]);
+  });
 });

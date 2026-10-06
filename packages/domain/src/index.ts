@@ -271,3 +271,4 @@ export { OUTLET_KINDS, PRINTER_KINDS, billTotal, eposPrintXml, lineFor, mayManag
 export { appointmentProblem, instantAt, openSpaSlots, guestCancelDeadline, guestMayCancel, type AppointmentProblem, type Interval } from "./spa";
 export { LIGHTSPEED_ROOM_CHARGE, fromLightspeed, taxCodeForRate, tillChargeGroups, type LightspeedAccount, type TillChargeGroup, type TillItem, type TillPosting, type TillTotal } from "./till";
 export { KEY_HANDOVERS, automaticKeyKind, doorPin, handoverSupported, keyActions, keyPlan, keyValidUntil, type KeyHandover, type KeyKind, type KeyPlan, type KeyWarning, type LockCapabilities, type PlannedKey, type RevokeReason } from "./locks";
+export { BRIDGE_ALERT_SECONDS, BRIDGE_ONLINE_SECONDS, bridgeAlertDue, bridgeOnline } from "./site-bridge";
