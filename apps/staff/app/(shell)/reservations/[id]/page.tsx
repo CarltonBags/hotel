@@ -23,6 +23,7 @@ import { StatsExclusion } from "./stats-exclusion";
 import { MessagesPanel } from "./messages-panel";
 import { ActionForm } from "@/components/form-fields";
 import { openConversationAction } from "../../inbox/actions";
+import { roomChargeBlockedAction } from "../room-charge-actions";
 import { PortalPanel } from "./portal-panel";
 import { StoredCard } from "./stored-card";
 import { RegistrationPanel } from "./registration-panel";
@@ -241,6 +242,16 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
 
       {folio ? (
         <FolioPanel {...v.folioProps} m={m} />
+      ) : null}
+      {folio && rights.manageFolios ? (
+        // no Room Charge at the outlets for this stay ("cash only", ticket 61)
+        <ActionForm action={roomChargeBlockedAction} submitLabel={m["action.save"]} className="flex flex-wrap items-center gap-3 text-sm">
+          <input type="hidden" name="reservationId" value={r.id} />
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="blocked" value="on" defaultChecked={r.roomChargeBlocked} />
+            {m["folio.roomChargeBlocked"]}
+          </label>
+        </ActionForm>
       ) : null}
       {folio ? (
         <div className="grid items-start gap-4 lg:grid-cols-2">

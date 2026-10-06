@@ -1,4 +1,4 @@
-import { can } from "@hoteloftware/domain";
+import { approvalRight, can, type ApprovalKind } from "@hoteloftware/domain";
 import { ApprovalRequired, listTenantUsers, loadActor, requestApproval, type ApprovalSubject } from "@hoteloftware/db";
 import { verifyTenantCredentials } from "@hoteloftware/auth";
 import { notifyStaff } from "@hoteloftware/events";
@@ -41,11 +41,11 @@ function tooManyFailures(userId: string): boolean {
   return recent.length >= FAILED_TRIES;
 }
 
-/** The approver of a same-screen Approval: their credentials at this tenant and their right to approve at the property. One answer for every failure. */
-async function approverFor(ctx: ApprovalContext, credentials: { username: string; password: string }): Promise<string> {
+/** The approver of a same-screen Approval: their credentials at this tenant and their right to approve it at the property (an Outlet Manager for outlet Approvals). One answer for every failure. */
+async function approverFor(ctx: ApprovalContext, credentials: { username: string; password: string }, kind: ApprovalKind): Promise<string> {
   if (tooManyFailures(ctx.userId)) throw new Error("Too many failed approvals; ask a Property Manager remotely or try again later");
   const id = await verifyTenantCredentials(auth(), pool(), { tenantId: ctx.tenantId, username: String(credentials.username ?? ""), password: String(credentials.password ?? "") });
-  const ok = id !== null && id !== ctx.userId && can(await loadActor(pool(), ctx.tenantId, id), "approve_requests", ctx.propertyId);
+  const ok = id !== null && id !== ctx.userId && can(await loadActor(pool(), ctx.tenantId, id), approvalRight(kind), ctx.propertyId);
   if (!ok) {
     failures.get(ctx.userId)!.push(Date.now());
     throw new Error("These credentials cannot approve here");
@@ -58,7 +58,7 @@ async function askForApproval(ctx: ApprovalContext, subject: ApprovalSubject): P
   const request = await requestApproval(pool(), ctx.schema, subject, ctx.userId);
   if (!request.created) return;
   const managers = (await listTenantUsers(pool(), ctx.tenantId)).filter(
-    (u) => u.id !== ctx.userId && !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, "approve_requests", subject.propertyId),
+    (u) => u.id !== ctx.userId && !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, approvalRight(subject.kind), subject.propertyId),
   );
   await notifyStaff(pool(), { id: ctx.tenantId, schemaName: ctx.schema }, managers, {
     kind: "approval.requested",
@@ -79,7 +79,7 @@ export async function withApproval(ctx: ApprovalContext, mode: ApprovalMode | un
     return await body(null);
   } catch (err) {
     if (!(err instanceof ApprovalRequired)) throw err;
-    if (mode?.mode === "credentials") return body(await approverFor(ctx, mode));
+    if (mode?.mode === "credentials") return body(await approverFor(ctx, mode, err.subject.kind));
     if (mode?.mode === "request") {
       await askForApproval(ctx, err.subject);
       return { ok: true, message: "Approval requested. The Property Manager is notified; once approved, do it again here within 24 hours of this request." };

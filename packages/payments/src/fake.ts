@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AccountStatus, IntentState, OnlinePaymentInput, PaymentProvider, ProviderEvent, RefundResult, SetupState, TerminalPaymentInput } from "./provider";
+import type { AccountStatus, IntentState, OnlinePaymentInput, PaymentProvider, ProviderEvent, RefundResult, SetupState, SimulatedCard, TerminalPaymentInput } from "./provider";
 import { ProviderError } from "./provider";
 
 interface FakeIntent extends IntentState {
@@ -7,6 +7,7 @@ interface FakeIntent extends IntentState {
   readerId: string | null;
   hold: boolean;
   refunded: number;
+  tapToPay?: boolean;
 }
 
 /**
@@ -74,6 +75,7 @@ export class FakePaymentProvider implements PaymentProvider {
       accountId,
       readerId: input.readerId,
       hold: input.hold,
+      tapToPay: input.tapToPay ?? false,
       status: "waiting",
       amount: input.amount,
       capturable: 0,
@@ -93,7 +95,7 @@ export class FakePaymentProvider implements PaymentProvider {
     return { intentId };
   }
 
-  async simulateCard(accountId: string, readerId: string): Promise<void> {
+  async simulateCard(accountId: string, readerId: string, card: SimulatedCard = {}): Promise<void> {
     this.revive(accountId, readerId);
     const reader = this.readers.get(readerId);
     if (!reader || reader.accountId !== accountId || !reader.pending) throw new ProviderError("Nothing is waiting on this reader");
@@ -103,12 +105,18 @@ export class FakePaymentProvider implements PaymentProvider {
       Object.assign(intent, { status: "failed", error: "Card declined" });
       return;
     }
+    // like Stripe's Tap to Pay: girocard is not accepted on a phone
+    if (intent.tapToPay && card.brand === "girocard") {
+      Object.assign(intent, { status: "failed", brand: "girocard", error: "girocard is not accepted by tap to pay: use the reader" });
+      return;
+    }
     Object.assign(intent, {
-      brand: "visa",
+      brand: card.brand ?? "visa",
       last4: "4242",
       paymentMethodId: `pm_fake_${randomUUID().slice(0, 8)}`,
       customerId: intent.hold ? `cus_fake_${randomUUID().slice(0, 8)}` : null,
-      ...(intent.hold ? { status: "authorised", capturable: intent.amount, captureBefore: new Date(Date.now() + 5 * 86_400_000) } : { status: "succeeded", received: intent.amount }),
+      // a tip the guest adds on the reader is received on top
+      ...(intent.hold ? { status: "authorised", capturable: intent.amount, captureBefore: new Date(Date.now() + 5 * 86_400_000) } : { status: "succeeded", received: Math.round((intent.amount + (card.tip ?? 0)) * 100) / 100 }),
     });
   }
 

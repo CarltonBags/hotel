@@ -1,13 +1,30 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createOutlet, saveMenuItem, savePrinter, saveTable, setOutletManagers, updateOutlet } from "@hoteloftware/db";
+import { createOutlet, saveMenuItem, savePrinter, saveTable, setOutletManagers, setSpendingLimit, updateOutlet } from "@hoteloftware/db";
 import { authorizeOutlet } from "@/lib/outlets";
 import { field, flag, formAction, type FormState } from "@/lib/form";
 import { pool } from "@/lib/db";
 
 /** Outlets (ticket 60): defined by the Property Manager; menu, printers and tables by the Property Manager or the outlet's own Outlet Manager (the db layer checks which). */
-const outletInput = (formData: FormData) => ({ name: field(formData, "name"), kind: field(formData, "kind"), cashRegisterId: field(formData, "cashRegisterId") || null, active: flag(formData, "active") });
+const outletInput = (formData: FormData) => ({
+  name: field(formData, "name"),
+  kind: field(formData, "kind"),
+  cashRegisterId: field(formData, "cashRegisterId") || null,
+  active: flag(formData, "active"),
+  ...(field(formData, "discountPercent") ? { discountPercent: Number(field(formData, "discountPercent").replace(",", ".")) } : {}),
+});
+
+/** The property's Spending Limit per night for Room Charges (ticket 61). */
+export async function spendingLimitAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const propertyId = field(formData, "propertyId");
+    const { tenant, viewer } = await authorizeOutlet("manage_outlets", { propertyId });
+    await setSpendingLimit(pool(), tenant.schemaName, propertyId, Number(field(formData, "limit").replace(",", ".")), viewer);
+    revalidatePath("/settings/outlets");
+    return { ok: true, message: "Saved." };
+  });
+}
 
 export async function createOutletAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {

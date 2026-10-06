@@ -1,4 +1,5 @@
 import { listApprovals, listTenantUsers } from "@hoteloftware/db";
+import { OUTLET_APPROVAL_KINDS, can } from "@hoteloftware/domain";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
@@ -22,8 +23,11 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
       </div>
     );
   }
-  const { tenant } = await requireAllowed("approve_requests", property.id);
-  const [requests, users] = await Promise.all([listApprovals(pool(), tenant.schemaName, property.id), listTenantUsers(pool(), tenant.id)]);
+  // the Property Manager sees every request; an Outlet Manager the outlet ones (ticket 61)
+  const all = can(shell.principal.actor, "approve_requests", property.id);
+  const { tenant } = await requireAllowed(all ? "approve_requests" : "approve_outlet_requests", property.id);
+  const [every, users] = await Promise.all([listApprovals(pool(), tenant.schemaName, property.id), listTenantUsers(pool(), tenant.id)]);
+  const requests = all ? every : every.filter((r) => OUTLET_APPROVAL_KINDS.includes(r.kind));
   const name = (id: string | null) => (id ? (users.find((u) => u.id === id)?.name ?? id) : "");
   const when = new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "short", timeStyle: "short", timeZone: property.timeZone });
   const open = requests.filter((r) => r.status === "pending");

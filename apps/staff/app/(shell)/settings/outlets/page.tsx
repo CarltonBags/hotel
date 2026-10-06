@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { listCashRegisters, listOutlets, listTenantUsers } from "@hoteloftware/db";
+import { listCashRegisters, listOutlets, listTenantUsers, spendingLimitOf } from "@hoteloftware/db";
 import { OUTLET_KINDS, rolesAt } from "@hoteloftware/domain";
 import { ActionForm, Field, Select } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { outletsModuleOn } from "@/lib/outlets";
 import { loadShell } from "@/lib/shell";
-import { createOutletAction, updateOutletAction } from "./actions";
+import { createOutletAction, spendingLimitAction, updateOutletAction } from "./actions";
 
 /** The property's outlets (ticket 60): name, kind, Cash Register, in use, Outlet Managers (Property Manager). */
 export default async function OutletSettingsPage() {
@@ -24,7 +24,7 @@ export default async function OutletSettingsPage() {
   }
   const { tenant } = await requireAllowed("manage_outlets", property.id);
   if (!(await outletsModuleOn(tenant.schemaName, property.id))) redirect("/not-allowed");
-  const [outlets, registers, users] = await Promise.all([listOutlets(pool(), tenant.schemaName, property.id), listCashRegisters(pool(), tenant.schemaName, property.id), listTenantUsers(pool(), tenant.id)]);
+  const [outlets, registers, users, limit] = await Promise.all([listOutlets(pool(), tenant.schemaName, property.id), listCashRegisters(pool(), tenant.schemaName, property.id), listTenantUsers(pool(), tenant.id), spendingLimitOf(pool(), tenant.schemaName, property.id)]);
   const managers = users.filter((u) => rolesAt({ propertyRoles: u.propertyRoles }, property.id).includes("outlet_manager"));
   const kinds = OUTLET_KINDS.map((k) => ({ value: k, label: m[`outlet.kind.${k}`] }));
   const regs = [{ value: "", label: m["outlet.none"] }, ...registers.filter((r) => r.active).map((r) => ({ value: r.id, label: r.name }))];
@@ -34,6 +34,12 @@ export default async function OutletSettingsPage() {
       <h1 className="text-xl font-medium">
         {m["module.settings_outlets"]} <span className="text-ink-60">· {property.name}</span>
       </h1>
+      <section className={section} data-spending-limit>
+        <ActionForm action={spendingLimitAction} submitLabel={m["action.save"]} className="flex flex-wrap items-end gap-2">
+          <input type="hidden" name="propertyId" value={property.id} />
+          <Field label={m["outlet.spendingLimit"]} name="limit" defaultValue={String(limit)} />
+        </ActionForm>
+      </section>
       {outlets.map((o) => (
         <section key={o.id} className={section} data-outlet={o.name}>
           <ActionForm action={updateOutletAction} submitLabel={m["action.save"]} className="grid gap-3 sm:grid-cols-2">
@@ -41,6 +47,7 @@ export default async function OutletSettingsPage() {
             <Field label={m["outlet.name"]} name="name" defaultValue={o.name} />
             <Select label={m["outlet.kind"]} name="kind" options={kinds} defaultValue={o.kind} />
             <Select label={m["outlet.register"]} name="cashRegisterId" options={regs} defaultValue={o.cashRegisterId ?? ""} />
+            <Field label={m["outlet.discountMax"]} name="discountPercent" defaultValue={String(o.discountPercent)} />
             <label className="flex items-center gap-2">
               <input type="checkbox" name="active" value="on" defaultChecked={o.active} />
               {m["outlet.active"]}

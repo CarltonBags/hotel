@@ -16,12 +16,13 @@ import {
   type PaymentStatus,
   type Tender,
 } from "@hoteloftware/domain";
-import { ProviderError, type IntentState, type PaymentProvider } from "@hoteloftware/payments";
+import { ProviderError, type IntentState, type PaymentProvider, type SimulatedCard } from "@hoteloftware/payments";
 import { isUuid } from "./catalogue-common";
 import { useApproval } from "./approvals";
 import { assertDepositInvoiceable, depositIn } from "./invoices";
 import { openFolios } from "./folios";
 import { mapProviderAccount } from "../control/external-ids";
+import { settleOutletBillIn } from "./outlets";
 import { withTenant } from "./with-tenant";
 import { inTestMode } from "./go-live";
 import { bookCashPaymentIn, issueReceiptIn } from "./cash";
@@ -52,9 +53,11 @@ export interface Payment {
   error: string | null;
   postedAt: string;
   postedBy: string;
+  /** A tip on top (ticket 61): not revenue, not in the amount. */
+  tip: number;
 }
 
-interface PaymentRow {
+export interface PaymentRow {
   id: string;
   voucher_id: string | null;
   folio_id: string;
@@ -75,9 +78,10 @@ interface PaymentRow {
   provider_intent_id: string | null;
   provider_refund_id: string | null;
   property_id: string;
+  tip: string;
 }
 
-const PAYMENT_COLUMNS = "id, folio_id, reservation_id, tender, amount, currency, status, refund_of, card_brand, card_last4, reader_id, reference, error, posted_at, posted_by, provider, provider_intent_id, provider_refund_id, property_id, voucher_id";
+export const PAYMENT_COLUMNS = "id, folio_id, reservation_id, tender, amount, currency, status, refund_of, card_brand, card_last4, reader_id, reference, error, posted_at, posted_by, provider, provider_intent_id, provider_refund_id, property_id, voucher_id, tip";
 
 export function toPayment(r: PaymentRow): Payment {
   return {
@@ -96,6 +100,7 @@ export function toPayment(r: PaymentRow): Payment {
     error: r.error,
     postedAt: r.posted_at.toISOString(),
     postedBy: r.posted_by,
+    tip: Number(r.tip ?? 0),
   };
 }
 
@@ -210,18 +215,20 @@ export interface TerminalReader {
   readerId: string;
   label: string;
   deviceType: string;
+  /** A card reader, or a staff phone taking cards by tap to pay (ticket 61). */
+  kind: "reader" | "phone";
 }
 
 export async function listTerminalReaders(pool: Pool, schema: string, propertyId: string): Promise<TerminalReader[]> {
   if (!isUuid(propertyId)) return [];
   return withTenant(pool, schema, async (tx) => {
-    const { rows } = await tx.query<{ id: string; reader_id: string; label: string; device_type: string }>("select id, reader_id, label, device_type from terminal_readers where property_id = $1 order by label", [propertyId]);
-    return rows.map((r) => ({ id: r.id, readerId: r.reader_id, label: r.label, deviceType: r.device_type }));
+    const { rows } = await tx.query<{ id: string; reader_id: string; label: string; device_type: string; kind: "reader" | "phone" }>("select id, reader_id, label, device_type, kind from terminal_readers where property_id = $1 order by label", [propertyId]);
+    return rows.map((r) => ({ id: r.id, readerId: r.reader_id, label: r.label, deviceType: r.device_type, kind: r.kind }));
   });
 }
 
 /** Pair a reader by the registration code it shows; the property's Terminal location is created on first need. */
-export async function registerTerminalReader(pool: Pool, schema: string, provider: PaymentProvider, propertyId: string, input: { registrationCode: string; label: string }, userId: string): Promise<TerminalReader> {
+export async function registerTerminalReader(pool: Pool, schema: string, provider: PaymentProvider, propertyId: string, input: { registrationCode: string; label: string; kind?: "reader" | "phone" | undefined }, userId: string): Promise<TerminalReader> {
   const code = input.registrationCode.trim();
   const label = input.label.trim();
   if (!code) throw new Error("Enter the code the reader shows");
@@ -246,10 +253,10 @@ export async function registerTerminalReader(pool: Pool, schema: string, provide
   const r = await provider.registerReader(prop.accountId, { registrationCode: code, label, locationId: location });
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query<{ id: string }>(
-      "insert into terminal_readers (property_id, provider, reader_id, label, device_type, created_by) values ($1, $2, $3, $4, $5, $6) returning id",
-      [propertyId, provider.name, r.readerId, r.label, r.deviceType, userId],
+      "insert into terminal_readers (property_id, provider, reader_id, label, device_type, created_by, kind) values ($1, $2, $3, $4, $5, $6, $7) returning id",
+      [propertyId, provider.name, r.readerId, r.label, r.deviceType, userId, input.kind ?? "reader"],
     );
-    return { id: rows[0]!.id, readerId: r.readerId, label: r.label, deviceType: r.deviceType };
+    return { id: rows[0]!.id, readerId: r.readerId, label: r.label, deviceType: r.deviceType, kind: input.kind ?? "reader" };
   });
 }
 
@@ -439,6 +446,8 @@ async function settleIntent(pool: Pool, schema: string, paymentId: string, state
        where id = $1 and status = 'pending' returning ${PAYMENT_COLUMNS}`,
       [paymentId, status, state.brand, state.last4, state.status === "cancelled" ? "Cancelled at the reader" : state.error],
     );
+    // a payment at an outlet's reader or phone closes its bill, or opens it again (ticket 61)
+    if (rows[0] && status !== null) await settleOutletBillIn(tx, rows[0], state);
     if (rows[0]?.status === "succeeded") {
       await depositIn(tx, rows[0].id, rows[0].posted_by);
       // a desk card payment gets its Receipt once the card went through
@@ -472,7 +481,7 @@ export async function cancelPendingPayment(pool: Pool, schema: string, provider:
 }
 
 /** Test mode only: present the simulated card on the reader of a waiting payment or hold, and settle it as the webhook would. */
-export async function simulateCard(pool: Pool, schema: string, provider: PaymentProvider, target: { paymentId?: string; holdId?: string }): Promise<void> {
+export async function simulateCard(pool: Pool, schema: string, provider: PaymentProvider, target: { paymentId?: string; holdId?: string }, card: SimulatedCard = {}): Promise<void> {
   if (!provider.testMode) throw new Error("Simulated cards exist in test mode only");
   const row = await withTenant(pool, schema, async (tx) =>
     target.paymentId
@@ -481,7 +490,7 @@ export async function simulateCard(pool: Pool, schema: string, provider: Payment
   );
   if (!row?.reader_id) throw new Error("Nothing is waiting on a reader");
   const ctx = await withTenant(pool, schema, (tx) => accountFor(tx, row.property_id, provider));
-  await provider.simulateCard(ctx.accountId, row.reader_id);
+  await provider.simulateCard(ctx.accountId, row.reader_id, card);
   if (target.paymentId) await syncPayment(pool, schema, provider, target.paymentId);
   if (target.holdId) await syncCardHold(pool, schema, provider, target.holdId);
 }
@@ -509,7 +518,11 @@ export async function refundPayment(
   const refund = await withTenant(pool, schema, async (tx) => {
     const orig = (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [input.paymentId])).rows[0];
     if (!orig) throw new Error("Payment not found");
-    await lockReservation(tx, orig.reservation_id);
+    // a payment on a stay, or on an outlet bill (ticket 61: the Outlet Manager refunds, or approves one)
+    const outletBill = orig.reservation_id ? null : (await tx.query<{ outlet_bill_id: string | null }>("select outlet_bill_id from folios where id = $1", [orig.folio_id])).rows[0]?.outlet_bill_id ?? null;
+    if (orig.reservation_id) await lockReservation(tx, orig.reservation_id);
+    else if (outletBill) await tx.query("select 1 from outlet_bills where id = $1 for update", [outletBill]);
+    else throw new Error("Only a payment on a stay or an outlet bill is refunded here");
     if (orig.refund_of || orig.status !== "succeeded") throw new Error("Only a received payment can be refunded");
     const refunds = (await tx.query<{ amount: string; status: PaymentStatus }>("select amount, status from payments where refund_of = $1", [orig.id])).rows.map((r) => ({ amount: Number(r.amount), status: r.status }));
     const limit = Number((await tx.query<{ refund_limit: string }>("select refund_limit from properties where id = $1", [orig.property_id])).rows[0]!.refund_limit);
@@ -518,7 +531,13 @@ export async function refundPayment(
     const verdict = refundCheck({ amount, refundable, refundedSoFar, limit, unlimited: actor.unlimited });
     if (verdict === "exceeds_refundable") throw new Error(`Cannot refund more than ${refundable.toFixed(2)} of this payment`);
     let approvedBy: string | null = null;
-    if (verdict === "needs_approval") {
+    if (outletBill && !actor.unlimited) {
+      approvedBy = await useApproval(
+        tx,
+        { kind: "outlet_refund", propertyId: orig.property_id, key: `${orig.id}:${amount.toFixed(2)}`, summary: `Refund of ${amount.toFixed(2)} ${orig.currency.trim()} at the outlet`, recordId: null },
+        actor,
+      );
+    } else if (verdict === "needs_approval") {
       approvedBy = await useApproval(
         tx,
         {

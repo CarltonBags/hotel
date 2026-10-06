@@ -6,7 +6,9 @@ import { useRouter } from "next/navigation";
 import type { MenuItem, OutletBillView } from "@hoteloftware/db";
 import { formatCurrency } from "@hoteloftware/domain";
 import type { Messages } from "@/i18n/messages";
-import { addItemAction, invoiceBillAction, moveAction, payCashAction, removeLineAction, sendRoundAction, splitAction } from "../../../actions";
+import type { ApprovalMode, ApprovalState } from "@/lib/approval";
+import { addItemAction, discountAction, moveAction, removeLineAction, sendRoundAction, splitAction, voidLineAction } from "../../../actions";
+import { ApprovalPrompt, PayPanel, RefundPanel } from "./pay-panel";
 
 interface Props {
   bill: OutletBillView;
@@ -15,11 +17,13 @@ interface Props {
   companies: { id: string; name: string }[];
   currency: { code: string; country: string };
   rights: { serve: boolean; cash: boolean };
+  readers: { readerId: string; label: string; kind: "reader" | "phone" }[];
+  testMode: boolean;
   m: Messages;
 }
 
 /** One bill on the outlet device: the menu to tap, the items with their round, and what closes it. */
-export function BillScreen({ bill, menu, tables, companies, currency, rights, m }: Props) {
+export function BillScreen({ bill, menu, tables, companies, currency, rights, readers, testMode, m }: Props) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
@@ -28,9 +32,21 @@ export function BillScreen({ bill, menu, tables, companies, currency, rights, m 
   const [qty, setQty] = useState(1);
   const [mods, setMods] = useState<string[]>([]);
   const [itemNote, setItemNote] = useState("");
-  const [customer, setCustomer] = useState("");
-  const [company, setCompany] = useState("");
   const [table, setTable] = useState(bill.tableId ?? "");
+  const [discount, setDiscount] = useState(String(bill.discountPercent || ""));
+  const [voiding, setVoiding] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [approval, setApproval] = useState<{ summary: string; retry: (mode: ApprovalMode) => void } | null>(null);
+  // an action an Outlet Manager may have to approve
+  const approved = (act: (mode?: ApprovalMode) => Promise<ApprovalState>, after?: () => void) =>
+    start(async () => {
+      const r = await act();
+      if (r.approval) setApproval({ summary: r.approval.summary, retry: (mode) => (setApproval(null), approved(() => act(mode), after)) });
+      else {
+        setNote(r.error ? { error: true, text: r.error } : r.message ? { error: false, text: r.message } : null);
+        if (!r.error) (after?.(), router.refresh());
+      }
+    });
   const money = (n: number) => formatCurrency(n, currency.code, "de", currency.country);
   const open = bill.status === "open";
   const outletId = bill.outlet.id;
@@ -114,8 +130,8 @@ export function BillScreen({ bill, menu, tables, companies, currency, rights, m 
         <section className="grid content-start gap-3 rounded-2xl bg-surface-2 p-3" aria-label={m["outlet.bill"]}>
           <ul className="grid gap-1">
             {bill.lines.map((l) => (
-              <li key={l.id} className="flex items-start gap-2" data-line={l.description} data-round={l.round ?? ""}>
-                {open ? <input type="checkbox" aria-label={l.description} checked={picked.includes(l.id)} onChange={(e) => setPicked((s) => (e.target.checked ? [...s, l.id] : s.filter((x) => x !== l.id)))} /> : null}
+              <li key={l.id} className={`flex items-start gap-2${l.voided ? " text-ink-60 line-through" : ""}`} data-line={l.description} data-round={l.round ?? ""} data-voided={l.voided ? "yes" : ""}>
+                {open && !l.voided ? <input type="checkbox" aria-label={l.description} checked={picked.includes(l.id)} onChange={(e) => setPicked((s) => (e.target.checked ? [...s, l.id] : s.filter((x) => x !== l.id)))} /> : null}
                 <span className="flex-1">
                   {l.quantity} × {l.description}
                   {l.modifiers.length ? <span className="block text-xs text-ink-60">{l.modifiers.map((x) => x.name).join(", ")}</span> : null}
@@ -128,13 +144,41 @@ export function BillScreen({ bill, menu, tables, companies, currency, rights, m 
                     ✕
                   </button>
                 ) : null}
+                {open && l.round && !l.voided ? (
+                  <button type="button" onClick={() => (setVoiding(l.id), setReason(""))} className="text-xs text-danger" data-void={l.description}>
+                    {m["outlet.void"]}
+                  </button>
+                ) : null}
               </li>
             ))}
           </ul>
+          {voiding ? (
+            <div className="flex gap-2" data-void-reason>
+              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={m["outlet.voidReason"]} aria-label={m["outlet.voidReason"]} className="h-10 flex-1 rounded-full border border-ink-10 bg-surface px-3" />
+              <button type="button" disabled={pending || !reason.trim()} onClick={() => approved((mode) => voidLineAction(outletId, bill.id, voiding, reason, mode), () => setVoiding(null))} className="h-10 rounded-full bg-danger px-4 text-sm font-medium text-white" data-void-confirm>
+                {m["outlet.void"]}
+              </button>
+            </div>
+          ) : null}
+          {approval ? <ApprovalPrompt summary={approval.summary} onApprove={approval.retry} m={m} /> : null}
           <p className="flex justify-between text-lg font-medium" data-total={bill.total}>
             <span>{m["outlet.total"]}</span>
             <span>{money(bill.total)}</span>
           </p>
+          {bill.discount ? (
+            <p className="flex justify-between text-sm" data-discount={bill.discount}>
+              <span>
+                {m["outlet.discount"]} {bill.discountPercent}
+              </span>
+              <span>−{money(bill.discount)}</span>
+            </p>
+          ) : null}
+          {bill.tip ? (
+            <p className="flex justify-between text-sm" data-tip={bill.tip}>
+              <span>{m["outlet.tipLine"]}</span>
+              <span>{money(bill.tip)}</span>
+            </p>
+          ) : null}
           {open && rights.serve ? (
             <div className="grid gap-2">
               <button type="button" disabled={pending} onClick={() => run(() => sendRoundAction(outletId, bill.id))} className={`${button} bg-accent text-white`} data-send>
@@ -170,40 +214,26 @@ export function BillScreen({ bill, menu, tables, companies, currency, rights, m 
               </div>
             </div>
           ) : null}
-          {open && rights.cash ? (
-            <div className="grid gap-2 border-t border-ink-10 pt-3">
-              <input value={customer} onChange={(e) => setCustomer(e.target.value)} placeholder={m["outlet.customer"]} aria-label={m["outlet.customer"]} className="h-11 rounded-full border border-ink-10 bg-surface px-3" />
-              <button
-                type="button"
-                disabled={pending || !bill.lines.length}
-                onClick={() =>
-                  start(async () => {
-                    const r = await payCashAction(outletId, bill.id, customer);
-                    if (r.error) setNote({ error: true, text: r.error });
-                    router.refresh();
-                  })
-                }
-                className={`${button} bg-success text-white`}
-                data-pay-cash
-              >
-                {m["outlet.payCash"]} · {money(bill.total)}
+          {open && rights.serve ? (
+            <div className="flex gap-2">
+              <input value={discount} onChange={(e) => setDiscount(e.target.value)} inputMode="decimal" placeholder={m["outlet.discount"]} aria-label={m["outlet.discount"]} className="h-11 w-28 rounded-full border border-ink-10 bg-surface px-3" />
+              <button type="button" disabled={pending} onClick={() => approved((mode) => discountAction(outletId, bill.id, Number(discount.replace(",", ".")) || 0, mode))} className="h-11 rounded-full border border-ink-10 px-4 text-sm font-medium" data-set-discount>
+                {m["outlet.setDiscount"]}
               </button>
-              {rights.serve ? (
-                <div className="flex gap-2">
-                  <select value={company} onChange={(e) => setCompany(e.target.value)} aria-label={m["outlet.company"]} className="h-11 flex-1 rounded-full border border-ink-10 bg-surface px-3">
-                    <option value="">{m["outlet.company"]}</option>
-                    {companies.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" disabled={pending || !company || !bill.lines.length} onClick={() => run(() => invoiceBillAction(outletId, bill.id, company))} className={`${button} border border-ink-10`} data-invoice>
-                    {m["outlet.invoiceCompany"]}
-                  </button>
-                </div>
-              ) : null}
             </div>
+          ) : null}
+          {(open || bill.status === "paying") && rights.cash ? (
+            <PayPanel outletId={outletId} billId={bill.id} due={bill.due} pendingPaymentId={bill.pendingPaymentId} readers={readers} companies={companies} testMode={testMode} rights={{ serve: rights.serve }} money={money} m={m} />
+          ) : null}
+          {bill.status === "paid" && rights.cash ? <RefundPanel outletId={outletId} billId={bill.id} payments={bill.payments} money={money} m={m} /> : null}
+          {bill.status === "charged" && bill.roomCharge ? (
+            <p data-charged>
+              {m["outlet.room"]} · {bill.roomCharge.room ?? "–"} · {bill.roomCharge.guest} ·{" "}
+              {/* the slip the guest signs when not on the device */}
+              <a href={`/outlet/${outletId}/bill/${bill.id}/slip`} className="text-accent underline" data-slip>
+                {m["outlet.slip"]}
+              </a>
+            </p>
           ) : null}
           {bill.status === "paid" ? (
             <p data-paid>

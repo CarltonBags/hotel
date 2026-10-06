@@ -83,6 +83,12 @@ export interface ProviderEvent {
   objectId: string | null;
 }
 
+/** A test card presented to a simulated reader (test mode): its brand, and a tip the guest adds on the reader. */
+export interface SimulatedCard {
+  brand?: "visa" | "mastercard" | "girocard";
+  tip?: number;
+}
+
 export interface TerminalPaymentInput {
   readerId: string;
   amount: number;
@@ -91,6 +97,8 @@ export interface TerminalPaymentInput {
   hold: boolean;
   /** Keyed card-not-present entry (OTA virtual card) on the reader. */
   moto: boolean;
+  /** Tap to pay on a staff phone (ticket 61): girocard is declined there, it needs a reader. */
+  tapToPay?: boolean;
   description: string;
   /** Identifiers only (ADR 0007): payment or hold id, tenant. */
   metadata: Record<string, string>;
@@ -113,7 +121,7 @@ export interface PaymentProvider {
   /** Hand a payment or hold to a reader; the result arrives later (webhook or polling). */
   startTerminalPayment(accountId: string, input: TerminalPaymentInput): Promise<{ intentId: string }>;
   /** Test mode only: a card is presented on the reader. */
-  simulateCard(accountId: string, readerId: string): Promise<void>;
+  simulateCard(accountId: string, readerId: string, card?: SimulatedCard): Promise<void>;
   /** Stop waiting on the reader and drop the payment. */
   cancelTerminalPayment(accountId: string, readerId: string, intentId: string): Promise<void>;
   getIntent(accountId: string, intentId: string): Promise<IntentState>;

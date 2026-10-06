@@ -35,7 +35,7 @@ import { assertNotOutOfOrder, roomReadiness } from "./room-state";
  * the booking's Company with its default Routing Rules.
  */
 
-export type ChargeOrigin = "stay" | "catalogue" | "free_text" | "fee" | "correction";
+export type ChargeOrigin = "stay" | "catalogue" | "free_text" | "fee" | "correction" | "outlet";
 
 export interface Charge {
   id: string;
@@ -64,6 +64,8 @@ export interface Charge {
   invoiceId: string | null;
   /** A correction: the Charge of a closed Business Date it reverses (ticket 32). */
   correctsId: string | null;
+  /** A Room Charge from an outlet (ticket 61): its items. */
+  detail: { description: string; quantity: number; amount: number }[] | null;
 }
 
 export interface Folio {
@@ -203,6 +205,9 @@ async function folioOfReservation(tx: PoolClient, res: ResRow, folioId: string):
 }
 
 interface NewCharge {
+  /** A Room Charge from an outlet (ticket 61): the bill, its items as detail. */
+  outletBillId?: string | null;
+  detail?: unknown;
   serviceId: string | null;
   description: string;
   serviceDate: string;
@@ -223,9 +228,9 @@ async function insertCharge(tx: PoolClient, res: ResRow, userId: string, c: NewC
   const folioId = routeCharge(c.category, rules.rows.map((r) => ({ category: r.category, folioId: r.folio_id })), folios.rows[0]!.id);
   const taxRate = await rateOn(tx, c.taxCodeId, c.serviceDate);
   const { rows } = await tx.query<{ id: string }>(
-    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, component, posted_by)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning id`,
-    [folioId, res.id, res.property_id, c.serviceId, c.description, c.serviceDate, c.quantity, c.unitPrice, c.amount, c.taxCodeId, taxRate, c.revenueAccount, c.category, c.origin, c.component ?? null, userId],
+    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, component, posted_by, outlet_bill_id, detail)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) returning id`,
+    [folioId, res.id, res.property_id, c.serviceId, c.description, c.serviceDate, c.quantity, c.unitPrice, c.amount, c.taxCodeId, taxRate, c.revenueAccount, c.category, c.origin, c.component ?? null, userId, c.outletBillId ?? null, c.detail === undefined ? null : JSON.stringify(c.detail)],
   );
   const id = rows[0]!.id;
   await tx.query("insert into charge_events (charge_id, user_id, action, detail) values ($1, $2, 'post', $3)", [id, userId, JSON.stringify({ folioId })]);
@@ -668,14 +673,39 @@ async function correctIn(tx: PoolClient, chargeId: string, reason: string, userI
   if (c.origin === "correction") throw new Error("A correction is not corrected again; post the Charge anew instead");
   if (c.corrected) throw new Error("The Charge is already corrected");
   const { rows } = await tx.query<{ id: string }>(
-    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, corrects, posted_by)
-     select folio_id, reservation_id, property_id, service_id, description, service_date, quantity, -unit_price, -amount, tax_code_id, tax_rate, revenue_account, category, 'correction', id, $2
+    // an outlet's Room Charge keeps its bill and items on the correction (the outlet report nets it)
+    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, corrects, posted_by, outlet_bill_id, detail)
+     select folio_id, reservation_id, property_id, service_id, description, service_date, quantity, -unit_price, -amount, tax_code_id, tax_rate, revenue_account, category, 'correction', id, $2, outlet_bill_id, detail
      from charges where id = $1 returning id`,
     [chargeId, userId],
   );
   await tx.query("insert into charge_events (charge_id, user_id, action, detail) values ($1, $2, 'post', $3)", [rows[0]!.id, userId, JSON.stringify({ corrects: chargeId, reason })]);
   // a City Tax Charge taken back: the tax is still owed, so its night is filed as borne by the hotel
   if (c.component?.startsWith("ctax:")) await tx.query("update city_tax_nights set absorbed = true where reservation_id = $1 and date = $2", [c.reservation_id, c.service_date]);
+}
+
+/**
+ * A Room Charge (ticket 61): an outlet bill on the stay's folio, one Charge
+ * per Tax Code with the items as detail, routed like any extra, on the
+ * Business Date. The caller has checked the stay may take it.
+ */
+export async function postRoomChargeIn(
+  tx: PoolClient,
+  reservationId: string,
+  billId: string,
+  charges: { description: string; taxCodeId: string; revenueAccount: string; amount: number; detail: unknown }[],
+  userId: string,
+): Promise<string[]> {
+  const res = await loadReservation(tx, reservationId);
+  if (res.status !== "checked_in") throw new Error("The guest is not checked in");
+  await ensureFolios(tx, res, userId);
+  const ids: string[] = [];
+  for (const c of charges) {
+    ids.push(
+      await insertCharge(tx, res, userId, { serviceId: null, description: c.description, serviceDate: res.businessDate, quantity: 1, unitPrice: c.amount, amount: c.amount, taxCodeId: c.taxCodeId, revenueAccount: c.revenueAccount, category: "extras", origin: "outlet", outletBillId: billId, detail: c.detail }),
+    );
+  }
+  return ids;
 }
 
 /** A No-show's confirmed fee (ticket 32), on the reservation's folio for the Business Date it was decided on. */
@@ -785,6 +815,7 @@ interface ChargeRow {
   auto_void: AutoVoid | null;
   invoice_id: string | null;
   corrects: string | null;
+  detail: { description: string; quantity: number; amount: number }[] | null;
 }
 
 /** The reservation's folios with every Charge (voided ones too), totals per Tax Code, and its Routing Rules. */
@@ -803,7 +834,7 @@ export async function loadFolios(pool: Pool, schema: string, reservationId: stri
     );
     const charges = await tx.query<ChargeRow>(
       `select ch.id, ch.folio_id, ch.service_id, ch.description, to_char(ch.service_date, 'YYYY-MM-DD') as service_date, ch.quantity, ch.unit_price, ch.amount,
-         ch.tax_code_id, t.code as tax_code, ch.tax_rate, ch.revenue_account, ch.category, ch.origin, ch.posted_at, ch.posted_by, ch.voided_at, ch.voided_by, ch.void_reason, ch.auto_void, ch.invoice_id, ch.corrects
+         ch.tax_code_id, t.code as tax_code, ch.tax_rate, ch.revenue_account, ch.category, ch.origin, ch.posted_at, ch.posted_by, ch.voided_at, ch.voided_by, ch.void_reason, ch.auto_void, ch.invoice_id, ch.corrects, ch.detail
        from charges ch join tax_codes t on t.id = ch.tax_code_id
        where ch.reservation_id = $1 order by ch.service_date, ch.posted_at`,
       [reservationId],
@@ -833,6 +864,7 @@ export async function loadFolios(pool: Pool, schema: string, reservationId: stri
       autoVoid: c.auto_void,
       invoiceId: c.invoice_id,
       correctsId: c.corrects,
+      detail: c.detail,
     }));
     const payments = await paymentsOf(tx, reservationId);
     return {

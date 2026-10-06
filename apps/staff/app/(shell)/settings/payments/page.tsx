@@ -5,7 +5,7 @@ import { requireAllowedAnywhere } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { fill } from "@/i18n/messages";
-import { ActionForm, Field } from "@/components/form-fields";
+import { ActionForm, Field, Select } from "@/components/form-fields";
 import { onboardAction, pairReaderAction, refreshAccountAction, refundLimitAction, removeReaderAction } from "./actions";
 
 /**
@@ -89,6 +89,8 @@ export default async function PaymentSettingsPage({ searchParams }: { searchPara
               <input type="hidden" name="propertyId" value={property.id} />
               <Field label={m["pset.code"]} name="code" required />
               <Field label={m["pset.label"]} name="label" required />
+              {/* a staff phone for tap to pay at the outlets (ticket 61): Visa, Mastercard, Amex, Maestro; girocard needs a reader */}
+              <Select label={m["outlet.device"]} name="kind" options={[{ value: "reader", label: m["outlet.card"] }, { value: "phone", label: m["outlet.phone"] }]} />
             </ActionForm>
           </section>
 
