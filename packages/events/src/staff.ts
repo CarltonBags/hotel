@@ -77,6 +77,11 @@ export async function notifySelfCheckin(
   for (const u of await usersWithRight(pool, tenant.id, "check_in", r.propertyId)) await publishNotification(pool, { tenantId: tenant.id, userId: u.id, kind: "self_checkin.done", title: "Self check-in complete", body, href });
 }
 
+/** The guest's key could not be made at Self Check-in (ticket 69): the desk hands it over and hears why. */
+export function notifyKeyProblem(pool: Pool, tenant: { id: string; schemaName: string }, k: { reservationId: string; propertyId: string; guestName: string; reason: string }): Promise<void> {
+  return notifyWithRight(pool, tenant, "check_in", k.propertyId, { kind: "self_checkin.key", title: `${k.guestName}: key at reception`, body: `The key could not be made at Self Check-in (${k.reason}). Please hand it over at reception.`, href: `/reservations/${k.reservationId}` });
+}
+
 /** The TSE could not sign (ticket 51): who runs the property's cash desk hears of the outage once, when it starts (urgent: the Property Managers by SMS too). */
 export function notifyFiscalOutage(pool: Pool, tenant: { id: string; schemaName: string }, o: { propertyId: string; error: string }): Promise<void> {
   return notifyWithRight(pool, tenant, "manage_cash_desk", o.propertyId, {

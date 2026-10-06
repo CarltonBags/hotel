@@ -1,9 +1,10 @@
 import type { Pool, PoolClient } from "pg";
-import { checkInConditions, isRegistrationCountry, isReady, needsReception, sameLastName, selfRegistrationPath, type CheckInCondition, type Cleanliness } from "@hoteloftware/domain";
+import { checkInConditions, isRegistrationCountry, isReady, needsReception, sameLastName, selfRegistrationPath, type CheckInCondition, type Cleanliness, type KeyHandover } from "@hoteloftware/domain";
 import { checkInIn } from "./folios";
 import { syncHousekeepingTasks } from "./housekeeping";
 import { amountDueIn, cardGuaranteeIn } from "./payments";
 import { reservationByKey } from "./portal";
+import { guestKeyHandoverIn } from "./locks";
 import { lockProperty } from "./property-lock";
 import { outOfOrderOn } from "./room-state";
 import { guestFormIn, guestStepIn, lockedRegistrationIn, openRegistrationIn, TabletProblem, type RegistrationView, type TabletInput, type TabletState } from "./registration";
@@ -31,10 +32,11 @@ export type SelfCheckinOutcome = "checked_in" | "waiting" | "help";
 export interface SelfCheckinView {
   runId: string;
   reservationId: string;
+  propertyId: string;
   status: string;
   step: SelfCheckinStep;
   outcome: SelfCheckinOutcome | null;
-  property: { name: string; currency: string; checkinFrom: string; keyHandover: "reception" };
+  property: { name: string; currency: string; checkinFrom: string; keyHandover: KeyHandover };
   stay: { firstName: string; lastName: string; confirmationNumber: string; arrival: string; departure: string; roomType: string; ratePlan: string; adults: number; children: number };
   /** The Check-in Conditions not met now. */
   failed: CheckInCondition[];
@@ -61,7 +63,6 @@ type Stay = {
   name: string;
   currency: string;
   country: string;
-  key_handover: "reception";
   business_date: string;
   local_time: string;
   checkin_from: string;
@@ -70,7 +71,7 @@ type Stay = {
 async function stayIn(tx: PoolClient, reservationId: string): Promise<Stay> {
   return (await tx.query<Stay>(
     `select r.id, r.property_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure, r.adults, r.child_ages,
-            t.name as room_type, pl.name as rate_plan, g.first_name, g.last_name, b.confirmation_number, p.name, trim(p.currency) as currency, p.country, p.key_handover,
+            t.name as room_type, pl.name as rate_plan, g.first_name, g.last_name, b.confirmation_number, p.name, trim(p.currency) as currency, p.country,
             to_char(coalesce(p.business_date, (now() at time zone p.time_zone)::date), 'YYYY-MM-DD') as business_date,
             to_char(now() at time zone p.time_zone, 'HH24:MI') as local_time,
             to_char(coalesce(pm.checkin_time, '15:00'), 'HH24:MI') as checkin_from
@@ -138,12 +139,13 @@ async function viewIn(tx: PoolClient, runId: string): Promise<SelfCheckinView> {
   const tonight = (await tx.query<{ number: string }>("select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = $1 and a.from_date <= $2 and a.to_date > $2", [s.id, s.business_date])).rows[0];
   const failed = checkInConditions({ arrival: s.arrival, businessDate: s.business_date, localTime: s.local_time, checkinFrom: s.checkin_from, readyRoom: !!room?.ready, registration, amountDue, cardGuarantee });
   return {
+    propertyId: s.property_id,
     runId: run.id,
     reservationId: s.id,
     status: s.status,
     step: run.step,
     outcome: run.outcome,
-    property: { name: s.name, currency: s.currency, checkinFrom: s.checkin_from, keyHandover: s.key_handover },
+    property: { name: s.name, currency: s.currency, checkinFrom: s.checkin_from, keyHandover: await guestKeyHandoverIn(tx, s.property_id) },
     stay: { firstName: s.first_name, lastName: s.last_name, confirmationNumber: s.confirmation_number, arrival: s.arrival, departure: s.departure, roomType: s.room_type, ratePlan: s.rate_plan, adults: s.adults, children: s.child_ages.length },
     failed: s.status === "checked_in" ? [] : failed,
     registration: { status: registration, form: registration === "pending" && reg && primary ? await guestFormIn(tx, reg, primary.id) : null },

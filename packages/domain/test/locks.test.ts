@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { doorPin, handoverSupported, keyActions, keyPlan, keyValidUntil } from "../src";
+import { doorPin, guestHandover, handoverSupported, keyActions, keyPlan, keyValidUntil } from "../src";
 
 const caps = { card: false, pin: true, phoneKey: false, remoteRevoke: true, readCard: false, encoders: false };
 const cardCaps = { card: true, pin: false, phoneKey: false, remoteRevoke: false, readCard: true, encoders: true };
@@ -27,6 +27,12 @@ describe("door keys", () => {
     expect(keyPlan({ status: "checked_in", roomId: "r2", validUntil: until }, [active], cardCaps, null)).toEqual({ issue: [], update: [], revoke: [{ keyId: "k1", reason: "room_move" }], warnings: ["offline_card_runs_to_expiry", "new_card_needed"] });
   });
 
+  it("a changed handover takes the other kind of key back, cards stay", () => {
+    const pin = { id: "k1", roomId: "r1", kind: "pin" as const, status: "active" as const, validUntil: until };
+    const card = { ...pin, id: "k2", kind: "card" as const };
+    expect(keyPlan({ status: "checked_in", roomId: "r1", validUntil: until }, [pin, card], { ...caps, phoneKey: true }, "phone")).toEqual({ issue: [{ roomId: "r1", kind: "phone" }], update: [], revoke: [{ keyId: "k1", reason: "handover_changed" }], warnings: [] });
+  });
+
   it("an extension cannot change an offline card: the desk writes it again", () => {
     const card = { id: "k1", roomId: "r1", kind: "card" as const, status: "active" as const, validUntil: new Date("2026-10-08T10:00:00Z") };
     expect(keyPlan({ status: "checked_in", roomId: "r1", validUntil: until }, [card], cardCaps, null)).toEqual({ issue: [], update: [], revoke: [], warnings: ["card_reencode_needed"] });
@@ -47,5 +53,12 @@ describe("door keys", () => {
       expect(p).toMatch(/^[1-9]{6}$/);
       expect(p.startsWith("12")).toBe(false);
     }
+  });
+
+  it("the guest is told how the key comes: the setting where the lock system can do it, else reception", () => {
+    expect(guestHandover("door_pin", caps)).toBe("door_pin");
+    expect(guestHandover("digital_key", caps)).toBe("reception");
+    expect(guestHandover("kiosk_encoder", cardCaps)).toBe("kiosk_encoder");
+    expect(guestHandover("door_pin", null)).toBe("reception");
   });
 });

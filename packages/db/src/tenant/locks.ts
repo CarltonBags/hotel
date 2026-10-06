@@ -1,9 +1,10 @@
 import type { Pool, PoolClient } from "pg";
-import { KEY_HANDOVERS, automaticKeyKind, bridgeOnline, can, doorPin, handoverSupported, keyActions, keyPlan, keyValidUntil, type KeyHandover, type KeyKind, type LockCapabilities, type PlannedKey, type RevokeReason } from "@hoteloftware/domain";
+import { KEY_HANDOVERS, automaticKeyKind, bridgeOnline, can, doorPin, guestHandover, handoverSupported, keyActions, keyPlan, keyValidUntil, type KeyHandover, type KeyKind, type LockCapabilities, type PlannedKey, type RevokeReason } from "@hoteloftware/domain";
 import { LOCK_CAPABILITIES, LOCK_SYSTEMS, LockUnavailable, hasPlugin, lockPlugin, sealLockSecret, unsealLockSecret, type LockPlugin, type LockSystem } from "@hoteloftware/locks";
 import { isUuid } from "./catalogue-common";
 import type { Viewer } from "./room-state";
 import { bridgeLockPlugin } from "./site-bridge";
+import { reservationByKey } from "./portal";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -152,6 +153,9 @@ export async function setDeskEncoder(pool: Pool, schema: string, propertyId: str
   if (!isUuid(propertyId) || !isUuid(deviceId)) throw new Error("Device not found");
   need(viewer, "manage_property_settings", propertyId);
   await withTenant(pool, schema, async (tx) => {
+    // only a Device of this property, desk or kiosk
+    const own = (await tx.query("select 1 from control.devices where id = $1 and property_id = $2 and revoked_at is null", [deviceId, propertyId])).rows.length;
+    if (!own) throw new Error("Device not found at this property");
     const enc = encoderId.trim().slice(0, 100);
     if (!enc) await tx.query("delete from lock_encoders where device_id = $1 and property_id = $2", [deviceId, propertyId]);
     // the caller checked the Device is the property's; a mapping never moves to another property
@@ -259,7 +263,7 @@ async function issueKey(pool: Pool, schema: string, plugin: LockPlugin, stay: St
     return { id, lockRef };
   });
   if (!pending) throw new Error("The room has no door at the lock system");
-  let made;
+  let made: { externalId: string; guestKey?: string | undefined };
   try {
     made = await plugin.issueKey({ keyId: pending.id, lockRef: pending.lockRef, kind, validFrom: new Date(), validUntil: stay.validUntil, guestName: stay.guest, pin, encoderId });
   } catch (err) {
@@ -274,7 +278,7 @@ async function issueKey(pool: Pool, schema: string, plugin: LockPlugin, stay: St
   }
   // revoked at the desk while it was being made: taken back at the lock at once
   const kept = await withTenant(pool, schema, async (tx) => {
-    const r = await tx.query("update room_keys set status = 'active', external_id = $2 where id = $1 and status = 'pending'", [pending.id, made.externalId]);
+    const r = await tx.query("update room_keys set status = 'active', external_id = $2, guest_key_sealed = $3 where id = $1 and status = 'pending'", [pending.id, made.externalId, made.guestKey ? seal(deps, made.guestKey) : null]);
     if (r.rowCount) await event(tx, stay.id, pending.id, "issued", { kind, roomId, encoderId: encoderId ?? null }, by);
     else await tx.query("update room_keys set external_id = $2 where id = $1", [pending.id, made.externalId]);
     return !!r.rowCount;
@@ -321,9 +325,10 @@ async function syncStay(pool: Pool, schema: string, reservationId: string, deps:
   for (const u of plan.update) {
     const k = keys.find((x) => x.id === u.keyId)!;
     const pin = (k.pin_sealed ? unseal(deps, k.pin_sealed) : null) ?? undefined;
-    if (k.external_id) await plugin.updateKey(k.external_id, { keyId: k.id, lockRef: k.lock_ref, kind: k.kind, validFrom: k.valid_from, validUntil: u.validUntil, guestName: stay.guest, pin, encoderId: k.encoder_id ?? undefined });
+    const renewed = k.external_id ? await plugin.updateKey(k.external_id, { keyId: k.id, lockRef: k.lock_ref, kind: k.kind, validFrom: k.valid_from, validUntil: u.validUntil, guestName: stay.guest, pin, encoderId: k.encoder_id ?? undefined }) : undefined;
     await withTenant(pool, schema, async (tx) => {
-      await tx.query("update room_keys set valid_until = $2 where id = $1", [k.id, u.validUntil]);
+      // a Digital Key renewed by the lock system: the guest's phone gets the new one
+      await tx.query("update room_keys set valid_until = $2, guest_key_sealed = coalesce($3, guest_key_sealed) where id = $1", [k.id, u.validUntil, renewed?.guestKey ? seal(deps, renewed.guestKey) : null]);
       await event(tx, stay.id, k.id, "updated", { validUntil: u.validUntil.toISOString() }, SYNC_BY);
     });
   }
@@ -410,6 +415,84 @@ export async function setLateCheckout(pool: Pool, schema: string, reservationId:
     await tx.query("update reservations set late_checkout = $2 where id = $1", [reservationId, time]);
     await event(tx, reservationId, null, "late_checkout", { time }, viewer.userId);
   });
+}
+
+// ── for the guest ──
+
+/** How the property's guests get their key, as far as its lock system can (the Self Check-in's last screen). */
+export async function guestKeyHandoverIn(tx: PoolClient, propertyId: string): Promise<KeyHandover> {
+  const s = await settingsIn(tx, propertyId);
+  return guestHandover(s.handover, capabilitiesOf(s));
+}
+
+export interface GuestKeys {
+  handover: KeyHandover;
+  /** The stay's door PINs and Digital Keys in force (none before check-in, none after check-out). */
+  keys: { kind: "pin" | "phone"; room: string; validUntil: string; pin: string | null; guestKey: string | null }[];
+}
+
+/** The keys the guest holds, for the Guest Portal and the Self Check-in: only while the stay is Checked-in. */
+export async function guestKeys(pool: Pool, schema: string, portalKey: string, deps: LockDeps, onlyAt?: string): Promise<GuestKeys | null> {
+  return withTenant(pool, schema, async (tx) => {
+    // the Portal Link's own check: a closed link opens nothing
+    const r = await reservationByKey(tx, portalKey).catch(() => null);
+    // a kiosk serves its own property only
+    if (!r || (onlyAt && r.property_id !== onlyAt)) return null;
+    const handover = await guestKeyHandoverIn(tx, r.property_id);
+    if (r.status !== "checked_in") return { handover, keys: [] };
+    const keys = (await tx.query<{ kind: "pin" | "phone"; number: string; valid_until: Date; pin_sealed: string | null; guest_key_sealed: string | null }>(
+      "select k.kind, m.number, k.valid_until, k.pin_sealed, k.guest_key_sealed from room_keys k join rooms m on m.id = k.room_id where k.reservation_id = $1 and k.status = 'active' and k.kind in ('pin', 'phone') and k.valid_until > clock_timestamp() order by k.issued_at",
+      [r.id],
+    )).rows;
+    return {
+      handover,
+      keys: keys.map((k) => ({ kind: k.kind, room: k.number, validUntil: k.valid_until.toISOString(), pin: k.pin_sealed ? unseal(deps, k.pin_sealed) : null, guestKey: k.guest_key_sealed ? unseal(deps, k.guest_key_sealed) : null })),
+    };
+  });
+}
+
+/**
+ * The kiosk writes the checked-in guest's key card on the encoder set for
+ * that kiosk Device (handover "kiosk encoder"). A second tap within a
+ * minute gets the card already written; later, a new card (a jammed one,
+ * a second guest of the room).
+ */
+export async function issueKioskCard(pool: Pool, schema: string, portalKey: string, kiosk: { deviceId: string; propertyId: string }, deps: LockDeps): Promise<{ room: string }> {
+  if (!isUuid(kiosk.deviceId)) throw new Error("Not found");
+  // two taps at once: one waits for the other and gets its card
+  const lock = await pool.connect();
+  try {
+    await lock.query("select pg_advisory_lock(hashtext($1))", [`${schema}:kiosk-card:${portalKey}`]);
+    return await kioskCardLocked(pool, schema, portalKey, kiosk, deps);
+  } finally {
+    await lock.query("select pg_advisory_unlock(hashtext($1))", [`${schema}:kiosk-card:${portalKey}`]).catch(() => undefined);
+    lock.release();
+  }
+}
+
+async function kioskCardLocked(pool: Pool, schema: string, portalKey: string, kiosk: { deviceId: string; propertyId: string }, deps: LockDeps): Promise<{ room: string }> {
+  const c = await withTenant(pool, schema, async (tx) => {
+    const r = await reservationByKey(tx, portalKey).catch(() => null);
+    if (!r || r.property_id !== kiosk.propertyId) throw new Error("Not found");
+    if (r.status !== "checked_in") throw new Error("Keys are made for checked-in guests only");
+    // only right after this stay's Self Check-in finished on this very kiosk: a Portal Link alone makes no cards
+    const here = (await tx.query("select 1 from self_checkins where reservation_id = $1 and device_id = $2 and outcome = 'checked_in' and finished_at > clock_timestamp() - interval '15 minutes'", [r.id, kiosk.deviceId])).rows.length;
+    if (!here) throw new Error("Keys are collected at reception");
+    const s = await settingsIn(tx, r.property_id);
+    if ((await guestKeyHandoverIn(tx, r.property_id)) !== "kiosk_encoder") throw new Error("Keys are collected at reception");
+    const encoder = (await tx.query<{ encoder_id: string }>("select encoder_id from lock_encoders where device_id = $1 and property_id = $2", [kiosk.deviceId, r.property_id])).rows[0]?.encoder_id;
+    if (!encoder) throw new Error("This kiosk has no encoder");
+    const stay = (await stayIn(tx, r.id, s))!;
+    const room = stay.roomId ? (await tx.query<{ number: string }>("select number from rooms where id = $1", [stay.roomId])).rows[0]!.number : null;
+    const recent = (await tx.query("select 1 from room_keys where reservation_id = $1 and kind = 'card' and encoder_id = $2 and status in ('pending', 'active') and issued_at > clock_timestamp() - interval '1 minute'", [r.id, encoder])).rows.length > 0;
+    return { s, stay, room, encoder, recent };
+  });
+  if (!c.room || !c.stay.roomId) throw new Error("No room yet");
+  if (c.recent) return { room: c.room };
+  const plugin = pluginOf(c.s, deps, pool, schema);
+  if (!plugin) throw new Error("No lock system is connected");
+  await issueKey(pool, schema, plugin, c.stay, "card", c.stay.roomId, deps, `kiosk:${kiosk.deviceId}`, c.encoder);
+  return { room: c.room };
 }
 
 /** A lost key taken back. */

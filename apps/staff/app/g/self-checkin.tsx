@@ -7,7 +7,7 @@ import type { CheckInCondition } from "@hoteloftware/domain";
 import { FIELD_TEXT, GuestFormSteps, T as FORM_TEXT, type Lang } from "../tablet/guest-form";
 import { loadStripe, type StripeJs } from "./pay-panel";
 import { simulateAction, startCardAction, startPayAction } from "./pay-actions";
-import { cardStoredAction, findAction, finishAction, paidAction, registerAction, startAction, stepAction, viewAction } from "./self-checkin-actions";
+import { cardStoredAction, findAction, finishAction, paidAction, registerAction, startAction, stepAction, viewAction, keyProblemAction, keysAction, kioskCardAction } from "./self-checkin-actions";
 
 const T = {
   find: { de: "Ihre Buchung finden", en: "Find your booking" },
@@ -39,6 +39,15 @@ const T = {
   declined: { de: "Die Zahlung ging nicht durch: {reason}", en: "The payment did not go through: {reason}" },
   yourRoom: { de: "Ihr Zimmer", en: "Your room" },
   keyReception: { de: "Ihren Schlüssel erhalten Sie an der Rezeption.", en: "Collect your key at reception." },
+  keyCardWriting: { de: "Ihre Schlüsselkarte wird geschrieben …", en: "Your key card is being written …" },
+  keyCardReady: { de: "Ihre Schlüsselkarte liegt bereit: Bitte nehmen Sie sie vom Kartenleser.", en: "Your key card is ready: please take it from the card reader." },
+  doorPin: { de: "Ihr Tür-PIN", en: "Your door PIN" },
+  doorPinHelp: { de: "Gültig bis zur Abreise. Sie finden ihn auch in Ihrem Gästeportal.", en: "Valid until you leave. You also find it in your Guest Portal." },
+  doorPinKiosk: { de: "Ihr Tür-PIN steht in Ihrem Gästeportal auf dem Handy (Link in Ihrer Buchungsbestätigung).", en: "Your door PIN is in your Guest Portal on your phone (link in your booking confirmation)." },
+  digitalKey: { de: "Ihr Digitaler Schlüssel ist bereit.", en: "Your Digital Key is ready." },
+  digitalKeyKiosk: { de: "Ihr Digitaler Schlüssel ist in Ihrem Gästeportal auf dem Handy.", en: "Your Digital Key is in your Guest Portal on your phone." },
+  openKey: { de: "Schlüssel öffnen", en: "Open your key" },
+  keyComing: { de: "Ihr Schlüssel wird vorbereitet …", en: "Your key is being prepared …" },
   waiting: { de: "Ihr Zimmer wird gerade vorbereitet", en: "Your room is being prepared" },
   waitingHelp: { de: "Sie sind eingecheckt bis auf das Zimmer. Wir sagen Ihnen Bescheid, sobald es fertig ist.", en: "Everything else is done. We will let you know as soon as your room is ready." },
   help: { de: "Die Rezeption hilft Ihnen gern", en: "Reception will help you" },
@@ -60,6 +69,77 @@ const KIOSK_IDLE_MS = 120_000;
 const KIOSK_PAY_IDLE_MS = 600_000;
 const DOTS = ["find", "stay", "register", "pay", "result"] as const;
 type Screen = (typeof DOTS)[number] | "here" | "offline";
+
+/**
+ * The last screen's key (ticket 69): at reception; a card written on the
+ * kiosk's encoder; the door PIN; or the Digital Key on the phone. A PIN or
+ * Digital Key is made by the lock system moments after check-in: asked
+ * for until it is there, else the guest is sent to reception.
+ */
+function KeyStep({ channel, portalKey, handover, t }: { channel: "kiosk" | "phone"; portalKey: string | null; handover: SelfCheckinView["property"]["keyHandover"]; t: (k: Key) => string }) {
+  const [state, setState] = useState<{ card?: "writing" | "ready" | "failed"; pin?: string | undefined; guestKey?: string | undefined; gaveUp?: boolean }>({});
+  const box = "mx-auto mt-8 max-w-md rounded-3xl bg-white/5 p-6 text-lg";
+  const kioskCard = handover === "kiosk_encoder" && channel === "kiosk";
+  useEffect(() => {
+    if (!portalKey) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (kioskCard) {
+      setState({ card: "writing" });
+      void kioskCardAction(portalKey).then((r) => !stopped && setState({ card: r.ok ? "ready" : "failed" }));
+    } else if (handover === "door_pin" || handover === "digital_key") {
+      const want = handover === "door_pin" ? "pin" : "phone";
+      const until = Date.now() + 45_000;
+      const ask = async () => {
+        const keys = await keysAction(portalKey).catch(() => null);
+        const k = keys?.keys.find((x) => x.kind === want);
+        if (stopped) return;
+        if (k) return setState({ pin: k.pin ?? undefined, guestKey: k.guestKey ?? undefined });
+        if (Date.now() > until) {
+          void keyProblemAction(portalKey, "no_key_yet");
+          return setState({ gaveUp: true });
+        }
+        timer = setTimeout(() => void ask(), 2000);
+      };
+      void ask();
+    }
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [portalKey, handover, kioskCard]);
+  if (handover === "reception" || state.card === "failed" || state.gaveUp || (handover === "kiosk_encoder" && channel === "phone")) return <div className={box}>{t("keyReception")}</div>;
+  if (kioskCard) return <div className={box} data-key-card={state.card}>{state.card === "ready" ? t("keyCardReady") : t("keyCardWriting")}</div>;
+  if (handover === "door_pin") {
+    // a lobby screen never shows a room's PIN: the guest reads it in the Guest Portal
+    if (channel === "kiosk") return state.pin ? <div className={box} data-door-pin-portal>{t("doorPinKiosk")}</div> : <div className={box}>{t("keyComing")}</div>;
+    return state.pin ? (
+      <div className={box} data-door-pin>
+        <p className="text-sm uppercase tracking-[0.3em] opacity-80">{t("doorPin")}</p>
+        <p className="mt-2 font-mono text-6xl tracking-[0.3em]">{state.pin}</p>
+        <p className="mt-3 text-base opacity-80">{t("doorPinHelp")}</p>
+      </div>
+    ) : (
+      <div className={box}>{t("keyComing")}</div>
+    );
+  }
+  return state.guestKey ? (
+    <div className={box} data-digital-key>
+      {channel === "kiosk" ? (
+        t("digitalKeyKiosk")
+      ) : (
+        <>
+          <p>{t("digitalKey")}</p>
+          <a href={state.guestKey} className="mt-4 inline-block rounded-full bg-white px-6 py-3 font-medium text-black" data-open-key>
+            {t("openKey")}
+          </a>
+        </>
+      )}
+    </div>
+  ) : (
+    <div className={box}>{t("keyComing")}</div>
+  );
+}
 
 /**
  * Self Check-in (ticket 49), variant A "Cinematic glass", on a lobby kiosk or
@@ -351,8 +431,8 @@ export function SelfCheckin({ channel, propertyName, portalKey, language, hereAl
           <p className="mt-2 text-[8rem] font-extralight leading-none" data-room-number>
             {result.roomNumber}
           </p>
-          {/* the key step follows the property's key handover; collected at reception until digital keys come */}
-          {view.property.keyHandover === "reception" ? <div className="mx-auto mt-8 max-w-md rounded-3xl bg-white/5 p-6 text-lg">{t("keyReception")}</div> : null}
+          {/* the key step follows the property's key handover (ticket 69) */}
+          <KeyStep channel={channel} portalKey={key} handover={view.property.keyHandover} t={t} />
         </div>
       ) : result.outcome === "waiting" ? (
         <div className="text-center" data-result="waiting">

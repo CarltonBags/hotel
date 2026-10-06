@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { MAX_COMPANIONS, expressCheckoutView, portalConversation, portalSpa, portalView } from "@hoteloftware/db";
+import { MAX_COMPANIONS, expressCheckoutView, guestKeys, portalConversation, portalSpa, portalView } from "@hoteloftware/db";
+import { lockDeps } from "@/lib/locks";
 import { cardLabel, extrasOpen, portalLanguage, type PortalLanguage } from "@hoteloftware/domain";
 import { headers } from "next/headers";
 import { portalText, type PortalKey } from "@/i18n/portal";
@@ -77,6 +78,10 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   const express = await expressCheckoutView(pool(), tenant!.schemaName, key);
   const payable = s.status === "confirmed" || s.status === "checked_in";
   // the spa's released times for a day of the stay (ticket 64)
+  // the door PIN or Digital Key while Checked-in (ticket 69); gone at check-out
+  // a key that cannot be read (a lock secret changed) never takes the Portal down
+  const held = s.status === "checked_in" ? await guestKeys(pool(), tenant!.schemaName, key, lockDeps()).catch(() => null) : null;
+  const keys = held?.keys ?? [];
   const spa = await portalSpa(pool(), tenant!.schemaName, key, spaDay && /^\d{4}-\d{2}-\d{2}$/.test(spaDay) ? spaDay : null);
   return (
     <>
@@ -101,6 +106,28 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
           </Link>
         ) : null}
       </Glass>
+
+      {keys.length ? (
+        <Glass data-section="key">
+          <h2 className="text-xl font-semibold">{t("keyTitle")}</h2>
+          {keys.map((k, i) => (
+            <div key={i} className="grid gap-1" data-guest-key={k.kind}>
+              <p className="text-white/80">{k.kind === "pin" ? t("keyDoorPin", { room: k.room }) : t("keyDigital", { room: k.room })}</p>
+              {k.pin ? (
+                <p className="font-mono text-4xl tracking-[0.3em]" data-pin>
+                  {k.pin}
+                </p>
+              ) : null}
+              {k.guestKey ? (
+                <a href={k.guestKey} className="grid h-11 place-items-center rounded-full bg-white px-5 font-medium text-black" data-open-key>
+                  {t("keyOpen")}
+                </a>
+              ) : null}
+              <p className="text-sm text-white/60">{t("keyValid", { time: new Date(k.validUntil).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short", timeZone: view.property.timeZone }) })}</p>
+            </div>
+          ))}
+        </Glass>
+      ) : null}
 
       {open ? (
         <Glass data-section="precheckin">
