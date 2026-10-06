@@ -365,6 +365,8 @@ export {
   type FloorNote,
   type FloorTask,
   type LostItem,
+  decodePhoto,
+  phoneChangeSeen,
   type PhoneChangeOutcome,
 } from "./tenant/floor";
 export {
@@ -460,7 +462,7 @@ export { getBudget, setBudget } from "./tenant/budget";
 export { BUILDER_ROW_LIMIT, RAW_ROW_LIMIT, deleteSavedReport, listSavedReports, runBuilder, saveReport, type SavedReport } from "./tenant/report-builder";
 export { modulePeriods, propertyModules, setModuleStep, switchModuleOff, switchModuleOn, type PropertyModule } from "./tenant/modules";
 export { getSubscription, issueSubscriptionInvoices, listSubscriptionInvoices, pricesOn, recordUsage, setBankTransfer, setDirectDebit, setPrice, setYearly, subscriptionInvoiceFile, type Subscription, type SubscriptionInvoiceRow } from "./control/subscription";
-export { claimDueReminders, deleteEndedTenants, endTenant, markSubscriptionInvoicePaid, markSubscriptionInvoicePaidByNumber, nonPaymentStatus, releaseReminder, tenantEnd, type NonPaymentStatus } from "./control/exit";
+export { claimDueReminders, deleteEndedTenants, deleteFilesOfDeletedTenants, endTenant, markSubscriptionInvoicePaid, markSubscriptionInvoicePaidByNumber, nonPaymentStatus, releaseReminder, tenantEnd, type NonPaymentStatus } from "./control/exit";
 export { exitExport } from "./tenant/exit-export";
 export {
   checkSenderDomain,
@@ -483,3 +485,5 @@ export {
   type MessagingSettings,
   type MessagingSettingsInput,
 } from "./tenant/messages";
+export { FileRefused, MAX_FILE_BYTES, deleteExpiredFiles, findFile, storeFile, type FileKind, type StoredFile } from "./tenant/files";
+export { fixIssue, listIssues, reportIssue, seesIssues, takeIssue, visibleFile, type FixedIssue, type IssueFix, type IssueReport, type IssueRow } from "./tenant/maintenance";

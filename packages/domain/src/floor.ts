@@ -52,9 +52,9 @@ export function floorSections<T extends Listed>(tasks: T[]): { section: string |
 export type PhoneOp = { id: string; at: string } & (
   | { kind: "task"; taskId: string; step: "start" | "done" | "undo" | "declined" | "dnd"; seen: number }
   | { kind: "minibar"; roomId: string; items: { serviceId: string; quantity: number }[] }
-  | { kind: "problem"; roomId: string; pick: ProblemPick; urgency: Urgency; note: string; photo?: string | undefined }
+  | { kind: "problem"; roomId: string; pick: ProblemPick; urgency: Urgency; note: string; photo?: string | undefined; photoFileId?: string | undefined }
   | { kind: "lost"; roomId: string; pick: LostPick; note: string; photo?: string | undefined }
-  | { kind: "issue"; issueId: string; step: "take" | "fixed"; note: string }
+  | { kind: "issue"; issueId: string; step: "take" | "fixed"; note: string; endBlock?: boolean | undefined; photo?: string | undefined; photoFileId?: string | undefined }
 );
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -104,7 +104,8 @@ export function parsePhoneOp(raw: unknown): PhoneOp {
     case "lost":
       return { id, at, kind: "lost", roomId: uuid(o.roomId, "room"), pick: oneOf(LOST_PICKS, o.pick, "item"), note: text(o.note), photo: photo(o.photo) };
     case "issue":
-      return { id, at, kind: "issue", issueId: uuid(o.issueId, "issue"), step: oneOf(["take", "fixed"] as const, o.step, "step"), note: text(o.note) };
+      // a stored file is attached by the server from the photo, never named by the phone
+      return { id, at, kind: "issue", issueId: uuid(o.issueId, "issue"), step: oneOf(["take", "fixed"] as const, o.step, "step"), note: text(o.note), endBlock: o.endBlock === true, photo: photo(o.photo) };
     default:
       throw new Error("Unknown change");
   }
