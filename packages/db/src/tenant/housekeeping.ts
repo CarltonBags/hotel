@@ -133,6 +133,8 @@ export interface BoardTask {
   guestSurname: string | null;
   /** A guest waits for the room. */
   priority: boolean;
+  /** A guest's request from the Guest Inbox (ticket 43): its Conversation. */
+  conversationId: string | null;
 }
 
 export interface HousekeepingBoard {
@@ -151,8 +153,9 @@ export interface HousekeepingBoard {
 }
 
 const TASK_COLUMNS = `t.id, t.room_id, m.number as room_number, s.name as section, t.kind, t.minutes, t.assignee_id, t.status, t.changed, t.note, t.priority,
-  (select g.last_name from reservations r join guests g on g.id = r.primary_guest_id where r.id = t.reservation_id) as guest_surname`;
-type TaskRow = { id: string; room_id: string; room_number: string; section: string | null; kind: TaskKind; minutes: number; assignee_id: string | null; status: BoardTask["status"]; changed: boolean; note: string; guest_surname: string | null; priority: boolean };
+  (select g.last_name from reservations r join guests g on g.id = r.primary_guest_id where r.id = t.reservation_id) as guest_surname,
+  (select cm.conversation_id from housekeeping_task_messages tm join conversation_messages cm on cm.id = tm.message_id where tm.task_id = t.id limit 1) as conversation_id`;
+type TaskRow = { id: string; room_id: string; room_number: string; section: string | null; kind: TaskKind; minutes: number; assignee_id: string | null; status: BoardTask["status"]; changed: boolean; note: string; guest_surname: string | null; priority: boolean; conversation_id: string | null };
 const toTask = (t: TaskRow): BoardTask => ({
   id: t.id,
   roomId: t.room_id,
@@ -166,6 +169,7 @@ const toTask = (t: TaskRow): BoardTask => ({
   note: t.note,
   guestSurname: t.guest_surname,
   priority: t.priority,
+  conversationId: t.conversation_id,
 });
 
 function requireSupervisor(viewer: Viewer, propertyId: string): void {

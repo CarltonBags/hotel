@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { PORTAL_USER, guestMayWrite, postGuestMessage } from "@hoteloftware/db";
 import { pool } from "@/lib/db";
-import { portalBaseUrl } from "@/lib/env";
+import { guestLinks } from "@/lib/env";
 import { formAction, type FormState } from "@/lib/form";
 import { announceConversations, storeConversationFile, toastGuestMessage } from "@/lib/inbox";
 import { currentTenant } from "@/lib/tenant";
@@ -18,7 +18,7 @@ export async function guestMessageAction(key: string, _prev: FormState, formData
     const file = formData.get("file");
     const { propertyId } = await guestMayWrite(pool(), t.schemaName, key, file instanceof File && file.size > 0);
     const fileId = await storeConversationFile(t, formData, propertyId, PORTAL_USER);
-    const post = await postGuestMessage(pool(), t.schemaName, key, { body, fileId }, { base: portalBaseUrl(t.slug) });
+    const post = await postGuestMessage(pool(), t.schemaName, key, { body, fileId }, guestLinks(t.slug));
     await announceConversations(t.id, post.propertyId);
     await toastGuestMessage(t, { propertyId: post.propertyId, conversationId: post.conversationId, guestName: post.guestName, text: body });
     revalidatePath(`/g/${key}`);

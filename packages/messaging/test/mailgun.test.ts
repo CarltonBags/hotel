@@ -46,3 +46,30 @@ describe("seven.io", () => {
     await expect(new SevenSmsProvider("k", refused).send({ to: "x", text: "t", sender: "s" })).rejects.toThrow(/did not send/);
   });
 });
+
+describe("incoming mail (ticket 43)", () => {
+  it("reads Mailgun's store-and-notify fields and checks their signature", async () => {
+    const { createHmac } = await import("node:crypto");
+    const { MailgunProvider } = await import("../src/mailgun");
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const token = "t".repeat(50);
+    const signature = createHmac("sha256", "signing").update(timestamp + token).digest("hex");
+    const fields = {
+      recipient: "alpha.0123456789abcdef0123@replies.example",
+      sender: "aiko@example.com",
+      subject: "Re: New message",
+      "stripped-text": "Thanks!",
+      "Message-Id": "<abc@mail.example>",
+      "message-headers": JSON.stringify([["Auto-Submitted", "no"], ["X-Mailer", "x"]]),
+      attachments: JSON.stringify([{ url: "https://storage-europe-west1.api.mailgun.net/v3/domains/x/messages/y/attachments/0", "content-type": "image/png", name: "a.png", size: 10 }]),
+      timestamp,
+      token,
+      signature,
+    };
+    const mg = new MailgunProvider("key", "mg.example", "signing");
+    expect(mg.verifyInbound({}, fields)).toBe(true);
+    expect(mg.inboundReplayKey(fields)).toBe(`mailgun:${token}`);
+    expect(mg.verifyInbound({}, { ...fields, signature: "00" })).toBe(false);
+    expect(mg.parseInbound(fields)).toMatchObject({ id: "<abc@mail.example>", text: "Thanks!", headers: { "auto-submitted": "no" }, attachments: [{ name: "a.png", type: "image/png" }] });
+  });
+});

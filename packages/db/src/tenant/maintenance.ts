@@ -23,6 +23,8 @@ export interface IssueReport {
   photoFileId: string | null;
   /** Take the room out from tonight for this many nights. */
   block: { kind: RoomBlockKind; nights: number } | null;
+  /** Made from a guest's message (ticket 43). */
+  conversationMessageId?: string | null;
 }
 
 /** What the fixer gives: a note, a photo, and with a Room Block not over whether to end it. */
@@ -66,9 +68,9 @@ export async function reportIssueIn(tx: PoolClient, input: IssueReport, viewer: 
     blockId = (await createRoomBlockIn(tx, { roomId: input.roomId, kind: input.block.kind, from: bd, to: addDays(bd, input.block.nights), reason: `Maintenance: ${input.pick}${input.note ? ` – ${input.note}` : ""}` }, viewer)).id;
   }
   const { rows } = await tx.query<{ id: string }>(
-    `insert into maintenance_issues (property_id, room_id, place, pick, urgency, note, photo_file_id, block_id, reported_at, reported_by)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id`,
-    [input.propertyId, input.roomId, input.roomId ? "" : place, input.pick, input.urgency, input.note.trim().slice(0, 1000), photo, blockId, at, viewer.userId],
+    `insert into maintenance_issues (property_id, room_id, place, pick, urgency, note, photo_file_id, block_id, reported_at, reported_by, conversation_message_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id`,
+    [input.propertyId, input.roomId, input.roomId ? "" : place, input.pick, input.urgency, input.note.trim().slice(0, 1000), photo, blockId, at, viewer.userId, input.conversationMessageId ?? null],
   );
   return { id: rows[0]!.id, blockId };
 }
@@ -157,6 +159,8 @@ export interface IssueRow {
   /** The issue's Room Block; `notOver` while it is in force or still to begin. */
   block: { id: string; kind: RoomBlockKind; until: string; notOver: boolean } | null;
   blockDecision: "ended" | "kept" | null;
+  /** Made from a guest's message (ticket 43): its Conversation. */
+  conversationId: string | null;
 }
 
 /** The queue of a property: open and in progress by urgency, or the last 100 done. */
@@ -166,6 +170,7 @@ export async function listIssues(pool: Pool, schema: string, propertyId: string,
     const { rows } = await tx.query(
       `select i.id, i.room_id, m.number, i.place, i.pick, i.urgency, i.note, i.status, i.reported_by, i.reported_at, i.taken_by, i.fixed_by, i.fixed_at, i.fix_note,
               i.photo_file_id, i.fix_photo_file_id, i.photo is not null as legacy_photo, i.block_decision,
+              (select cm.conversation_id from conversation_messages cm where cm.id = i.conversation_message_id) as conversation_id,
               b.id as block_id, b.kind as block_kind, to_char(b.to_date, 'YYYY-MM-DD') as block_until, ${blockNotOver("b", "p.business_date")} as block_not_over
        from maintenance_issues i join properties p on p.id = i.property_id left join rooms m on m.id = i.room_id left join room_blocks b on b.id = i.block_id
        where i.property_id = $1 and ${which === "open" ? "i.status <> 'done'" : "i.status = 'done'"}
@@ -193,6 +198,7 @@ export async function listIssues(pool: Pool, schema: string, propertyId: string,
       legacyPhoto: r.legacy_photo,
       block: r.block_id ? { id: r.block_id, kind: r.block_kind, until: r.block_until, notOver: r.block_not_over } : null,
       blockDecision: r.block_decision,
+      conversationId: r.conversation_id,
     }));
   });
 }

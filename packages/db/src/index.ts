@@ -495,7 +495,18 @@ export { MAX_COMPANIONS, PORTAL_USER, addPortalDocument, addPortalExtra, inviteP
 export { cardGuaranteeOf, chargeStoredCard, claimDeclineNotice, closeUnfinishedPortalPayments, expressCheckout, expressCheckoutView, finishCardSetup, finishPortalPayment, portalProviderRef, startCardSetup, startPortalPayment, type CardGuarantee, type ExpressCheckout, type PortalPaymentResult, type PortalPaymentStart } from "./tenant/portal-payments";
 export {
   claimConversation,
+  conversationByReplyToken,
   conversationOfReservation,
+  conversationProperty,
+  conversationRooms,
+  inboundMailKnown,
+  TASKS_FROM_MESSAGES,
+  deleteExpiredConversations,
+  messageToTask,
+  receiveGuestEmail,
+  setConversationDisputed,
+  type InboundGuestMail,
+  type TaskFromMessage,
   conversationView,
   deleteQuickReply,
   escalateConversations,

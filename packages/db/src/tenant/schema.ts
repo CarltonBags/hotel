@@ -1368,6 +1368,7 @@ export const maintenanceIssues = pgTable(
     fixPhotoFileId: uuid("fix_photo_file_id").references(() => storedFiles.id, { onDelete: "set null" }),
     blockId: uuid("block_id").references(() => roomBlocks.id),
     blockDecision: text("block_decision"),
+    conversationMessageId: uuid("conversation_message_id").references((): AnyPgColumn => conversationMessages.id, { onDelete: "set null" }),
   },
   (t) => [
     check("maintenance_issues_block_decision_check", sql`${t.blockDecision} in ('ended', 'kept')`),
@@ -1782,6 +1783,7 @@ export const propertyMessaging = pgTable(
     emergencyPhone: text("emergency_phone"),
     checkinTime: time("checkin_time").notNull().default("15:00"),
     escalationMinutes: integer("escalation_minutes").notNull().default(15),
+    conversationMonths: integer("conversation_months").notNull().default(12),
   },
   (t) => [
     check("property_messaging_hours_check", sql`${t.sendingFrom} < ${t.sendingTo}`),
@@ -1789,6 +1791,7 @@ export const propertyMessaging = pgTable(
     check("property_messaging_local_check", sql`${t.senderLocal} ~ '^[a-z0-9._-]{1,40}$'`),
     check("property_messaging_pre_arrival_check", sql`${t.preArrivalDays} between 1 and 30`),
     check("property_messaging_escalation_check", sql`${t.escalationMinutes} between 5 and 240`),
+    check("property_messaging_conversation_months_check", sql`${t.conversationMonths} between 1 and 12`),
   ],
 );
 
@@ -1833,6 +1836,7 @@ export const guestMessages = pgTable(
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     failedAt: timestamp("failed_at", { withTimezone: true }),
     conversationId: uuid("conversation_id").references((): AnyPgColumn => conversations.id, { onDelete: "cascade" }),
+    replyTo: text("reply_to"),
   },
   (t) => [
     index("guest_messages_conversation_idx").on(t.conversationId).where(sql`${t.conversationId} is not null`),
@@ -2082,8 +2086,12 @@ export const conversations = pgTable(
     escalatedAt: timestamp("escalated_at", { withTimezone: true }),
     deskClosedNight: date("desk_closed_night"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    replyToken: text("reply_token").notNull().default(sql`replace(gen_random_uuid()::text, '-', '')`),
+    disputedAt: timestamp("disputed_at", { withTimezone: true }),
+    disputedBy: text("disputed_by"),
   },
   (t) => [
+    unique("conversations_reply_token_key").on(t.replyToken),
     check("conversations_owner_check", sql`(${t.reservationId} is null) <> (${t.bookingId} is null)`),
     index("conversations_property_idx").on(t.propertyId, t.lastMessageAt.desc()),
     index("conversations_unread_idx").on(t.unreadSince).where(sql`${t.unreadSince} is not null`),
@@ -2101,8 +2109,10 @@ export const conversationMessages = pgTable(
     body: text("body").notNull().default(""),
     fileId: uuid("file_id").references(() => storedFiles.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    via: text("via").notNull().default("portal"),
   },
   (t) => [
+    check("conversation_messages_via_check", sql`${t.via} in ('portal', 'email')`),
     check("conversation_messages_kind_check", sql`${t.kind} in ('guest', 'staff', 'note')`),
     check("conversation_messages_content_check", sql`${t.body} <> '' or ${t.fileId} is not null`),
     index("conversation_messages_conversation_idx").on(t.conversationId, t.createdAt),
@@ -2120,6 +2130,31 @@ export const quickReplies = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique("quick_replies_key").on(t.propertyId, t.language, t.title), check("quick_replies_language_check", sql`${t.language} in ('de', 'en')`)],
+);
+
+export const inboundMails = pgTable(
+  "inbound_mails",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    providerId: text("provider_id").notNull(),
+    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "cascade" }),
+    sender: text("sender").notNull(),
+    subject: text("subject").notNull().default(""),
+    autoReply: boolean("auto_reply").notNull(),
+    raw: jsonb("raw").notNull(),
+    mime: bytea("mime"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("inbound_mails_provider_key").on(t.providerId), index("inbound_mails_conversation_idx").on(t.conversationId)],
+);
+
+export const housekeepingTaskMessages = pgTable(
+  "housekeeping_task_messages",
+  {
+    taskId: uuid("task_id").notNull().references(() => housekeepingTasks.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id").primaryKey().references(() => conversationMessages.id, { onDelete: "cascade" }),
+  },
+  (t) => [index("housekeeping_task_messages_task_idx").on(t.taskId)],
 );
 
 export const tenantSchema = {
@@ -2225,4 +2260,6 @@ export const tenantSchema = {
   conversations,
   conversationMessages,
   quickReplies,
+  inboundMails,
+  housekeepingTaskMessages,
 };

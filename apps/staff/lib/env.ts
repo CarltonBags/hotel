@@ -59,3 +59,8 @@ export function platformMailDomain(): string {
 export function portalBaseUrl(slug: string): string {
   return tenantUrl(slug, "").replace(/\/$/, "");
 }
+
+/** What guest messages link to: the tenant's Guest Portal, and where guests' email replies come in (MAIL_INBOUND_DOMAIN, ticket 43). */
+export function guestLinks(slug: string): { base: string; replyDomain: string | null } {
+  return { base: portalBaseUrl(slug), replyDomain: process.env.MAIL_INBOUND_DOMAIN || null };
+}

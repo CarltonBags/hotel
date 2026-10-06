@@ -2,10 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { claimConversation, conversationOfReservation, markConversationSeen, postStaffMessage } from "@hoteloftware/db";
+import { TASKS_FROM_MESSAGES, claimConversation, conversationOfReservation, markConversationSeen, messageToTask, postStaffMessage, setConversationDisputed, type TaskFromMessage } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
-import { portalBaseUrl } from "@/lib/env";
+import { guestLinks } from "@/lib/env";
 import { field, flag, formAction, type FormState } from "@/lib/form";
 import { announceConversations, announceTyping, storeConversationFile } from "@/lib/inbox";
 import { reservationScope } from "@/lib/reservation-scope";
@@ -29,7 +29,7 @@ export async function sendMessageAction(_prev: FormState, formData: FormData): P
       { userId: session.user.id, name: session.user.name },
       // the guest message on screen when writing: one that came in meanwhile stays unread
       { body: String(formData.get("body") ?? ""), note: flag(formData, "note"), fileId, seenUpTo: field(formData, "seenUpTo") || null },
-      { base: portalBaseUrl(tenant.slug) },
+      guestLinks(tenant.slug),
     );
     await announceConversations(tenant.id, propertyId);
     revalidatePath("/inbox");
@@ -43,6 +43,28 @@ export async function claimAction(_prev: FormState, formData: FormData): Promise
     const { tenant, session } = await inbox(propertyId);
     await claimConversation(pool(), tenant.schemaName, propertyId, field(formData, "conversationId"), field(formData, "release") ? null : { userId: session.user.id, name: session.user.name });
     await announceConversations(tenant.id, propertyId);
+    revalidatePath("/inbox");
+  });
+}
+
+/** A guest's message becomes a Maintenance Issue or Housekeeping Task for the guest's room, linked back (ticket 43). */
+export async function messageToTaskAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const propertyId = field(formData, "propertyId");
+    const { tenant, session, actor } = await inbox(propertyId);
+    const kind = field(formData, "kind") as TaskFromMessage;
+    if (!TASKS_FROM_MESSAGES.includes(kind)) throw new Error("Choose the kind of work");
+    await messageToTask(pool(), tenant.schemaName, propertyId, field(formData, "messageId"), kind, { userId: session.user.id, actor }, field(formData, "roomId") || null);
+    revalidatePath("/inbox");
+  });
+}
+
+/** Keep a Conversation past its retention while a dispute is open, or release it (the Property Manager: a legal hold). */
+export async function disputeAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const propertyId = field(formData, "propertyId");
+    const { tenant, session } = await authorize("keep_conversations", propertyId);
+    await setConversationDisputed(pool(), tenant.schemaName, propertyId, field(formData, "conversationId"), flag(formData, "disputed"), session.user.id);
     revalidatePath("/inbox");
   });
 }

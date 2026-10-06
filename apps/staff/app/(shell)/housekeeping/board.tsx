@@ -92,9 +92,15 @@ export function HousekeepingBoardView({
         </span>
         <span className="flex flex-wrap gap-1">
           {c.tasks.map((t) => (
-            <span key={t.id} data-task={`${t.roomNumber}:${t.kind}`} className={`rounded-full px-2 ${KIND_TONE[t.kind]} ${t.status === "done" || t.status === "skipped" ? "line-through opacity-60" : ""}`}>
+            <span key={t.id} id={`task-${t.id}`} data-task={`${t.roomNumber}:${t.kind}`} title={t.note || undefined} className={`rounded-full px-2 ${KIND_TONE[t.kind]} ${t.status === "done" || t.status === "skipped" ? "line-through opacity-60" : ""}`}>
               {m[`hk.kind.${t.kind}`]} · {m[`hk.status.${t.status}`]}
               {t.changed ? <strong className="ml-1 text-warning">{m["hk.changed"]}</strong> : null}
+              {/* a guest's request from the Guest Inbox, linked back (ticket 43) */}
+              {t.conversationId ? (
+                <a href={`/inbox?c=${t.conversationId}`} className="ml-1 underline" data-from-conversation>
+                  {m["inbox.open"]}
+                </a>
+              ) : null}
             </span>
           ))}
         </span>
