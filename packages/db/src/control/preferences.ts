@@ -104,9 +104,11 @@ export interface NotificationChannels {
   sms: boolean;
   /** International format, e.g. +491701234567. */
   phone: string | null;
+  /** A sound in the app with each new guest message (ticket 42). */
+  sound: boolean;
 }
 
-const CHANNEL_DEFAULTS: NotificationChannels = { email: true, sms: false, phone: null };
+const CHANNEL_DEFAULTS: NotificationChannels = { email: true, sms: false, phone: null, sound: false };
 
 export async function getNotificationChannels(db: Queryable, userId: string): Promise<NotificationChannels> {
   return (await notificationChannelsOf(db, [userId])).get(userId)!;
@@ -114,12 +116,12 @@ export async function getNotificationChannels(db: Queryable, userId: string): Pr
 
 /** The channels of several users at once; users without settings have the defaults. */
 export async function notificationChannelsOf(db: Queryable, userIds: string[]): Promise<Map<string, NotificationChannels>> {
-  const { rows } = await db.query<{ user_id: string; notify_email: boolean; notify_sms: boolean; notify_phone: string | null }>(
-    "select user_id, notify_email, notify_sms, notify_phone from control.user_preferences where user_id = any($1)",
+  const { rows } = await db.query<{ user_id: string; notify_email: boolean; notify_sms: boolean; notify_phone: string | null; inbox_sound: boolean }>(
+    "select user_id, notify_email, notify_sms, notify_phone, inbox_sound from control.user_preferences where user_id = any($1)",
     [userIds],
   );
   const out = new Map(userIds.map((id) => [id, { ...CHANNEL_DEFAULTS }]));
-  for (const r of rows) out.set(r.user_id, { email: r.notify_email, sms: r.notify_sms, phone: r.notify_phone });
+  for (const r of rows) out.set(r.user_id, { email: r.notify_email, sms: r.notify_sms, phone: r.notify_phone, sound: r.inbox_sound });
   return out;
 }
 
@@ -128,8 +130,8 @@ export async function setNotificationChannels(db: Queryable, userId: string, inp
   if (phone && !/^\+[1-9][0-9]{6,14}$/.test(phone)) throw new Error("Enter the phone number in international format, e.g. +49 170 1234567");
   if (input.sms && !phone) throw new Error("SMS needs a phone number");
   await db.query(
-    `insert into control.user_preferences (user_id, notify_email, notify_sms, notify_phone) values ($1, $2, $3, $4)
-     on conflict (user_id) do update set notify_email = $2, notify_sms = $3, notify_phone = $4, updated_at = now()`,
-    [userId, input.email, input.sms, phone],
+    `insert into control.user_preferences (user_id, notify_email, notify_sms, notify_phone, inbox_sound) values ($1, $2, $3, $4, $5)
+     on conflict (user_id) do update set notify_email = $2, notify_sms = $3, notify_phone = $4, inbox_sound = $5, updated_at = now()`,
+    [userId, input.email, input.sms, phone, input.sound],
   );
 }

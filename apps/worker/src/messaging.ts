@@ -1,8 +1,8 @@
 import type { Pool } from "pg";
 import { can } from "@hoteloftware/domain";
-import { dispatchMessages, listTenantUsers, mapProviderAccount, recordMailEvent, scanGuestMessages, type BouncedMessage, type Tenant } from "@hoteloftware/db";
+import { dispatchMessages, escalateConversations, listTenantUsers, releaseEscalation, mapProviderAccount, recordMailEvent, scanGuestMessages, type BouncedMessage, type Tenant } from "@hoteloftware/db";
 import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
-import { notifyStaff } from "@hoteloftware/events";
+import { notifyStaff, notifyWithRight } from "@hoteloftware/events";
 import type { ProviderProcessor } from "./payments";
 import type { WebhookSource } from "./webhooks";
 
@@ -33,7 +33,28 @@ export async function runMessaging(pool: Pool, tenant: { id: string; slug: strin
   const base = portalBase(tenant.slug);
   const queued = await scanGuestMessages(pool, tenant.schemaName, new Date(), base ? { base } : null);
   const r = await dispatchMessages(pool, tenant.schemaName, tenant.id, providers, { platformDomain });
+  await escalateUnread(pool, tenant).catch((err) => console.error("[messaging] inbox escalation", err));
   return { queued, ...r };
+}
+
+/** Guest messages nobody opened in the property's time (Desk Hours only): the Property Manager is told, once (ticket 42). */
+export async function escalateUnread(pool: Pool, tenant: { id: string; schemaName: string }, now = new Date()): Promise<number> {
+  const due = await escalateConversations(pool, tenant.schemaName, now);
+  for (const e of due) {
+    try {
+      await notifyWithRight(pool, tenant, "receive_inbox_escalations", e.propertyId, {
+        kind: "inbox.escalated",
+        title: `Guest message waiting · ${e.guestName}`,
+        body: "Nobody has opened it yet.",
+        href: `/inbox?c=${e.conversationId}`,
+      });
+    } catch (err) {
+      // not told: due again on the next run
+      console.error("[messaging] escalation not sent", err);
+      await releaseEscalation(pool, tenant.schemaName, e.conversationId);
+    }
+  }
+  return due.length;
 }
 
 export function mailWebhookSource(mail: MailProvider): WebhookSource {

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { checkSenderDomain, findProperty, resetMessageText, setPortalSettings, storeFile, sendTestMessage, setMessageText, setMessagingSettings, setSenderDomain } from "@hoteloftware/db";
+import { checkSenderDomain, deleteQuickReply, findProperty, saveQuickReply, setInboxSettings, resetMessageText, setPortalSettings, storeFile, sendTestMessage, setMessageText, setMessagingSettings, setSenderDomain } from "@hoteloftware/db";
 import { MESSAGE_TYPES, MESSAGE_TYPE_INFO, isMessageLanguage, isMessageType, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
 import { mailProvider } from "@hoteloftware/messaging";
 import { fileServices } from "@hoteloftware/storage";
@@ -104,6 +104,31 @@ export async function portalSettingsAction(_prev: FormState, formData: FormData)
           ? null
           : undefined;
     await setPortalSettings(pool(), c.schema, c.propertyId, { info: { de: field(formData, "info_de"), en: field(formData, "info_en") }, documentImages: flag(formData, "documentImages"), expressCheckoutAuto: flag(formData, "expressAuto"), photoFileId });
+    revalidatePath("/settings/messages");
+  });
+}
+
+/** Desk Hours, the emergency number and when an unopened guest message goes to the Property Manager (ticket 42). */
+export async function inboxSettingsAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const c = await scope(formData);
+    await setInboxSettings(pool(), c.schema, c.propertyId, { deskOpens: field(formData, "deskOpens"), deskCloses: field(formData, "deskCloses"), checkinTime: field(formData, "checkinTime"), emergencyPhone: field(formData, "emergencyPhone") || null, escalationMinutes: Number(field(formData, "escalationMinutes")) }, c.userId);
+    revalidatePath("/settings/messages");
+  });
+}
+
+export async function quickReplyAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const c = await scope(formData);
+    await saveQuickReply(pool(), c.schema, c.propertyId, { language: field(formData, "language"), title: field(formData, "title"), body: String(formData.get("body") ?? "") });
+    revalidatePath("/settings/messages");
+  });
+}
+
+export async function deleteQuickReplyAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const c = await scope(formData);
+    await deleteQuickReply(pool(), c.schema, c.propertyId, field(formData, "id"));
     revalidatePath("/settings/messages");
   });
 }

@@ -1338,7 +1338,7 @@ export const storedFiles = pgTable(
     deleteAfter: date("delete_after"),
   },
   (t) => [
-    check("stored_files_kind_check", sql`${t.kind} in ('issue_photo', 'fix_photo', 'id_document', 'portal_photo')`),
+    check("stored_files_kind_check", sql`${t.kind} in ('issue_photo', 'fix_photo', 'id_document', 'portal_photo', 'conversation_file')`),
     check("stored_files_size_check", sql`${t.size} > 0`),
     index("stored_files_retention_idx").on(t.deleteAfter).where(sql`${t.deleteAfter} is not null`),
   ],
@@ -1777,12 +1777,18 @@ export const propertyMessaging = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     updatedBy: text("updated_by"),
+    deskOpens: time("desk_opens").notNull().default("07:00"),
+    deskCloses: time("desk_closes").notNull().default("22:00"),
+    emergencyPhone: text("emergency_phone"),
+    checkinTime: time("checkin_time").notNull().default("15:00"),
+    escalationMinutes: integer("escalation_minutes").notNull().default(15),
   },
   (t) => [
     check("property_messaging_hours_check", sql`${t.sendingFrom} < ${t.sendingTo}`),
     check("property_messaging_language_check", sql`${t.fallbackLanguage} in ('de', 'en')`),
     check("property_messaging_local_check", sql`${t.senderLocal} ~ '^[a-z0-9._-]{1,40}$'`),
     check("property_messaging_pre_arrival_check", sql`${t.preArrivalDays} between 1 and 30`),
+    check("property_messaging_escalation_check", sql`${t.escalationMinutes} between 5 and 240`),
   ],
 );
 
@@ -1826,8 +1832,10 @@ export const guestMessages = pgTable(
     sentAt: timestamp("sent_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     failedAt: timestamp("failed_at", { withTimezone: true }),
+    conversationId: uuid("conversation_id").references((): AnyPgColumn => conversations.id, { onDelete: "cascade" }),
   },
   (t) => [
+    index("guest_messages_conversation_idx").on(t.conversationId).where(sql`${t.conversationId} is not null`),
     check("guest_messages_status_check", sql`${t.status} in ('queued', 'sending', 'sent', 'delivered', 'failed', 'suppressed')`),
     uniqueIndex("guest_messages_once_key").on(t.reservationId, t.type, t.triggerKey),
     index("guest_messages_due_idx").on(t.sendAfter).where(sql`${t.status} = 'queued'`),
@@ -2056,6 +2064,64 @@ export const cardSetups = pgTable(
   (t) => [check("card_setups_status_check", sql`${t.status} in ('waiting', 'succeeded', 'failed')`)],
 );
 
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    reservationId: uuid("reservation_id").unique().references(() => reservations.id, { onDelete: "cascade" }),
+    bookingId: uuid("booking_id").unique().references(() => bookings.id, { onDelete: "cascade" }),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+    lastGuestMessageAt: timestamp("last_guest_message_at", { withTimezone: true }),
+    waitingSince: timestamp("waiting_since", { withTimezone: true }),
+    unreadSince: timestamp("unread_since", { withTimezone: true }),
+    seenUntil: timestamp("seen_until", { withTimezone: true }),
+    claimedBy: text("claimed_by"),
+    claimedName: text("claimed_name"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    escalatedAt: timestamp("escalated_at", { withTimezone: true }),
+    deskClosedNight: date("desk_closed_night"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("conversations_owner_check", sql`(${t.reservationId} is null) <> (${t.bookingId} is null)`),
+    index("conversations_property_idx").on(t.propertyId, t.lastMessageAt.desc()),
+    index("conversations_unread_idx").on(t.unreadSince).where(sql`${t.unreadSince} is not null`),
+  ],
+);
+
+export const conversationMessages = pgTable(
+  "conversation_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    userId: text("user_id"),
+    authorName: text("author_name").notNull().default(""),
+    body: text("body").notNull().default(""),
+    fileId: uuid("file_id").references(() => storedFiles.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [
+    check("conversation_messages_kind_check", sql`${t.kind} in ('guest', 'staff', 'note')`),
+    check("conversation_messages_content_check", sql`${t.body} <> '' or ${t.fileId} is not null`),
+    index("conversation_messages_conversation_idx").on(t.conversationId, t.createdAt),
+  ],
+);
+
+export const quickReplies = pgTable(
+  "quick_replies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    language: text("language").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("quick_replies_key").on(t.propertyId, t.language, t.title), check("quick_replies_language_check", sql`${t.language} in ('de', 'en')`)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -2156,4 +2222,7 @@ export const tenantSchema = {
   reservationDocuments,
   cardGuarantees,
   cardSetups,
+  conversations,
+  conversationMessages,
+  quickReplies,
 };

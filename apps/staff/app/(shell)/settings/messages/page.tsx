@@ -1,4 +1,4 @@
-import { messageText, messagingSettings, portalSettings, previewMessage } from "@hoteloftware/db";
+import { inboxSettings, listQuickReplies, messageText, messagingSettings, portalSettings, previewMessage } from "@hoteloftware/db";
 import { MESSAGE_LANGUAGES, MESSAGE_TYPES, MESSAGE_TYPE_INFO, PLACEHOLDERS, isMessageLanguage, isMessageType, messageSendable, type MessageLanguage, type MessageType } from "@hoteloftware/domain";
 import Link from "next/link";
 import { ActionForm, Field } from "@/components/form-fields";
@@ -6,7 +6,7 @@ import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { fill } from "@/i18n/messages";
-import { messageTextAction, messagingSettingsAction, portalSettingsAction, resetMessageTextAction, senderDomainAction, testMessageAction } from "./actions";
+import { deleteQuickReplyAction, inboxSettingsAction, messageTextAction, messagingSettingsAction, portalSettingsAction, quickReplyAction, resetMessageTextAction, senderDomainAction, testMessageAction } from "./actions";
 
 /** Guest messages of the property in the navbar (ticket 39): Sending Hours, languages, which types go, the sender, and the texts with preview, test send and reset. */
 export default async function MessagesSettingsPage({ searchParams }: { searchParams: Promise<{ type?: string; lang?: string }> }) {
@@ -29,6 +29,8 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
   const text = await messageText(pool(), tenant.schemaName, property.id, type, lang);
   const preview = await previewMessage(pool(), tenant.schemaName, property.id, type, lang);
   const portal = await portalSettings(pool(), tenant.schemaName, property.id);
+  const inbox = await inboxSettings(pool(), tenant.schemaName, property.id);
+  const replies = await listQuickReplies(pool(), tenant.schemaName, property.id);
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
   const which = (
     <>
@@ -94,6 +96,56 @@ export default async function MessagesSettingsPage({ searchParams }: { searchPar
               </label>
             ))}
           </fieldset>
+        </ActionForm>
+      </section>
+
+      <section className="grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm" data-inbox-settings>
+        <h2 className="font-medium">{m["inbox.settings"]}</h2>
+        <p className="text-ink-60">{m["inbox.deskHelp"]}</p>
+        <ActionForm action={inboxSettingsAction} submitLabel={m["action.save"]} pendingLabel={m["action.saving"]} className="flex flex-wrap items-end gap-3">
+          {hidden}
+          <Field label={m["inbox.deskOpens"]} name="deskOpens" type="time" defaultValue={inbox.deskOpens} required />
+          <Field label={m["inbox.deskCloses"]} name="deskCloses" type="time" defaultValue={inbox.deskCloses} required />
+          <Field label={m["inbox.checkin"]} name="checkinTime" type="time" defaultValue={inbox.checkinTime} required />
+          <Field label={m["inbox.emergency"]} name="emergencyPhone" type="tel" defaultValue={inbox.emergencyPhone ?? ""} />
+          <Field label={m["inbox.escalation"]} name="escalationMinutes" type="number" step="1" defaultValue={String(inbox.escalationMinutes)} required />
+        </ActionForm>
+        <h3 className="mt-2 font-medium">{m["inbox.quickReplies"]}</h3>
+        <p className="text-ink-60">{m["inbox.qrHelp"]}</p>
+        <ul className="grid gap-2" data-quick-replies>
+          {replies.map((q) => (
+            <li key={q.id} className="flex items-start gap-3 rounded-xl bg-surface p-3">
+              <span className="w-8 shrink-0 uppercase text-ink-60">{q.language}</span>
+              <span className="grid flex-1 gap-1">
+                <span className="font-medium">{q.title}</span>
+                <span className="whitespace-pre-wrap text-ink-80">{q.body}</span>
+              </span>
+              <ActionForm action={deleteQuickReplyAction} submitLabel={m["inbox.qrDelete"]} className="flex">
+                {hidden}
+                <input type="hidden" name="id" value={q.id} />
+              </ActionForm>
+            </li>
+          ))}
+        </ul>
+        <ActionForm action={quickReplyAction} submitLabel={m["inbox.qrAdd"]} pendingLabel={m["action.saving"]} className="grid gap-2">
+          {hidden}
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="grid gap-1">
+              <span>{m["inbox.qrLanguage"]}</span>
+              <select name="language" className={input} defaultValue="de">
+                {MESSAGE_LANGUAGES.map((l) => (
+                  <option key={l} value={l}>
+                    {l.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Field label={m["inbox.qrTitle"]} name="title" required />
+          </div>
+          <label className="grid gap-1">
+            <span>{m["inbox.qrBody"]}</span>
+            <textarea name="body" rows={3} required maxLength={2000} className="rounded-xl border border-ink-10 bg-surface p-2" />
+          </label>
         </ActionForm>
       </section>
 

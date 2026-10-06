@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { DATA_KINDS } from "@hoteloftware/domain";
+import { DATA_CHANGE_PREFIX, DATA_KINDS } from "@hoteloftware/domain";
 
 type Queryable = Pool | PoolClient;
 
@@ -52,9 +52,28 @@ export { DATA_CHANGE_PREFIX, isDataChange } from "@hoteloftware/domain";
  * Tell every user of the tenant that data of a kind changed at a property, so
  * open lists can refresh. Carries no personal data: kind and property id only.
  */
-export function publishDataChange(db: Queryable, input: { tenantId: string; kind: "reservations"; propertyId: string }): Promise<number> {
+export function publishDataChange(db: Queryable, input: { tenantId: string; kind: "reservations" | "conversations"; propertyId: string }): Promise<number> {
   // the property id rides in the body: these rows are tenant-wide and carry no personal data
   return publishNotification(db, { tenantId: input.tenantId, userId: null, kind: DATA_KINDS[input.kind], title: "", body: input.propertyId });
+}
+
+/**
+ * A staff member is writing in a Conversation (ticket 42): the colleagues who
+ * work that property's Guest Inbox see it live. Addressed to them, not the
+ * whole tenant; carries the Conversation id and the writer's name.
+ */
+export async function publishTyping(db: Queryable, input: { tenantId: string; propertyId: string; conversationId: string; userId: string; name: string; to: string[] }): Promise<void> {
+  const title = JSON.stringify({ c: input.conversationId, u: input.userId, n: input.name });
+  for (const userId of input.to) {
+    if (userId !== input.userId) await publishNotification(db, { tenantId: input.tenantId, userId, kind: DATA_KINDS.typing, title, body: input.propertyId });
+  }
+}
+
+/** What a typing notice says (the browser reads it back). */
+export interface TypingNotice {
+  c: string;
+  u: string;
+  n: string;
 }
 
 /** The newest notification id, the starting cursor for a fresh stream. */
@@ -65,7 +84,11 @@ export async function latestNotificationId(db: Queryable): Promise<number> {
 
 /** Delete notifications older than the retention; they are transient staff alerts, not records. */
 export async function pruneNotifications(db: Queryable, olderThanDays = 30): Promise<number> {
-  const { rowCount } = await db.query("delete from control.notifications where created_at < now() - ($1 || ' days')::interval", [String(olderThanDays)]);
+  const { rowCount } = await db.query(
+    // live-update hints (data changes, typing) matter for seconds: gone after a day
+    `delete from control.notifications where created_at < now() - ($1 || ' days')::interval or (kind like $2 and created_at < now() - interval '1 day')`,
+    [String(olderThanDays), `${DATA_CHANGE_PREFIX}%`],
+  );
   return rowCount ?? 0;
 }
 

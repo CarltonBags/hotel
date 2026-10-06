@@ -180,6 +180,10 @@ export const PROPERTY_ACTIONS = {
   manage_budget: ["property_manager", "revenue"],
   /** Card terminals of the property, its refund limit, and onboarding its Legal Entity with the payment provider. */
   manage_payment_settings: ["property_manager"],
+  /** The Guest Inbox: read and answer Conversations, Internal Notes, claim (ticket 42). */
+  use_guest_inbox: ["property_manager", "front_desk"],
+  /** Told when a guest message stays unopened past the property's time (ticket 42). */
+  receive_inbox_escalations: ["property_manager"],
   /** Downtime Reports, the offline lists and Catch-up Entry after an outage (ticket 86). */
   use_downtime: ["property_manager", "front_desk"],
   /** What the Downtime Reports show, their order and the shift reminder. */

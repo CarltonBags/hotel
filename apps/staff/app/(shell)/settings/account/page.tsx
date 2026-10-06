@@ -46,6 +46,10 @@ export default async function AccountPage() {
               <input type="checkbox" name="sms" defaultChecked={channels.sms} /> {m["notify.sms"]}
             </label>
             <Field label={m["notify.phone"]} name="phone" type="tel" defaultValue={channels.phone ?? ""} />
+            <label className="flex items-center gap-2">
+              <input type="hidden" name="sound" value="off" />
+              <input type="checkbox" name="sound" defaultChecked={channels.sound} /> {m["inbox.sound"]}
+            </label>
           </ActionForm>
         </section>
       ) : null}

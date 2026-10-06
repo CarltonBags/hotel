@@ -17,6 +17,27 @@ interface Toast {
 const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL ?? "";
 const TOAST_MS = 8000;
 
+/** A short two-note chime, made in the browser (no sound file); one audio context for the page. */
+let audio: AudioContext | null = null;
+function chime(): void {
+  try {
+    const ctx = (audio ??= new AudioContext());
+    [880, 1320].forEach((f, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + i * 0.15);
+      g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + i * 0.15 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.15 + 0.3);
+      o.connect(g).connect(ctx.destination);
+      o.start(ctx.currentTime + i * 0.15);
+      o.stop(ctx.currentTime + i * 0.15 + 0.32);
+    });
+  } catch {
+    // no sound where the browser allows none
+  }
+}
+
 /**
  * Live updates: opens the worker's event stream with a short-lived token and
  * shows each notification as a toast. The browser's EventSource reconnects on
@@ -24,7 +45,7 @@ const TOAST_MS = 8000;
  * one and reopen with the last id, so nothing is missed across a restart.
  */
 export function Notifications() {
-  const { t, tenant, user } = useShell();
+  const { t, tenant, user, inboxSound } = useShell();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [offline, setOffline] = useState(false);
   const lastId = useRef<string | null>(null);
@@ -51,9 +72,11 @@ export function Notifications() {
           const n = JSON.parse(msg.data) as Toast;
           // data changes refresh open screens and are no toast
           if (isDataChange(n.kind)) {
-            window.dispatchEvent(new CustomEvent(DATA_EVENT, { detail: { kind: n.kind, propertyId: n.body } }));
+            window.dispatchEvent(new CustomEvent(DATA_EVENT, { detail: { kind: n.kind, propertyId: n.body, title: n.title } }));
             return;
           }
+          // a new guest message rings, for whoever asked for the sound (ticket 42)
+          if (n.kind === "inbox.message" && inboxSound) chime();
           setToasts((list) => [...list.filter((x) => x.id !== n.id), n].slice(-4));
           setTimeout(() => setToasts((list) => list.filter((x) => x.id !== n.id)), TOAST_MS);
         });
@@ -80,7 +103,7 @@ export function Notifications() {
       stopped = true;
       source?.close();
     };
-  }, [tenant.id, user.id]);
+  }, [tenant.id, user.id, inboxSound]);
 
   return (
     <div aria-live="polite" aria-label={t("shell.notifications")} className="pointer-events-none fixed print:hidden right-5 top-20 z-50 flex w-80 flex-col gap-2">

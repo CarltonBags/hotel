@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MAX_COMPANIONS, expressCheckoutView, portalView } from "@hoteloftware/db";
+import { MAX_COMPANIONS, expressCheckoutView, portalConversation, portalView } from "@hoteloftware/db";
 import { cardLabel, extrasOpen, portalLanguage, type PortalLanguage } from "@hoteloftware/domain";
 import { headers } from "next/headers";
 import { portalText, type PortalKey } from "@/i18n/portal";
@@ -8,6 +8,7 @@ import { currentTenant } from "@/lib/tenant";
 import { extraAction, inviteAction, precheckinAction } from "../actions";
 import { ExtraForm, InviteForm, PrecheckinForm } from "../forms";
 import { Glass } from "../glass";
+import { PortalMessages } from "../messages";
 import { CheckoutButton, PayPanel } from "../pay-panel";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +27,8 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   const money = (n: number) => n.toLocaleString(locale, { style: "currency", currency: view.property.currency });
   const nights = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
   const other: PortalLanguage = language === "de" ? "en" : "de";
+  const thread = await portalConversation(pool(), tenant!.schemaName, key);
+  const messages = thread ? <PortalMessages portalKey={key} language={language} messages={thread} timeZone={view.property.timeZone} /> : null;
   // the property's own landscape behind the card, when it set one
   const wallpaper = view.property.photoFileId ? <div aria-hidden className="fixed inset-0 -z-0 bg-cover bg-center opacity-80" style={{ backgroundImage: `url(/g/${key}/photo)` }} /> : null;
   const header = (
@@ -60,6 +63,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
             {s.status === "confirmed" ? <InviteForm action={inviteAction.bind(null, key)} language={language} reservationId={s.reservationId} /> : null}
           </Glass>
         ))}
+        {messages}
         <p className="text-center text-xs text-white/50">{t("noChange")}</p>
       </>
     );
@@ -197,6 +201,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
           <p className="whitespace-pre-line text-white/85">{info}</p>
         </Glass>
       ) : null}
+      {messages}
       <p className="text-center text-xs text-white/50">{t("noChange")}</p>
     </>
   );

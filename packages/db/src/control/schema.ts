@@ -119,6 +119,7 @@ export const userPreferences = control.table("user_preferences", {
   notifyEmail: boolean("notify_email").notNull().default(true),
   notifySms: boolean("notify_sms").notNull().default(false),
   notifyPhone: text("notify_phone"),
+  inboxSound: boolean("inbox_sound").notNull().default(false),
 }, (t) => [
   check("user_preferences_floor_language_check", sql`${t.floorLanguage} in ('de', 'en', 'pl', 'ro', 'bg', 'hr', 'hu', 'tr', 'uk', 'ar')`),
   check("user_preferences_notify_phone_check", sql`${t.notifyPhone} ~ '^\\+[1-9][0-9]{6,14}$'`),
