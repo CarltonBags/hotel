@@ -47,7 +47,7 @@ export default async function TillPostingsPage({ searchParams }: { searchParams:
         <section key={r.id} className="grid gap-2 rounded-2xl bg-surface-2 p-4 text-sm" data-till-posting={r.receiptNumber} data-status={r.status}>
           <p className="flex flex-wrap justify-between gap-2">
             <span className="font-medium">
-              {r.till} · {r.kind === "reversal" ? m["till.reversal"] : m["till.bill"]} {r.receiptNumber || "–"} · {money(r.total)}
+              {r.till} · {r.kind === "correction" ? m["till.correction"] : m["till.bill"]} {r.receiptNumber || "–"} · {money(r.total)}
               {r.tip ? ` + ${money(r.tip)} ${m["till.tip"]}` : ""}
             </span>
             <span className="text-ink-60">{when(r.receivedAt)}</span>

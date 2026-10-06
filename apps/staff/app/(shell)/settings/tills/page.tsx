@@ -7,9 +7,6 @@ import { pool } from "@/lib/db";
 import { loadShell } from "@/lib/shell";
 import { createTillAction, rotateTillKeyAction, updateTillAction } from "./actions";
 
-/** The rates a till may send that fit more than one Tax Code (or none): the Property Manager says which. */
-const RATES = ["0", "7", "19", "10", "13", "20", "2.6", "3.8", "8.1"];
-
 /**
  * External tills (ticket 65): a till that keeps its own fiscal register
  * charges rooms through our room charge interface or Lightspeed's contract.
@@ -32,6 +29,8 @@ export default async function TillSettingsPage() {
   const [tills, codes] = await Promise.all([tillConnectionsOf(pool(), tenant.schemaName, property.id, { userId: session.user.id, actor }), listTaxCodes(pool(), tenant.schemaName, legalEntityId)]);
   const h = await headers();
   const base = `${h.get("x-forwarded-proto") ?? "https"}://${h.get("host") ?? ""}`;
+  // the rates of the property's Tax Codes; where one fits more than one code, the Property Manager says which
+  const rates = [...new Set(codes.flatMap((c) => (c.currentRate === null ? [] : [String(c.currentRate)])))].sort((a, b) => Number(a) - Number(b));
   const codeOptions = [{ value: "", label: m["till.anyCode"] }, ...codes.map((c) => ({ value: c.id, label: `${c.code} · ${c.name}` }))];
   const section = "grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm";
   const fields = (t: TillConnection | null) => (
@@ -44,7 +43,7 @@ export default async function TillSettingsPage() {
       <fieldset className="grid gap-2 sm:col-span-2">
         <legend className="text-ink-80">{m["till.taxCodes"]}</legend>
         <div className="grid gap-2 sm:grid-cols-3">
-          {RATES.map((r) => (
+          {rates.map((r) => (
             <Select key={r} label={`${r} %`} name={`rate_${r}`} options={codeOptions} defaultValue={t?.taxCodes[r] ?? ""} />
           ))}
         </div>

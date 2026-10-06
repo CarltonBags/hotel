@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { can, roomChargeCheck, roundMoney, taxCodeForRate, tillChargeGroups, type TillPosting, type TillTotal } from "@hoteloftware/domain";
 import { isUuid } from "./catalogue-common";
-import { postRoomChargeIn } from "./folios";
+import { correctIn, postRoomChargeIn } from "./folios";
 import { roomChargeFactsIn } from "./outlets";
 import type { Viewer } from "./room-state";
 import { rateOn } from "./tax-rate";
@@ -13,8 +13,9 @@ import { withTenant } from "./with-tenant";
  * interface and Lightspeed's room charge contract. A till looks up the
  * Checked-in guests it may charge, posts a bill (once, however often it
  * sends it) as one Charge per Tax Code with the items as detail and the tip
- * apart, and reverses a bill whole. What is refused is kept and listed for
- * staff to reconcile: tills do not send a failed posting again.
+ * apart, and takes a bill back whole: a Correction of each of its Charges
+ * (ADR 0015). What is refused is kept and listed for staff to reconcile:
+ * tills do not send a failed posting again.
  */
 
 export interface TillConnection {
@@ -32,7 +33,7 @@ export interface TillConnection {
 }
 
 /** Why a posting was refused; the till shows the text (Lightspeed: up to 50 characters). */
-export type TillRefusalCode = "invalid" | "not_found" | "not_checked_in" | "blocked" | "not_covered" | "over_limit" | "unknown_tax_rate" | "original_not_found" | "already_reversed";
+export type TillRefusalCode = "invalid" | "not_found" | "not_checked_in" | "blocked" | "not_covered" | "over_limit" | "unknown_tax_rate" | "bill_not_found" | "already_corrected" | "invoiced" | "settled_at_desk";
 
 const REFUSAL_TEXT: Record<TillRefusalCode, string> = {
   invalid: "The posting is incomplete",
@@ -42,8 +43,10 @@ const REFUSAL_TEXT: Record<TillRefusalCode, string> = {
   not_covered: "No guarantee for room charge",
   over_limit: "Over the spending limit",
   unknown_tax_rate: "Tax rate not set up at the hotel",
-  original_not_found: "The bill to reverse was not found",
-  already_reversed: "The bill is already reversed",
+  bill_not_found: "The bill to take back was not found",
+  already_corrected: "The bill is already taken back",
+  invoiced: "Invoiced already: ask the desk",
+  settled_at_desk: "Settled at the desk already",
 };
 
 export class TillRefusal extends Error {
@@ -53,6 +56,7 @@ export class TillRefusal extends Error {
 }
 
 const hash = (key: string) => createHash("sha256").update(key).digest("hex");
+const newKey = () => `hs_till_${randomBytes(24).toString("hex")}`;
 const SELECT = "select id, property_id, kind, name, key_hint, business_reference, revenue_account, tip_account, tax_codes, active from till_connections";
 const toConnection = (r: { id: string; property_id: string; kind: TillConnection["kind"]; name: string; key_hint: string; business_reference: string; revenue_account: string; tip_account: string; tax_codes: Record<string, string>; active: boolean }): TillConnection => ({
   id: r.id,
@@ -107,7 +111,7 @@ export async function createTillConnection(pool: Pool, schema: string, propertyI
   needManage(viewer, propertyId);
   if (input.kind !== "api" && input.kind !== "lightspeed") throw new Error("Choose how the till connects");
   if (input.kind === "lightspeed" && !input.businessReference.trim()) throw new Error("Enter Lightspeed's business reference of the venue");
-  const key = `hs_till_${randomBytes(24).toString("hex")}`;
+  const key = newKey();
   return withTenant(pool, schema, async (tx) => {
     const v = await checkedInput(tx, propertyId, input);
     const id = (await tx.query<{ id: string }>(
@@ -136,7 +140,7 @@ export async function updateTillConnection(pool: Pool, schema: string, id: strin
 /** A new key (the old one stops working at once), shown this once. */
 export async function rotateTillKey(pool: Pool, schema: string, id: string, viewer: Viewer): Promise<string> {
   if (!isUuid(id)) throw new Error("Till not found");
-  const key = `hs_till_${randomBytes(24).toString("hex")}`;
+  const key = newKey();
   await withTenant(pool, schema, async (tx) => {
     const c = (await tx.query<{ property_id: string }>("select property_id from till_connections where id = $1 for update", [id])).rows[0];
     if (!c) throw new Error("Till not found");
@@ -187,7 +191,8 @@ export async function tillGuests(pool: Pool, schema: string, till: TillConnectio
     for (const r of rows) {
       const f = await roomChargeFactsIn(tx, till.propertyId, r.id);
       const c = roomChargeCheck({ ...f, amount: 0 });
-      if (c.allowed) out.push({ reservationId: r.id, room: f.room, name: f.lastName, firstName: r.first_name, remaining: c.remaining });
+      // nothing left of tonight's limit: the till takes payment
+      if (c.allowed && c.remaining > 0) out.push({ reservationId: r.id, room: f.room, name: f.lastName, firstName: r.first_name, remaining: c.remaining });
     }
     return out;
   });
@@ -204,64 +209,51 @@ export interface TillPosted {
   duplicate: boolean;
 }
 
-const REASON_CODE: [RegExp, TillRefusalCode][] = [
-  [/not checked in/, "not_checked_in"],
-  [/blocked/, "blocked"],
-  [/covers/, "not_covered"],
-];
-
 async function postIn(tx: PoolClient, till: TillConnection, p: TillPostingInput): Promise<TillPosted> {
-  const existing = (await tx.query<{ id: string; status: string }>("select id, status from till_postings where connection_id = $1 and external_id = $2 for update", [till.id, p.externalId])).rows[0];
+  const existing = (await tx.query<{ id: string; status: string; reconciled: boolean }>("select id, status, reconciled_at is not null as reconciled from till_postings where connection_id = $1 and external_id = $2 for update", [till.id, p.externalId])).rows[0];
+  // staff settled a refused bill by hand: sending it again would charge it twice
+  if (existing?.reconciled) throw new TillRefusal("settled_at_desk");
   if (existing?.status === "posted") {
     const ids = (await tx.query<{ id: string }>("select id from charges where till_posting_id = $1 order by posted_at, id", [existing.id])).rows.map((r) => r.id);
     return { postingId: existing.id, chargeIds: ids, duplicate: true };
   }
-  // a reversal may leave the stay to the bill it reverses
-  if (p.reversalOf && !p.reservationId) {
-    p = { ...p, reservationId: (await tx.query<{ reservation_id: string }>("select reservation_id from till_postings where connection_id = $1 and external_id = $2 and kind = 'charge' and status = 'posted'", [till.id, p.reversalOf])).rows[0]?.reservation_id ?? "" };
-    if (!p.reservationId) throw new TillRefusal("original_not_found");
-  }
-  if (!isUuid(p.reservationId)) throw new TillRefusal("not_found");
-  const facts = await roomChargeFactsIn(tx, till.propertyId, p.reservationId).catch(() => {
-    throw new TillRefusal("not_found");
-  });
+  // a Correction takes back a bill this till posted; its stay is that bill's
+  const bill = p.corrects
+    ? (await tx.query<{ id: string; reservation_id: string }>("select id, reservation_id from till_postings where connection_id = $1 and external_id = $2 and kind = 'bill' and status = 'posted' for update", [till.id, p.corrects])).rows[0]
+    : undefined;
+  if (p.corrects && (!bill || (p.reservationId && bill.reservation_id !== p.reservationId))) throw new TillRefusal("bill_not_found");
+  const reservationId = bill?.reservation_id ?? p.reservationId;
+  if (!isUuid(reservationId)) throw new TillRefusal("not_found");
+  // the stay locked: two bills at once (two tills, or a till and our own outlet) never both pass the limit
+  if (!(await tx.query("select 1 from reservations where id = $1 and property_id = $2 for update", [reservationId, till.propertyId])).rows.length) throw new TillRefusal("not_found");
+  const facts = await roomChargeFactsIn(tx, till.propertyId, reservationId);
   const by = `till:${till.id}`;
-  const record = async (kind: "charge" | "reversal", originalId: string | null, total: number, tip: number) =>
+  const label = `${till.name} ${p.receiptNumber}`.trim();
+  const record = async (kind: "bill" | "correction", billId: string | null, total: number, tip: number) =>
     (await tx.query<{ id: string }>(
       `insert into till_postings (connection_id, property_id, external_id, kind, reservation_id, receipt_number, fiscal_id, original_id, total, tip, status, payload)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'posted', $11)
        on conflict (connection_id, external_id) do update set kind = excluded.kind, reservation_id = excluded.reservation_id, receipt_number = excluded.receipt_number, fiscal_id = excluded.fiscal_id,
-         original_id = excluded.original_id, total = excluded.total, tip = excluded.tip, status = 'posted', error = null, payload = excluded.payload, received_at = clock_timestamp(), reconciled_at = null, reconciled_by = null, reconcile_note = null
+         original_id = excluded.original_id, total = excluded.total, tip = excluded.tip, status = 'posted', error = null, payload = excluded.payload, received_at = clock_timestamp()
        returning id`,
-      [till.id, till.propertyId, p.externalId, kind, p.reservationId, p.receiptNumber.slice(0, 60), p.fiscalId.slice(0, 120), originalId, total, tip, JSON.stringify(p)],
+      [till.id, till.propertyId, p.externalId, kind, reservationId, p.receiptNumber.slice(0, 60), p.fiscalId.slice(0, 120), billId, total, tip, JSON.stringify(p)],
     )).rows[0]!.id;
 
-  if (p.reversalOf) {
-    // a whole bill reversed: its Charges again, negative, linked to it
-    const original = (await tx.query<{ id: string; reservation_id: string }>("select id, reservation_id from till_postings where connection_id = $1 and external_id = $2 and kind = 'charge' and status = 'posted' for update", [till.id, p.reversalOf])).rows[0];
-    if (!original || original.reservation_id !== p.reservationId) throw new TillRefusal("original_not_found");
-    if ((await tx.query("select 1 from till_postings where original_id = $1 and status = 'posted'", [original.id])).rows.length) throw new TillRefusal("already_reversed");
+  if (bill) {
+    if ((await tx.query("select 1 from till_postings where original_id = $1 and status = 'posted'", [bill.id])).rows.length) throw new TillRefusal("already_corrected");
     if (facts.status !== "checked_in") throw new TillRefusal("not_checked_in");
-    const lines = (await tx.query<{ description: string; tax_code_id: string; revenue_account: string; amount: string; detail: { description: string; quantity: number; amount: number }[] | null }>(
-      "select description, tax_code_id, revenue_account, amount, detail from charges where till_posting_id = $1 and voided_at is null order by posted_at, id",
-      [original.id],
+    // the bill's Charges still standing: neither voided nor corrected at the desk meanwhile
+    const lines = (await tx.query<{ id: string; amount: string; tip: boolean; invoiced: boolean }>(
+      `select c.id, c.amount, c.tip, c.invoice_id is not null as invoiced from charges c
+       where c.till_posting_id = $1 and c.voided_at is null and not exists (select 1 from charges x where x.corrects = c.id) order by c.posted_at, c.id`,
+      [bill.id],
     )).rows;
-    const total = roundMoney(-lines.reduce((s, l) => s + Number(l.amount), 0));
-    const id = await record("reversal", original.id, total, 0);
-    const label = `${till.name} ${p.receiptNumber}`.trim();
-    const chargeIds = await postRoomChargeIn(
-      tx,
-      p.reservationId,
-      { tillPostingId: id },
-      lines.map((l) => ({
-        description: `${label} · ${l.description.slice(l.description.lastIndexOf("·") + 1).trim()}`,
-        taxCodeId: l.tax_code_id,
-        revenueAccount: l.revenue_account,
-        amount: -Number(l.amount),
-        detail: l.detail ? l.detail.map((i) => ({ ...i, quantity: -i.quantity, amount: -i.amount })) : null,
-      })),
-      by,
-    );
+    if (!lines.length) throw new TillRefusal("already_corrected");
+    if (lines.some((l) => l.invoiced)) throw new TillRefusal("invoiced");
+    const amount = (tip: boolean) => roundMoney(-lines.filter((l) => l.tip === tip).reduce((s, l) => s + Number(l.amount), 0));
+    const id = await record("correction", bill.id, amount(false), amount(true));
+    const chargeIds: string[] = [];
+    for (const l of lines) chargeIds.push(await correctIn(tx, l.id, `Taken back by ${label}`, by, { tillPostingId: id }));
     return { postingId: id, chargeIds, duplicate: false };
   }
 
@@ -272,11 +264,12 @@ async function postIn(tx: PoolClient, till: TillConnection, p: TillPostingInput)
     throw new TillRefusal("invalid");
   }
   const tip = roundMoney(Number(p.tip) || 0);
-  if (tip < 0) throw new TillRefusal("invalid");
+  // a bill charges; taking one back is a Correction of it, never a negative bill
+  if (tip < 0 || groups.some((g) => g.amount <= 0)) throw new TillRefusal("invalid");
   const total = roundMoney(groups.reduce((s, g) => s + g.amount, 0));
   // the same rules as our own point of sale; the tip does not count against the limit
   const check = roomChargeCheck({ ...facts, amount: total });
-  if (!check.allowed) throw new TillRefusal(REASON_CODE.find(([re]) => re.test(check.reason ?? ""))?.[1] ?? "not_checked_in");
+  if (!check.allowed) throw new TillRefusal(check.refusal ?? "not_checked_in");
   if (check.overLimit) throw new TillRefusal("over_limit");
   const day = (await tx.query<{ d: string }>("select to_char(coalesce(business_date, (now() at time zone time_zone)::date), 'YYYY-MM-DD') as d from properties where id = $1", [till.propertyId])).rows[0]!.d;
   // one query at a time on the transaction's client
@@ -289,11 +282,11 @@ async function postIn(tx: PoolClient, till: TillConnection, p: TillPostingInput)
     if (!id) throw new TillRefusal("unknown_tax_rate");
     return id;
   };
-  const label = `${till.name} ${p.receiptNumber}`.trim();
-  const charges = groups.map((g) => ({ description: `${label} · ${g.taxRate} %`, taxCodeId: codeFor(g.taxRate), revenueAccount: till.revenueAccount, amount: g.amount, detail: g.items.length ? g.items : null }));
-  if (tip) charges.push({ description: `${label} · Tip`, taxCodeId: codeFor(0), revenueAccount: till.tipAccount, amount: tip, detail: null });
-  const id = await record("charge", null, total, tip);
-  const chargeIds = await postRoomChargeIn(tx, p.reservationId, { tillPostingId: id }, charges, by);
+  const charges: { description: string; taxCodeId: string; revenueAccount: string; amount: number; detail: unknown; tip?: boolean }[] = groups.map((g) => ({ description: `${label} · ${g.taxRate} %`, taxCodeId: codeFor(g.taxRate), revenueAccount: till.revenueAccount, amount: g.amount, detail: g.items.length ? g.items : null }));
+  // a tip passes through: a 0 % line on the tip account
+  if (tip) charges.push({ description: `${label} · Tip`, taxCodeId: codeFor(0), revenueAccount: till.tipAccount, amount: tip, detail: null, tip: true });
+  const id = await record("bill", null, total, tip);
+  const chargeIds = await postRoomChargeIn(tx, reservationId, { tillPostingId: id }, charges, by);
   return { postingId: id, chargeIds, duplicate: false };
 }
 
@@ -314,7 +307,7 @@ export async function postTillCharge(pool: Pool, schema: string, till: TillConne
     });
   } catch (err) {
     if (!(err instanceof TillRefusal)) throw err;
-    await recordTillRefusal(pool, schema, till, { ...posting, kind: posting.reversalOf ? "reversal" : "charge" }, err.message, posting);
+    await recordTillRefusal(pool, schema, till, { ...posting, kind: posting.corrects ? "correction" : "bill" }, err.message, posting);
     throw err;
   }
 }
@@ -324,12 +317,12 @@ export async function recordTillRefusal(
   pool: Pool,
   schema: string,
   till: TillConnection,
-  p: { externalId: string; kind: "charge" | "reversal"; reservationId: string; receiptNumber: string; fiscalId: string },
+  p: { externalId: string; kind: "bill" | "correction"; reservationId: string; receiptNumber: string; fiscalId: string },
   error: string,
   payload: unknown,
 ): Promise<void> {
-  const externalId = p.externalId.trim().slice(0, 120);
-  if (!externalId) return;
+  // a refusal without the till's id is listed too, under one of ours
+  const externalId = p.externalId.trim().slice(0, 120) || `unidentified-${randomBytes(8).toString("hex")}`;
   await withTenant(pool, schema, (tx) =>
     tx.query(
       `insert into till_postings (connection_id, property_id, external_id, kind, reservation_id, receipt_number, fiscal_id, status, error, payload)
@@ -345,7 +338,7 @@ export async function recordTillRefusal(
 export interface TillPostingRow {
   id: string;
   till: string;
-  kind: "charge" | "reversal";
+  kind: "bill" | "correction";
   receivedAt: string;
   receiptNumber: string;
   reservationId: string | null;

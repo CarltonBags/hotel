@@ -66,8 +66,8 @@ export function taxCodeForRate(rate: number, codes: { id: string; rate: number }
 /** A till posting in our own terms. */
 export interface TillPosting {
   externalId: string;
-  /** For a void: the till's id of the bill it cancels. */
-  reversalOf: string | null;
+  /** For a bill taken back (a void at the till): the till's id of that bill; posted as its Correction. */
+  corrects: string | null;
   reservationId: string;
   receiptNumber: string;
   fiscalId: string;
@@ -105,7 +105,8 @@ export const LIGHTSPEED_ROOM_CHARGE = "IKPMS";
 /**
  * A Lightspeed account closed to a room, as our posting. The whole bill goes
  * to the room (partial payments are not offered); the tip rides on the
- * payment apart from revenue; a void is a new account pointing to the first.
+ * payment apart from revenue; a void is a new account pointing to the first,
+ * taken as the Correction of that bill.
  */
 export function fromLightspeed(a: LightspeedAccount): TillPosting {
   const num = (v: unknown) => (typeof v === "number" ? v : Number(String(v ?? "").replace(",", ".")));
@@ -121,14 +122,16 @@ export function fromLightspeed(a: LightspeedAccount): TillPosting {
   }));
   const lines = roundMoney(items.reduce((s, i) => s + i.amount, 0));
   const charged = roundMoney(room.reduce((s, p) => s + num(p.amount), 0));
-  if (charged !== lines) throw new Error("Only the whole bill can go to the room");
+  const tip = roundMoney(room.reduce((s, p) => s + (num(p.gratuity ?? 0) || 0), 0));
+  // the payment's amount may or may not include the tip (to confirm in the sandbox): either is the whole bill
+  if (charged !== lines && charged !== roundMoney(lines + tip)) throw new Error("Only the whole bill can go to the room");
   return {
     externalId: a.uuid,
-    reversalOf: a.initialAccountId && a.initialAccountId !== a.uuid ? a.initialAccountId : null,
+    corrects: a.initialAccountId && a.initialAccountId !== a.uuid ? a.initialAccountId : null,
     reservationId,
     receiptNumber: String(a.receiptId ?? ""),
     fiscalId: String(a.fiscId ?? ""),
     items,
-    tip: roundMoney(room.reduce((s, p) => s + (num(p.gratuity ?? 0) || 0), 0)),
+    tip,
   };
 }

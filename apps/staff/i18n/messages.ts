@@ -202,7 +202,7 @@ const catalog = {
   "till.showAll": { en: "All postings", de: "Alle Buchungen" },
   "till.none": { en: "No postings yet.", de: "Noch keine Buchungen." },
   "till.nothingOpen": { en: "Nothing to reconcile.", de: "Nichts abzustimmen." },
-  "till.reversal": { en: "Reversal", de: "Storno" },
+  "till.correction": { en: "Taken back (Correction)", de: "Zurückgenommen (Korrekturbuchung)" },
   "till.bill": { en: "Bill", de: "Bon" },
   "till.tip": { en: "tip", de: "Trinkgeld" },
   "till.reservation": { en: "Reservation", de: "Reservierung" },

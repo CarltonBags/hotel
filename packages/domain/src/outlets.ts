@@ -106,6 +106,8 @@ export interface RoomChargeCheck {
   overLimit: boolean;
   remaining: number;
   reason: string | null;
+  /** Why not, for a machine (an External Till's refusal). */
+  refusal: "not_checked_in" | "blocked" | "not_covered" | null;
 }
 
 /**
@@ -115,11 +117,11 @@ export interface RoomChargeCheck {
  */
 export function roomChargeCheck(c: { status: string; blocked: boolean; covered: boolean; chargedTonight: number; limit: number; amount: number }): RoomChargeCheck {
   const remaining = roundMoney(Math.max(0, c.limit - c.chargedTonight));
-  const no = (reason: string) => ({ allowed: false, overLimit: false, remaining, reason });
-  if (c.status !== "checked_in") return no("The guest is not checked in");
-  if (c.blocked) return no("Room charge is blocked for this stay (cash only)");
-  if (!c.covered) return no("No Card Hold, Card Guarantee or account covers a Room Charge");
-  return { allowed: true, overLimit: c.amount > remaining, remaining, reason: null };
+  const no = (reason: string, refusal: RoomChargeCheck["refusal"]) => ({ allowed: false, overLimit: false, remaining, reason, refusal });
+  if (c.status !== "checked_in") return no("The guest is not checked in", "not_checked_in");
+  if (c.blocked) return no("Room charge is blocked for this stay (cash only)", "blocked");
+  if (!c.covered) return no("No Card Hold, Card Guarantee or account covers a Room Charge", "not_covered");
+  return { allowed: true, overLimit: c.amount > remaining, remaining, reason: null, refusal: null };
 }
 
 export interface OutletChargeLine {

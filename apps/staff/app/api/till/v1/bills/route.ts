@@ -25,7 +25,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const r = await postTillCharge(pool(), auth.tenant.schemaName, auth.till, {
       externalId: String(b.id ?? ""),
-      reversalOf: null,
+      corrects: null,
       reservationId: String(b.reservationId ?? ""),
       receiptNumber: String(b.receiptNumber ?? ""),
       fiscalId: String(b.fiscalId ?? ""),

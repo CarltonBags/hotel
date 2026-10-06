@@ -48,7 +48,7 @@ describe("room charges from external tills", () => {
     });
     expect(sale).toEqual({
       externalId: "acc-1",
-      reversalOf: null,
+      corrects: null,
       reservationId: "res-1",
       receiptNumber: "R-4711",
       fiscalId: "TSE-99",
@@ -59,7 +59,7 @@ describe("room charges from external tills", () => {
       tip: 2,
     });
     const voided = fromLightspeed({ uuid: "acc-2", initialAccountId: "acc-1", receiptId: "R-4712", salesLines: [{ description: "Pizza", quantity: -1, amount: "-12.00", taxRate: 1.07 }], payments: [{ code: "IKPMS", amount: "-12.00", pmsReservationId: "res-1" }] });
-    expect(voided).toMatchObject({ externalId: "acc-2", reversalOf: "acc-1" });
+    expect(voided).toMatchObject({ externalId: "acc-2", corrects: "acc-1" });
     // only part of the bill to the room: not supported
     expect(() => fromLightspeed({ uuid: "acc-3", salesLines: [{ description: "Pizza", quantity: 1, amount: "12.00", taxRate: 1.07 }], payments: [{ code: "IKPMS", amount: "5.00", pmsReservationId: "res-1" }, { code: "CASH", amount: "7.00" }] })).toThrow(/whole bill/);
   });

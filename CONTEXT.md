@@ -634,7 +634,7 @@ A time in a therapist's hours the spa has opened for guests to book treatments t
 _Avoid_: Online slot, free slot
 
 **Room Charge**:
-Posting an outlet bill to a checked-in guest's folio, allowed within the reservation's spending limit.
+Posting an outlet bill, or an External Till's bill, to a checked-in guest's folio, allowed within the reservation's spending limit (tips outside it).
 _Avoid_: Charge to room, transfer, city ledger
 
 **External Till**:

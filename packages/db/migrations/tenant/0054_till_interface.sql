@@ -28,7 +28,8 @@ create table till_postings (
   property_id uuid not null references properties(id),
   -- the till's own id of the bill (idempotency)
   external_id text not null,
-  kind text not null constraint till_postings_kind_check check (kind in ('charge', 'reversal')),
+  -- a bill, or the Correction of a whole bill posted before
+  kind text not null constraint till_postings_kind_check check (kind in ('bill', 'correction')),
   reservation_id uuid references reservations(id),
   receipt_number text not null default '',
   fiscal_id text not null default '',
@@ -49,3 +50,5 @@ create index till_postings_open_idx on till_postings(property_id, received_at) w
 create unique index till_postings_reversed_key on till_postings(original_id) where status = 'posted';
 
 alter table charges add column till_posting_id uuid references till_postings(id);
+-- a till's tip: outside revenue and outside the Spending Limit
+alter table charges add column tip boolean not null default false;

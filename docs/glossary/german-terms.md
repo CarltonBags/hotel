@@ -144,3 +144,4 @@ Proposed by the agent from hotel trade usage, 2026-09-30. Status: confirmed by t
 | Spending Limit | Belastungslimit |  |
 | External Till | Externe Kasse |  |
 | Till Posting | Kassenbuchung |  |
+| Correction | Korrekturbuchung |  |

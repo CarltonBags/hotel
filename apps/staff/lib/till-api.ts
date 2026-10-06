@@ -26,10 +26,13 @@ export function bearer(request: Request): string | null {
   return h.startsWith("Bearer ") ? h.slice(7).trim() : null;
 }
 
-/** A JSON body of at most 256 KB, or null. */
+const MAX_BODY = 256_000;
+
+/** A JSON body of at most 256 KB, or null; a larger one is refused before it is read. */
 export async function body(request: Request): Promise<unknown> {
+  if (Number(request.headers.get("content-length") ?? "0") > MAX_BODY) return null;
   const text = await request.text();
-  if (text.length > 256_000) return null;
+  if (Buffer.byteLength(text) > MAX_BODY) return null;
   try {
     return JSON.parse(text) as unknown;
   } catch {

@@ -4,6 +4,8 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@hoteloftware/domain", "@hoteloftware/db", "@hoteloftware/auth", "@hoteloftware/events", "@hoteloftware/payments", "@hoteloftware/invoices", "@hoteloftware/messaging", "@hoteloftware/storage", "@hoteloftware/channels", "@hoteloftware/ui"],
   serverExternalPackages: ["pg", "stripe"],
   agentRules: false,
+  // Lightspeed sends a till's key in the query string: its requests stay out of the request log (ticket 65)
+  logging: { incomingRequests: { ignore: [/^\/api\/lightspeed\//] } },
   // the guest side's links carry the Portal Link's key: never sent on to other sites
   async headers() {
     return [{ source: "/g/:path*", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] }];

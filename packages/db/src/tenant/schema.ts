@@ -828,6 +828,7 @@ export const charges = pgTable(
     outletBillId: uuid("outlet_bill_id").references((): AnyPgColumn => outletBills.id),
     detail: jsonb("detail"),
     tillPostingId: uuid("till_posting_id").references((): AnyPgColumn => tillPostings.id),
+    tip: boolean("tip").notNull().default(false),
   },
   (t) => [
     index("charges_folio_idx").on(t.folioId),
@@ -3091,7 +3092,7 @@ export const tillPostings = pgTable(
     reconcileNote: text("reconcile_note"),
   },
   (t) => [
-    check("till_postings_kind_check", sql`${t.kind} in ('charge', 'reversal')`),
+    check("till_postings_kind_check", sql`${t.kind} in ('bill', 'correction')`),
     check("till_postings_status_check", sql`${t.status} in ('posted', 'rejected')`),
     check("till_postings_reconciled_check", sql`${t.reconciledAt} is null or ${t.status} = 'rejected'`),
     unique("till_postings_connection_id_external_id_key").on(t.connectionId, t.externalId),
