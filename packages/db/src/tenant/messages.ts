@@ -277,6 +277,8 @@ interface ReservationFacts {
   property_id: string;
   confirmation_number: string;
   channel: boolean;
+  /** For a channel booking: whether the channel's own setting wants our confirmation (null: not set, the property's switch decides). */
+  channel_confirmation: boolean | null;
   arrival: string;
   departure: string;
   first_name: string;
@@ -289,7 +291,8 @@ interface ReservationFacts {
 
 async function factsOf(tx: PoolClient, reservationId: string): Promise<ReservationFacts | null> {
   const { rows } = await tx.query<ReservationFacts>(
-    `select r.property_id, b.confirmation_number, b.source = 'channel' as channel, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
+    `select r.property_id, b.confirmation_number, b.source = 'channel' as channel,
+            (select cs.send_confirmation from channel_settings cs where cs.property_id = r.property_id and cs.channel = b.channel_name) as channel_confirmation, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
             g.first_name, g.last_name, nullif(trim(g.email), '') as email, g.language, g.email_bounced, g.email_complained
      from reservations r join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id where r.id = $1`,
     [reservationId],
@@ -328,7 +331,8 @@ async function queueIn(
   const info = MESSAGE_TYPE_INFO[input.type];
   const email = f.email?.toLowerCase() ?? null;
   // kept, not sent: no address, an address that bounced, a complaint (non-essential only), our confirmation switched off for booking sites
-  const channelOff = f.channel && !(s.switched[CHANNEL_SWITCH] ?? true) && (input.type === "confirmation" || input.type === "cancellation");
+  // the channel's own setting (ticket 38) before the property's switch for all booking sites
+  const channelOff = f.channel && !(f.channel_confirmation ?? s.switched[CHANNEL_SWITCH] ?? true) && (input.type === "confirmation" || input.type === "cancellation");
   const reason = channelOff ? "channel" : !email ? "no_email" : email === f.email_bounced ? "bounced" : email === f.email_complained && !info.essential ? "complained" : null;
   const { rows } = await tx.query<{ id: string }>(
     `insert into guest_messages (property_id, reservation_id, type, trigger_key, language, to_email, subject, html, body_text, invoice_id, status, reason, send_after, created_by)

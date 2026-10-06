@@ -14,7 +14,7 @@ import { runMessaging } from "./messaging";
 import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
 import { fileStore } from "@hoteloftware/storage";
 import type { ChannelManager } from "@hoteloftware/channels";
-import { pushTenantChannels } from "./channels";
+import { pullChannelBookings, pushTenantChannels } from "./channels";
 
 export const QUEUES = {
   webhook: WEBHOOK_QUEUE,
@@ -45,6 +45,9 @@ export const QUEUES = {
   channels: "channels.push",
   /** Nightly: everything pushed once more over the whole horizon. */
   channelsFull: "channels.full",
+  /** Every five minutes: channel bookings pulled even if a webhook was lost (ticket 38). */
+  channelBookingsAll: "channels.bookings.all",
+  channelBookings: "channels.bookings",
 } as const;
 
 /**
@@ -63,6 +66,8 @@ export interface QueueOptions {
   messaging?: { mail: MailProvider; sms: SmsProvider; platformDomain: string };
   /** The channel manager (Channex or the fake). */
   channelManager?: ChannelManager;
+  /** Where the channel manager announces booking revisions (registered for each connected property). */
+  channelWebhook?: { url: string; secret: string } | undefined;
 }
 
 export async function startQueue(pool: Pool, connectionString: string, options: QueueOptions = {}): Promise<PgBoss> {
@@ -251,6 +256,22 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
       }
     });
     await boss.schedule(QUEUES.channelsFull, "30 2 * * *", {}, { tz: "Europe/Berlin" });
+    await boss.work<TenantJobData>(QUEUES.channelBookings, async (jobs) => {
+      for (const job of jobs) {
+        const tenant = await findTenantById(pool, job.data.tenantId);
+        if (!tenant) continue;
+        const r = await pullChannelBookings(pool, tenant, manager, undefined, options.channelWebhook);
+        if (r.applied || r.problems) console.log(`[channels] ${tenant.slug}: ${r.applied} booking revision(s) applied, ${r.problems} for staff`);
+      }
+    });
+    await boss.work(QUEUES.channelBookingsAll, async () => {
+      const { rows } = await pool.query<{ id: string; schema_name: string }>("select id, schema_name from control.tenants order by slug");
+      for (const t of rows) {
+        const connected = await connectedProperties(pool, t.schema_name).catch((err) => (console.error(`[channels] ${t.id}`, err), [] as string[]));
+        if (connected.length) await boss.send(QUEUES.channelBookings, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `channels.bookings:${t.id}`, singletonSeconds: 240 });
+      }
+    });
+    await boss.schedule(QUEUES.channelBookingsAll, "*/5 * * * *", {}, { tz: "Europe/Berlin" });
   }
 
   await boss.work(QUEUES.subscriptionBilling, async () => {

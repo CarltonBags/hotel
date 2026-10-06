@@ -488,3 +488,4 @@ export {
 export { FileRefused, MAX_FILE_BYTES, deleteExpiredFiles, findFile, storeFile, type FileKind, type StoredFile } from "./tenant/files";
 export { fixIssue, listIssues, reportIssue, seesIssues, takeIssue, visibleFile, type FixedIssue, type IssueFix, type IssueReport, type IssueRow } from "./tenant/maintenance";
 export { channelConnection, channelOverview, connectChannels, connectedProperties, enqueueFullPushOf, enqueueFullPushes, pruneChannelOutbox, pushChannels, type ChannelConnection, type ChannelOverview, type PushResult } from "./tenant/channels";
+export { CHANNEL_USER, applyChannelRevision, channelProblems, channelSettings, ensureBookingWebhook, processChannelFeed, resolveChannelProblem, setChannelSetting, setGoogleChannel, type AppliedRevision, type ChannelProblem, type ChannelSetting, type FeedResult } from "./tenant/channel-bookings";

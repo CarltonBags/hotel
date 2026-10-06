@@ -1,3 +1,4 @@
+import { parseChannexRevision, type ChannelBookingRevision } from "./bookings";
 import { ChannelError, VALUES_PER_CALL, type AvailabilityValue, type ChannelManager, type ChannelProperty, type ChannelRatePlan, type ChannelRoomType, type RestrictionValue } from "./provider";
 
 /** Channex.io over its REST API (staging or production), authenticated with the platform's API key. */
@@ -9,13 +10,13 @@ export class ChannexManager implements ChannelManager {
     private readonly fetcher: typeof fetch = fetch,
   ) {}
 
-  private async call<T>(method: string, path: string, body: unknown): Promise<T> {
+  private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
     let res: Response;
     try {
       res = await this.fetcher(`${this.baseUrl}${path}`, {
         method,
         headers: { "user-api-key": this.apiKey, "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify(body),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(30_000),
       });
     } catch (err) {
@@ -91,5 +92,34 @@ export class ChannexManager implements ChannelManager {
         max_stay: v.maxStay,
       })),
     });
+  }
+
+  async bookingFeed(propertyId: string): Promise<{ revisions: ChannelBookingRevision[]; unreadable: { id: string; reason: string }[] }> {
+    const out: ChannelBookingRevision[] = [];
+    const unreadable: { id: string; reason: string }[] = [];
+    // the feed pages through unacknowledged revisions, oldest first
+    for (let page = 1; page <= 20; page++) {
+      const r = await this.call<{ data?: unknown[]; meta?: { total?: number; limit?: number } }>("GET", `/booking_revisions/feed?filter[property_id]=${encodeURIComponent(propertyId)}&pagination[page]=${page}&pagination[limit]=50`);
+      const data = r.data ?? [];
+      for (const d of data) {
+        const rev = parseChannexRevision(d);
+        if (rev) out.push(rev);
+        else {
+          const id = (d as { id?: unknown } | null)?.id;
+          console.error("[channex] a booking revision we cannot read", JSON.stringify(d).slice(0, 500));
+          if (typeof id === "string") unreadable.push({ id, reason: "The channel manager sent a booking we cannot read (no rooms, dates or rate plan)" });
+        }
+      }
+      if (data.length < 50) break;
+    }
+    return { revisions: out, unreadable };
+  }
+
+  async ackRevision(revisionId: string): Promise<void> {
+    await this.call("POST", `/booking_revisions/${encodeURIComponent(revisionId)}/ack`, {});
+  }
+
+  async registerBookingWebhook(propertyId: string, url: string, headers: Record<string, string>): Promise<void> {
+    await this.call("POST", "/webhooks", { webhook: { property_id: propertyId, callback_url: url, event_mask: "booking", headers, is_active: true, send_data: false } });
   }
 }

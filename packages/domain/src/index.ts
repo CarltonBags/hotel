@@ -258,3 +258,4 @@ export * from "./non-payment";
 export * from "./messages";
 export { ISSUE_PHOTO_DAYS } from "./maintenance";
 export { FULL_PUSH_DAYS, channelRestriction, channelStatusText, compressDays, type ChannelRestrictionValue, type ChannelStatus } from "./channels";
+export { addVat, channelNight, channelNights, splitCityTaxIncluded, type ChannelNightInput } from "./channel-bookings";
