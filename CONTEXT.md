@@ -143,6 +143,10 @@ _Avoid_: Magic link, guest login, token
 The guest's completion of registration and payment before being at the hotel; it never sets a reservation to Checked-in.
 _Avoid_: Online check-in, remote check-in, self check-in
 
+**Express Checkout**:
+Check-out by the guest in the Guest Portal from the departure eve: with nothing left to pay on their own folios, the guest checks out alone where the property allows it and receives the final invoice; elsewhere the request goes to the desk, which checks the guest out.
+_Avoid_: Self check-out, online check-out, quick check-out
+
 **Self Check-in**:
 Check-in completed by the guest on a lobby kiosk or on their own phone while at the hotel, without staff when the check-in conditions hold.
 _Avoid_: Express check-in, kiosk check-in, online check-in
@@ -380,8 +384,8 @@ Until when a reservation on a rate plan can be cancelled free of charge, and the
 _Avoid_: Cancellation terms, refund policy
 
 **Card Guarantee**:
-A card stored at booking with strong customer authentication and not charged, against which no-show and late-cancellation fees may be charged.
-_Avoid_: Credit card guarantee, card on file, deposit
+A card stored with strong customer authentication, at booking or later by the guest in the Guest Portal, and not charged when stored; staff may later charge it without the guest present, for no-show and late-cancellation fees or for extras during the stay. One card secures a stay at a time.
+_Avoid_: Credit card guarantee, card on file, stored card, saved card, deposit
 
 **Rate Code**:
 A code that selects rate plans that are not public, used by staff when booking and by channels that support it.

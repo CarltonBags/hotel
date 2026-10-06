@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
-import { listTenantUsers, refreshPaymentAccountById, renewExpiringHolds, retryOpenRefunds, syncByIntent, syncRefund, withTenant, type Tenant } from "@hoteloftware/db";
+import { claimDeclineNotice, closeUnfinishedPortalPayments, listTenantUsers, refreshPaymentAccountById, renewExpiringHolds, retryOpenRefunds, syncByIntent, syncRefund, withTenant, type Tenant } from "@hoteloftware/db";
 import { can } from "@hoteloftware/domain";
-import { notifyStaff, publishDataChange } from "@hoteloftware/events";
+import { notifyPortalDecline, notifyStaff, publishDataChange } from "@hoteloftware/events";
 import type { PaymentProvider } from "@hoteloftware/payments";
 import type { WebhookJobData, WebhookSource } from "./webhooks";
 
@@ -31,11 +31,14 @@ export function paymentProcessor(provider: PaymentProvider): ProviderProcessor {
     const event = provider.parseEvent(stored.rows[0]?.body ?? null);
     if (!event?.objectId) return;
     const s = tenant.schemaName;
-    const hit =
+    const hit: { propertyId: string; paymentId?: string } | null =
       event.type === "intent" ? await syncByIntent(pool, s, provider, event.objectId) : event.type === "refund" ? await syncRefund(pool, s, provider, event.objectId) : null;
     if (event.type === "account" && event.accountId) await refreshPaymentAccountById(pool, s, provider, event.accountId);
     // balances changed: open screens refresh
     if (hit) await publishDataChange(pool, { tenantId: tenant.id, kind: "reservations", propertyId: hit.propertyId });
+    // a guest's portal payment declined, seen here before the guest's page: the desk is told, once
+    const declined = hit?.paymentId ? await claimDeclineNotice(pool, s, hit.paymentId) : null;
+    if (declined) await notifyPortalDecline(pool, tenant, { ...declined, reason: declined.error ?? "" });
   };
 }
 
@@ -45,6 +48,8 @@ export async function checkHolds(pool: Pool, tenant: { id: string; schemaName: s
   const result = await renewExpiringHolds(pool, tenant.schemaName, provider, now, (w) => warnings.push(w));
   // refunds the provider did not answer, or that waited for balance, are sent again
   const refunds = await retryOpenRefunds(pool, tenant.schemaName, provider);
+  // online payments guests left unfinished for half an hour are closed (ticket 41)
+  await closeUnfinishedPortalPayments(pool, tenant.schemaName, provider, { olderThanMinutes: 30 }).catch((err) => console.error("[payments] unfinished portal payments", err));
   const changed = new Set([...warnings.filter((w) => w.renewed).map((w) => w.propertyId), ...refunds.propertyIds]);
   for (const propertyId of changed) await publishDataChange(pool, { tenantId: tenant.id, kind: "reservations", propertyId });
   for (const w of warnings) {

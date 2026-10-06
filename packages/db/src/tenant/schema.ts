@@ -41,6 +41,7 @@ export const properties = pgTable(
     downtimeOptions: jsonb("downtime_options").notNull().default(sql`'{}'`),
     portalInfo: jsonb("portal_info").notNull().default(sql`'{}'`),
     portalDocumentImages: boolean("portal_document_images").notNull().default(false),
+    expressCheckoutAuto: boolean("express_checkout_auto").notNull().default(false),
     portalPhotoFileId: uuid("portal_photo_file_id").references((): AnyPgColumn => storedFiles.id, { onDelete: "set null" }),
     legalEntityId: uuid("legal_entity_id")
       .notNull()
@@ -660,6 +661,7 @@ export const reservations = pgTable(
     portalKey: text("portal_key").notNull().default(sql`replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')`),
     arrivalTime: text("arrival_time"),
     precheckinAt: timestamp("precheckin_at", { withTimezone: true }),
+    expressCheckoutAt: timestamp("express_checkout_at", { withTimezone: true }),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -908,6 +910,8 @@ export const payments = pgTable(
     postedBy: text("posted_by").notNull(),
     settledAt: timestamp("settled_at", { withTimezone: true }),
     businessDate: date("business_date").notNull(),
+    saveCard: boolean("save_card").notNull().default(false),
+    declineNoticedAt: timestamp("decline_noticed_at", { withTimezone: true }),
   },
   (t) => [
     index("payments_folio_idx").on(t.folioId),
@@ -2017,6 +2021,41 @@ export const reservationDocuments = pgTable(
   (t) => [index("reservation_documents_reservation_idx").on(t.reservationId)],
 );
 
+export const cardGuarantees = pgTable(
+  "card_guarantees",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    customerId: text("customer_id").notNull(),
+    paymentMethodId: text("payment_method_id").notNull(),
+    brand: text("brand"),
+    last4: char("last4", { length: 4 }),
+    status: text("status").notNull().default("secured"),
+    securedAt: timestamp("secured_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    check("card_guarantees_status_check", sql`${t.status} in ('secured', 'removed')`),
+    uniqueIndex("card_guarantees_secured_key").on(t.reservationId).where(sql`${t.status} = 'secured'`),
+  ],
+);
+
+export const cardSetups = pgTable(
+  "card_setups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    providerSetupId: text("provider_setup_id").unique(),
+    customerId: text("customer_id"),
+    status: text("status").notNull().default("waiting"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check("card_setups_status_check", sql`${t.status} in ('waiting', 'succeeded', 'failed')`)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -2115,4 +2154,6 @@ export const tenantSchema = {
   portalCodes,
   messagingConsents,
   reservationDocuments,
+  cardGuarantees,
+  cardSetups,
 };

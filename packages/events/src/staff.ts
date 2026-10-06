@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
-import { URGENT_NOTIFICATIONS, receivesUrgentSms } from "@hoteloftware/domain";
-import { notificationChannelsOf, queueMail, queueSms, type TenantUser } from "@hoteloftware/db";
+import { URGENT_NOTIFICATIONS, can, receivesUrgentSms, type Action } from "@hoteloftware/domain";
+import { listTenantUsers, notificationChannelsOf, queueMail, queueSms, type TenantUser } from "@hoteloftware/db";
 import { publishNotification } from "./index";
 
 export interface StaffNotification {
@@ -30,4 +30,15 @@ export async function notifyStaff(pool: Pool, tenant: { id: string; schemaName: 
       await queueSms(pool, tenant.schemaName, { toUserId: u.id, toPhone: c.phone, body: `Hoteloftware: ${n.title}` });
     }
   }
+}
+
+/** Notify the users who hold a right at the property (the desk that can take a payment, say). */
+export async function notifyWithRight(pool: Pool, tenant: { id: string; schemaName: string }, action: Action, propertyId: string, n: Omit<StaffNotification, "propertyId">): Promise<void> {
+  const users = (await listTenantUsers(pool, tenant.id)).filter((u) => !u.pendingInvitation && can({ tenantRole: u.tenantRole, propertyRoles: u.propertyRoles }, action, propertyId));
+  await notifyStaff(pool, tenant, users, { ...n, propertyId });
+}
+
+/** A guest's online payment was declined in the Guest Portal: the desk is told once (ticket 41). */
+export function notifyPortalDecline(pool: Pool, tenant: { id: string; schemaName: string }, d: { reservationId: string; propertyId: string; reason: string }): Promise<void> {
+  return notifyWithRight(pool, tenant, "take_payments", d.propertyId, { kind: "payments.portal_declined", title: "Online payment declined in the Guest Portal", body: d.reason, href: `/reservations/${d.reservationId}` });
 }

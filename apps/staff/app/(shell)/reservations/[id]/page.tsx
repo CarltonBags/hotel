@@ -22,6 +22,7 @@ import { HousekeepingNotes } from "./housekeeping-notes";
 import { StatsExclusion } from "./stats-exclusion";
 import { MessagesPanel } from "./messages-panel";
 import { PortalPanel } from "./portal-panel";
+import { StoredCard } from "./stored-card";
 import { RegistrationPanel } from "./registration-panel";
 
 /** One Reservation as a record tab: stay, guests, stored nightly prices, check-in and its folios. */
@@ -104,6 +105,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
       <HousekeepingNotes schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} m={m} />
       <StatsExclusion schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} m={m} />
       <MessagesPanel schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} language={language} timeZone={property.timeZone} m={m} />
+      <StoredCard schema={tenant.schemaName} reservationId={r.id} propertyId={r.propertyId} actor={actor} m={m} />
       <PortalPanel schema={tenant.schemaName} tenant={tenant} userId={session.user.id} reservationId={r.id} propertyId={r.propertyId} actor={actor} language={language} timeZone={property.timeZone} m={m} />
 
       <section aria-label={m["res.guests"]} className="grid gap-1 rounded-2xl bg-surface-2 p-5 text-sm">

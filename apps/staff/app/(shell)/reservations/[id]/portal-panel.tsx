@@ -21,6 +21,7 @@ export async function PortalPanel({ schema, tenant, userId, reservationId, prope
       <summary className="cursor-pointer font-medium">
         {m["portal.panel"]} · {p.precheckinAt ? fill(m["portal.precheckinAt"], { at: when(p.precheckinAt) }) : m["portal.notYet"]}
         {p.arrivalTime ? ` · ${fill(m["portal.arrivalTime"], { time: p.arrivalTime })}` : ""}
+        {p.expressCheckoutAt ? ` · ${fill(m["portal.expressAsked"], { at: when(p.expressCheckoutAt) })}` : ""}
       </summary>
       <div className="mt-3 grid gap-2">
         {manage ? (

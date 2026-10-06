@@ -46,6 +46,27 @@ export interface IntentState {
   error: string | null;
 }
 
+export interface OnlinePaymentInput {
+  amount: number;
+  currency: string;
+  /** Keep the card for later charges without the guest. */
+  saveCard: boolean;
+  customerId: string | null;
+  description: string;
+  metadata: Record<string, string>;
+  idempotencyKey: string;
+}
+
+export interface SetupState {
+  setupId: string;
+  status: "waiting" | "succeeded" | "failed";
+  customerId: string | null;
+  paymentMethodId: string | null;
+  brand: string | null;
+  last4: string | null;
+  error: string | null;
+}
+
 export interface RefundResult {
   refundId: string;
   status: "succeeded" | "pending" | "failed" | "insufficient_balance";
@@ -105,6 +126,26 @@ export interface PaymentProvider {
     accountId: string,
     input: { customerId: string; paymentMethodId: string; amount: number; currency: string; metadata: Record<string, string>; idempotencyKey: string },
   ): Promise<IntentState>;
+
+  /**
+   * A payment the guest makes online (ticket 41), with strong customer
+   * authentication in the browser; with `saveCard` the card is kept on a
+   * customer for later charges without the guest. The client secret goes to
+   * the guest's page only.
+   */
+  createOnlinePayment(accountId: string, input: OnlinePaymentInput): Promise<{ intentId: string; clientSecret: string; customerId: string | null }>;
+  /** Give up an online payment the guest did not finish; its real state comes back (it may have gone through just now). */
+  cancelOnlinePayment(accountId: string, intentId: string): Promise<IntentState>;
+  /** A card stored for incidentals, authenticated now, charged later without the guest. */
+  createCardSetup(accountId: string, input: { customerId: string | null; metadata: Record<string, string>; idempotencyKey: string }): Promise<{ setupId: string; clientSecret: string; customerId: string }>;
+  getSetup(accountId: string, setupId: string): Promise<SetupState>;
+  /** A merchant-initiated charge on a stored card, the guest not present. */
+  chargeSavedCard(
+    accountId: string,
+    input: { customerId: string; paymentMethodId: string; amount: number; currency: string; metadata: Record<string, string>; idempotencyKey: string },
+  ): Promise<IntentState>;
+  /** What the guest's browser needs to load the provider's payment form; null for the stand-in. */
+  readonly publishableKey: string | null;
 
   refund(accountId: string, input: { intentId: string; amount: number; metadata: Record<string, string>; idempotencyKey: string }): Promise<RefundResult>;
   getRefund(accountId: string, refundId: string): Promise<RefundResult>;

@@ -103,7 +103,7 @@ export async function portalSettingsAction(_prev: FormState, formData: FormData)
         : flag(formData, "removePhoto")
           ? null
           : undefined;
-    await setPortalSettings(pool(), c.schema, c.propertyId, { info: { de: field(formData, "info_de"), en: field(formData, "info_en") }, documentImages: flag(formData, "documentImages"), photoFileId });
+    await setPortalSettings(pool(), c.schema, c.propertyId, { info: { de: field(formData, "info_de"), en: field(formData, "info_en") }, documentImages: flag(formData, "documentImages"), expressCheckoutAuto: flag(formData, "expressAuto"), photoFileId });
     revalidatePath("/settings/messages");
   });
 }

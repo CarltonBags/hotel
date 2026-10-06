@@ -4,6 +4,7 @@ import {
   HOLD_WARNING_HOURS,
   PROVIDER_TENDERS,
   captureAmount,
+  depositDue,
   holdExpiry,
   holdIncrementAllowed,
   holdWarningAt,
@@ -11,6 +12,7 @@ import {
   refundCheck,
   refundableAmount,
   roundMoney,
+  type PaymentKind,
   type PaymentStatus,
   type Tender,
 } from "@hoteloftware/domain";
@@ -188,7 +190,7 @@ interface Context {
 }
 
 /** The property's provider account (its Legal Entity's), ready for card payments. In Test Mode no card is charged: only a test provider. */
-async function accountFor(tx: PoolClient, propertyId: string, provider: PaymentProvider | null): Promise<Context> {
+export async function accountFor(tx: PoolClient, propertyId: string, provider: PaymentProvider | null): Promise<Context> {
   if (provider && !provider.testMode && (await inTestMode(tx))) throw new Error("No card is charged in Test Mode");
   const { rows } = await tx.query<{ account_id: string | null; charges_enabled: boolean | null; currency: string }>(
     "select a.account_id, a.charges_enabled, p.currency from properties p left join payment_accounts a on a.legal_entity_id = p.legal_entity_id where p.id = $1",
@@ -276,31 +278,64 @@ interface ResRow {
   status: string;
 }
 
-async function lockReservation(tx: PoolClient, id: string): Promise<ResRow> {
+export async function lockReservation(tx: PoolClient, id: string): Promise<ResRow> {
   if (!isUuid(id)) throw new Error("Reservation not found");
   const { rows } = await tx.query<ResRow>("select id, property_id, status from reservations where id = $1 for update", [id]);
   if (!rows[0]) throw new Error("Reservation not found");
   return rows[0];
 }
 
-const amountOf = (n: number) => {
+export const amountOf = (n: number) => {
   if (!Number.isFinite(n) || n <= 0) throw new Error("The amount must be more than zero");
   return roundMoney(n);
 };
 
 /** A provider's definite "no" (shown as is), or no answer at all (worded for the desk). */
-function failureOf(err: unknown): { definite: boolean; message: string } {
+export function failureOf(err: unknown): { definite: boolean; message: string } {
   return err instanceof ProviderError ? { definite: true, message: err.message } : { definite: false, message: "The payment provider did not answer; the payment is checked again shortly" };
 }
 
 /** Open amount on the guest's own folios: Charges less payments received. */
-async function guestBalance(tx: PoolClient, reservationId: string): Promise<number> {
+export async function guestBalance(tx: PoolClient, reservationId: string): Promise<number> {
   const { rows } = await tx.query<{ b: string }>(
     `select (select coalesce(sum(ch.amount), 0) from charges ch join folios f on f.id = ch.folio_id where ch.reservation_id = $1 and ch.voided_at is null and f.bill_to_guest_id is not null)
           - (select coalesce(sum(pa.amount), 0) from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null) as b`,
     [reservationId],
   );
   return roundMoney(Number(rows[0]!.b));
+}
+
+export interface CardGuarantee {
+  id: string;
+  brand: string | null;
+  last4: string | null;
+  securedAt: Date;
+}
+
+/** The card securing a stay, if any (one at a time). */
+export async function cardGuaranteeIn(tx: PoolClient, reservationId: string): Promise<CardGuarantee | null> {
+  const { rows } = await tx.query<{ id: string; brand: string | null; last4: string | null; secured_at: Date }>("select id, brand, last4, secured_at from card_guarantees where reservation_id = $1 and status = 'secured'", [reservationId]);
+  return rows[0] ? { id: rows[0].id, brand: rows[0].brand, last4: rows[0].last4, securedAt: rows[0].secured_at } : null;
+}
+
+/**
+ * What the guest owes now (ticket 41): before arrival what the stay's Payment
+ * Policy asks ahead, less what was received; once in house the open amount on
+ * their own folios.
+ */
+export async function amountDueIn(tx: PoolClient, reservationId: string): Promise<number> {
+  const r = (await tx.query<{ status: string; kind: PaymentKind; deposit_percent: string | null }>(
+    "select r.status, pp.kind, pp.deposit_percent from reservations r join rate_plans pl on pl.id = r.rate_plan_id join payment_policies pp on pp.id = pl.payment_policy_id where r.id = $1",
+    [reservationId],
+  )).rows[0];
+  if (!r) throw new Error("Reservation not found");
+  if (r.status !== "confirmed") return guestBalance(tx, reservationId);
+  const nights = (await tx.query<{ total: string }>("select total from reservation_nights where reservation_id = $1 order by date", [reservationId])).rows.map((n) => Number(n.total));
+  const received = Number((await tx.query<{ n: string }>(
+    "select coalesce(sum(pa.amount), 0) as n from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null",
+    [reservationId],
+  )).rows[0]!.n);
+  return depositDue({ kind: r.kind, depositPercent: r.deposit_percent === null ? null : Number(r.deposit_percent) }, nights, received);
 }
 
 /**
@@ -381,13 +416,18 @@ export async function syncPayment(pool: Pool, schema: string, provider: PaymentP
 }
 
 /** Only a pending payment changes: webhook and desk polling cannot settle it twice. */
-async function applyIntentToPayment(pool: Pool, schema: string, paymentId: string, state: IntentState): Promise<Payment> {
+export async function applyIntentToPayment(pool: Pool, schema: string, paymentId: string, state: IntentState): Promise<Payment> {
+  return (await settleFromIntent(pool, schema, paymentId, state)).payment;
+}
+
+/** As applyIntentToPayment, telling whether this call settled it (succeeded or failed just now), so what follows a settlement happens once. */
+export async function settleFromIntent(pool: Pool, schema: string, paymentId: string, state: IntentState): Promise<{ payment: Payment; settledNow: boolean }> {
   const status: PaymentStatus | null = state.status === "succeeded" ? "succeeded" : state.status === "failed" || state.status === "cancelled" ? "failed" : null;
   return settleIntent(pool, schema, paymentId, state, status);
 }
 
 /** Settle a pending payment; one received before check-in gets its Deposit Invoice in the same transaction. */
-async function settleIntent(pool: Pool, schema: string, paymentId: string, state: IntentState, status: PaymentStatus | null): Promise<Payment> {
+async function settleIntent(pool: Pool, schema: string, paymentId: string, state: IntentState, status: PaymentStatus | null): Promise<{ payment: Payment; settledNow: boolean }> {
   return withTenant(pool, schema, async (tx) => {
     const { rows } = await tx.query<PaymentRow>(
       `update payments set status = coalesce($2, status), card_brand = coalesce($3, card_brand), card_last4 = coalesce($4, card_last4), error = $5,
@@ -400,7 +440,8 @@ async function settleIntent(pool: Pool, schema: string, paymentId: string, state
       // a desk card payment gets its Receipt once the card went through
       if (rows[0].tender === "card_terminal" && !rows[0].refund_of) await issueReceiptIn(tx, { id: rows[0].id, propertyId: rows[0].property_id }, null, rows[0].posted_by);
     }
-    return toPayment(rows[0] ?? (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [paymentId])).rows[0]!);
+    const payment = toPayment(rows[0] ?? (await tx.query<PaymentRow>(`select ${PAYMENT_COLUMNS} from payments where id = $1`, [paymentId])).rows[0]!);
+    return { payment, settledNow: !!rows[0] && status !== null };
   });
 }
 
@@ -909,7 +950,7 @@ export async function renewExpiringHolds(pool: Pool, schema: string, provider: P
 }
 
 /** A provider event about an intent: settle the payment or hold it belongs to. */
-export async function syncByIntent(pool: Pool, schema: string, provider: PaymentProvider, intentId: string): Promise<{ propertyId: string } | null> {
+export async function syncByIntent(pool: Pool, schema: string, provider: PaymentProvider, intentId: string): Promise<{ propertyId: string; paymentId?: string } | null> {
   const found = await withTenant(pool, schema, async (tx) => {
     const p = (await tx.query<{ id: string; property_id: string }>("select id, property_id from payments where provider_intent_id = $1 and refund_of is null and status = 'pending'", [intentId])).rows[0];
     const h = (await tx.query<{ id: string; property_id: string }>("select id, property_id from card_holds where provider_intent_id = $1", [intentId])).rows[0];
@@ -917,7 +958,7 @@ export async function syncByIntent(pool: Pool, schema: string, provider: Payment
   });
   if (found.p) {
     await syncPayment(pool, schema, provider, found.p.id);
-    return { propertyId: found.p.property_id };
+    return { propertyId: found.p.property_id, paymentId: found.p.id };
   }
   if (found.h) {
     await syncCardHold(pool, schema, provider, found.h.id);

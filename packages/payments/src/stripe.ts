@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import type { AccountStatus, IntentState, IntentStatus, PaymentProvider, ProviderEvent, ReaderInfo, RefundResult, TerminalPaymentInput } from "./provider";
+import type { AccountStatus, IntentState, IntentStatus, OnlinePaymentInput, PaymentProvider, ProviderEvent, ReaderInfo, RefundResult, SetupState, TerminalPaymentInput } from "./provider";
 import { ProviderError } from "./provider";
 
 /** Currencies without minor units at Stripe (none of the DACH ones; kept for safety). */
@@ -23,6 +23,8 @@ export class StripePaymentProvider implements PaymentProvider {
   constructor(
     secretKey: string,
     private readonly webhookSecret: string | null,
+    /** The platform's publishable key: the guest's browser loads Stripe.js with it and the connected account. */
+    readonly publishableKey: string | null = null,
   ) {
     this.stripe = new Stripe(secretKey);
     this.testMode = secretKey.startsWith("sk_test_");
@@ -168,6 +170,79 @@ export class StripePaymentProvider implements PaymentProvider {
       ),
     );
     return this.getIntent(accountId, pi.id);
+  }
+
+  async createOnlinePayment(accountId: string, input: OnlinePaymentInput): Promise<{ intentId: string; clientSecret: string; customerId: string | null }> {
+    // a customer to keep the card on, for later charges without the guest
+    const customerId = input.saveCard ? (input.customerId ?? (await this.call(() => this.stripe.customers.create({ metadata: input.metadata }, this.on(accountId, `${input.idempotencyKey}:customer`)))).id) : null;
+    const pi = await this.call(() =>
+      this.stripe.paymentIntents.create(
+        {
+          amount: toMinor(input.amount, input.currency),
+          currency: input.currency.toLowerCase(),
+          allowed_payment_method_types: ["card"],
+          description: input.description,
+          metadata: input.metadata,
+          ...(customerId ? { customer: customerId, setup_future_usage: "off_session" as const } : {}),
+        },
+        this.on(accountId, input.idempotencyKey),
+      ),
+    );
+    if (!pi.client_secret) throw new ProviderError("The payment could not be prepared");
+    return { intentId: pi.id, clientSecret: pi.client_secret, customerId };
+  }
+
+  async cancelOnlinePayment(accountId: string, intentId: string): Promise<IntentState> {
+    const pi = await this.call(() => this.stripe.paymentIntents.retrieve(intentId, {}, this.on(accountId)));
+    // only one not yet paid can be cancelled; one that went through stays what it is
+    if (pi.status === "requires_payment_method" || pi.status === "requires_action" || pi.status === "requires_confirmation") {
+      await this.call(() => this.stripe.paymentIntents.cancel(intentId, {}, this.on(accountId)));
+    }
+    return this.getIntent(accountId, intentId);
+  }
+
+  async createCardSetup(accountId: string, input: { customerId: string | null; metadata: Record<string, string>; idempotencyKey: string }): Promise<{ setupId: string; clientSecret: string; customerId: string }> {
+    const customerId = input.customerId ?? (await this.call(() => this.stripe.customers.create({ metadata: input.metadata }, this.on(accountId, `${input.idempotencyKey}:customer`)))).id;
+    const si = await this.call(() => this.stripe.setupIntents.create({ customer: customerId, usage: "off_session", allowed_payment_method_types: ["card"], metadata: input.metadata }, this.on(accountId, input.idempotencyKey)));
+    if (!si.client_secret) throw new ProviderError("The card could not be prepared");
+    return { setupId: si.id, clientSecret: si.client_secret, customerId };
+  }
+
+  async getSetup(accountId: string, setupId: string): Promise<SetupState> {
+    const si = await this.call(() => this.stripe.setupIntents.retrieve(setupId, { expand: ["payment_method"] }, this.on(accountId)));
+    const pm = typeof si.payment_method === "object" && si.payment_method ? si.payment_method : null;
+    return {
+      setupId: si.id,
+      status: si.status === "succeeded" ? "succeeded" : si.status === "canceled" || si.last_setup_error ? "failed" : "waiting",
+      customerId: typeof si.customer === "string" ? si.customer : (si.customer?.id ?? null),
+      paymentMethodId: pm?.id ?? (typeof si.payment_method === "string" ? si.payment_method : null),
+      brand: pm?.card?.brand ?? null,
+      last4: pm?.card?.last4 ?? null,
+      error: si.last_setup_error?.message ?? null,
+    };
+  }
+
+  async chargeSavedCard(
+    accountId: string,
+    input: { customerId: string; paymentMethodId: string; amount: number; currency: string; metadata: Record<string, string>; idempotencyKey: string },
+  ): Promise<IntentState> {
+    // merchant-initiated: off-session, confirmed at once, captured at once
+    try {
+      const pi = await this.stripe.paymentIntents.create(
+        { amount: toMinor(input.amount, input.currency), currency: input.currency.toLowerCase(), customer: input.customerId, payment_method: input.paymentMethodId, allowed_payment_method_types: ["card"], confirm: true, off_session: true, metadata: input.metadata },
+        this.on(accountId, input.idempotencyKey),
+      );
+      return this.getIntent(accountId, pi.id);
+    } catch (err) {
+      // a decline (or a bank asking for the guest, who is not there) comes back as an error carrying the intent, left
+      // waiting for another card: cancelled, so the charge is final, and told as failed with the bank's reason
+      if (err instanceof Stripe.errors.StripeCardError && err.payment_intent?.id) {
+        const intentId = err.payment_intent.id;
+        await this.call(() => this.stripe.paymentIntents.cancel(intentId, {}, this.on(accountId))).catch(() => undefined);
+        return { ...(await this.getIntent(accountId, intentId)), status: "failed", error: err.message };
+      }
+      throw new ProviderError(err instanceof Error ? err.message : "The card could not be charged");
+    }
   }
 
   async refund(accountId: string, input: { intentId: string; amount: number; metadata: Record<string, string>; idempotencyKey: string }): Promise<RefundResult> {

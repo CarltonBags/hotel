@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { MAX_COMPANIONS, portalView } from "@hoteloftware/db";
-import { extrasOpen, portalLanguage, type PortalLanguage } from "@hoteloftware/domain";
+import { MAX_COMPANIONS, expressCheckoutView, portalView } from "@hoteloftware/db";
+import { cardLabel, extrasOpen, portalLanguage, type PortalLanguage } from "@hoteloftware/domain";
 import { headers } from "next/headers";
 import { portalText, type PortalKey } from "@/i18n/portal";
 import { pool } from "@/lib/db";
@@ -8,6 +8,7 @@ import { currentTenant } from "@/lib/tenant";
 import { extraAction, inviteAction, precheckinAction } from "../actions";
 import { ExtraForm, InviteForm, PrecheckinForm } from "../forms";
 import { Glass } from "../glass";
+import { CheckoutButton, PayPanel } from "../pay-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,8 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   const g = s.guest;
   const open = s.status === "confirmed";
   const info = view.property.info[language] ?? view.property.info.en ?? view.property.info.de ?? "";
+  const express = await expressCheckoutView(pool(), tenant!.schemaName, key);
+  const payable = s.status === "confirmed" || s.status === "checked_in";
   return (
     <>
       {wallpaper}
@@ -115,6 +118,39 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
               consent: s.emailConsent ?? false,
             }}
           />
+        </Glass>
+      ) : null}
+
+      {express.open || express.checkedOut ? (
+        <Glass data-section="express">
+          <h2 className="text-xl font-semibold">{t("express")}</h2>
+          <p className="text-sm text-white/70">{t("expressHelp")}</p>
+          <ul className="grid gap-1 text-sm" data-folio>
+            {express.lines.map((l, i) => (
+              <li key={i} className="flex justify-between">
+                <span>{l.description === "Payment" ? t("payment") : l.description}</span>
+                <span>{money(l.amount)}</span>
+              </li>
+            ))}
+          </ul>
+          {express.checkedOut ? (
+            <div className="grid gap-1" data-checked-out>
+              <p>{t("checkedOutDone")}</p>
+              {express.invoices.map((i) => (
+                <a key={i.id} href={`/g/${key}/invoice/${i.id}`} className="underline">
+                  {i.number}
+                </a>
+              ))}
+            </div>
+          ) : express.balance > 0 ? null : express.requestedAt ? <p data-asked-desk>{t("askedDesk")}</p> : <CheckoutButton portalKey={key} language={language} />}
+        </Glass>
+      ) : null}
+
+      {payable && (s.amountDue > 0 || !s.guarantee) ? (
+        <Glass data-section="pay">
+          <h2 className="text-xl font-semibold">{t("payTitle")}</h2>
+          {s.guarantee ? <p className="text-sm text-white/70">{t("cardGuarantee", { card: cardLabel(s.guarantee.brand, s.guarantee.last4) })}</p> : null}
+          <PayPanel portalKey={key} language={language} amountText={money(s.amountDue)} due={s.amountDue > 0} canStore={!s.guarantee} />
         </Glass>
       ) : null}
 
