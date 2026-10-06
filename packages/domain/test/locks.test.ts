@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { doorPin, keyActions, keyPlan, keyValidUntil } from "../src";
+import { doorPin, handoverSupported, keyActions, keyPlan, keyValidUntil } from "../src";
 
 const caps = { card: false, pin: true, phoneKey: false, remoteRevoke: true, readCard: false, encoders: false };
 const cardCaps = { card: true, pin: false, phoneKey: false, remoteRevoke: false, readCard: true, encoders: true };
@@ -25,6 +25,14 @@ describe("door keys", () => {
     expect(keyPlan({ status: "no_show", roomId: null, validUntil: until }, [], caps, "pin").revoke).toEqual([]);
     // cards are encoded at the desk, never by themselves; a move asks for a new card
     expect(keyPlan({ status: "checked_in", roomId: "r2", validUntil: until }, [active], cardCaps, null)).toEqual({ issue: [], update: [], revoke: [{ keyId: "k1", reason: "room_move" }], warnings: ["offline_card_runs_to_expiry", "new_card_needed"] });
+  });
+
+  it("an extension cannot change an offline card: the desk writes it again", () => {
+    const card = { id: "k1", roomId: "r1", kind: "card" as const, status: "active" as const, validUntil: new Date("2026-10-08T10:00:00Z") };
+    expect(keyPlan({ status: "checked_in", roomId: "r1", validUntil: until }, [card], cardCaps, null)).toEqual({ issue: [], update: [], revoke: [], warnings: ["card_reencode_needed"] });
+    expect(handoverSupported("digital_key", caps)).toBe(false);
+    expect(handoverSupported("door_pin", caps)).toBe(true);
+    expect(handoverSupported("kiosk_encoder", cardCaps)).toBe(true);
   });
 
   it("only what the lock system can do is offered; an unsupported lock offers nothing", () => {

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { listDevices } from "@hoteloftware/auth";
 import { saveLockSettings, setDeskEncoder, setLockDoor } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
@@ -41,7 +42,9 @@ export async function deskEncodersAction(_prev: FormState, formData: FormData): 
   return formAction(async () => {
     const propertyId = field(formData, "propertyId");
     const p = await authorize("manage_property_settings", propertyId);
-    for (const [k, v] of formData.entries()) if (k.startsWith("device_") && typeof v === "string") await setDeskEncoder(pool(), p.tenant.schemaName, propertyId, k.slice(7), v, viewerOf(p));
+    // only the property's own Devices
+    const own = new Set((await listDevices(pool(), p.tenant.id, propertyId)).map((d) => d.id));
+    for (const [k, v] of formData.entries()) if (k.startsWith("device_") && typeof v === "string" && own.has(k.slice(7))) await setDeskEncoder(pool(), p.tenant.schemaName, propertyId, k.slice(7), v, viewerOf(p));
     revalidatePath(PATH);
     return { ok: true, message: "Saved." };
   });

@@ -1,7 +1,7 @@
 import { listDevices } from "@hoteloftware/auth";
 import { lockSetup } from "@hoteloftware/db";
 import { KEY_HANDOVERS } from "@hoteloftware/domain";
-import { LOCK_SYSTEMS } from "@hoteloftware/locks";
+import { selectableLockSystems } from "@hoteloftware/locks";
 import type { Messages } from "@/i18n/messages";
 import { ActionForm, Field, Select } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
@@ -35,7 +35,7 @@ export default async function LockSettingsPage() {
   const label = (k: string) => m[k as keyof Messages] ?? k;
   const section = "grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm";
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
-  const plugin = setup.system === "simulated" || setup.system === "nuki";
+  const plugin = setup.capabilities !== null;
   return (
     <div className="mx-auto grid max-w-3xl gap-6 p-6">
       <h1 className="text-xl font-medium">
@@ -44,7 +44,7 @@ export default async function LockSettingsPage() {
       <section className={section} data-lock-settings>
         <ActionForm action={lockSettingsAction} submitLabel={m["action.save"]} className="grid gap-3 sm:grid-cols-2">
           {hidden}
-          <Select label={m["locks.system"]} name="system" options={LOCK_SYSTEMS.map((s) => ({ value: s, label: label(`locks.system.${s}`) }))} defaultValue={setup.system} />
+          <Select label={m["locks.system"]} name="system" options={selectableLockSystems().map((s) => ({ value: s, label: label(`locks.system.${s}`) }))} defaultValue={setup.system} />
           <Field label={m["locks.otherName"]} name="otherName" defaultValue={setup.otherName} />
           <Select label={m["locks.handover"]} name="handover" options={KEY_HANDOVERS.map((h) => ({ value: h, label: label(`locks.handover.${h}`) }))} defaultValue={setup.handover} />
           <Field label={m["locks.grace"]} name="graceMinutes" type="number" defaultValue={String(setup.graceMinutes)} />

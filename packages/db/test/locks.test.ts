@@ -19,7 +19,7 @@ import { createBooking } from "../src/tenant/reservations";
 import { assignRoom } from "../src/tenant/reservation-changes";
 import { checkIn } from "../src/tenant/folios";
 import { SimulatedLocks, type LockPlugin } from "@hoteloftware/locks";
-import { issueCardKey, readKeyCard, reservationKeys, revokeRoomKey, saveLockSettings, setLockDoor, syncLockKeys } from "../src/tenant/locks";
+import { issueCardKey, readKeyCard, reservationKeys, revokeRoomKey, saveLockSettings, setLateCheckout, setLockDoor, syncLockKeys } from "../src/tenant/locks";
 import { moveRoomInHouse, updateReservation } from "../src/tenant/reservation-changes";
 import { resetTestDatabase, testPool } from "./helpers";
 
@@ -85,6 +85,10 @@ describe("Door locks and keys", () => {
     await updateReservation(pool, s(), reservation, pm.userId, { departure: addDays(today, 3) });
     await syncLockKeys(pool, s(), deps);
     expect((await live()).map((k) => [k.room, k.validUntil])).toEqual([["101", new Date(`${addDays(today, 3)}T12:00:00+02:00`).toISOString()]]);
+    // a late check-out at 14:00: the key runs to 15:00
+    await setLateCheckout(pool, s(), reservation, "14:00", pm);
+    await syncLockKeys(pool, s(), deps);
+    expect((await live())[0]!.validUntil).toBe(new Date(`${addDays(today, 3)}T15:00:00+02:00`).toISOString());
     // a move from tomorrow: the key changes doors when the Business Date reaches that night
     await moveRoomInHouse(pool, s(), reservation, pm.userId, rooms[1]!.id, addDays(today, 1), { force: true });
     await syncLockKeys(pool, s(), deps);
@@ -93,6 +97,19 @@ describe("Door locks and keys", () => {
     await syncLockKeys(pool, s(), deps);
     expect((await live()).map((k) => k.room)).toEqual(["102"]);
     expect((await keys()).events.map((e) => e.action)).toEqual(expect.arrayContaining(["issued", "updated", "revoked"]));
+  });
+
+  it("a lost door PIN is replaced; on the departure morning the key still opens the door", async () => {
+    const [pin] = await live();
+    await revokeRoomKey(pool, s(), pin!.id, pm, deps);
+    await syncLockKeys(pool, s(), deps);
+    const [fresh] = await live();
+    expect(fresh).toMatchObject({ room: "102", kind: "pin" });
+    expect(fresh!.id).not.toBe(pin!.id);
+    const departure = (await pool.query<{ d: string }>(`select to_char(departure, 'YYYY-MM-DD') as d from ${s()}.reservations where id = $1`, [reservation])).rows[0]!.d;
+    await pool.query(`update ${s()}.properties set business_date = $2 where id = $1`, [propertyId, departure]);
+    await syncLockKeys(pool, s(), deps);
+    expect((await live()).map((k) => k.id)).toEqual([fresh!.id]);
   });
 
   it("the desk writes a key card on its encoder, reads it back and revokes it when lost", async () => {

@@ -1,6 +1,6 @@
 import PgBoss from "pg-boss";
 import { todayIn } from "@hoteloftware/domain";
-import type { Pool } from "pg";
+import pg, { type Pool } from "pg";
 import { notifyGroupDuties, pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
@@ -345,6 +345,17 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
       for (const t of rows) await boss.send(QUEUES.locks, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `locks:${t.id}`, singletonSeconds: 50 });
     });
     await boss.schedule(QUEUES.locksAll, "* * * * *", {}, { tz: "Europe/Berlin" });
+    // a stay queued (a check-out, a lost key): its tenant's run starts at once, not at the next minute
+    const listen = new pg.Client({ connectionString });
+    listen.on("error", (err) => console.error("[locks] listener", err));
+    await listen.connect();
+    await listen.query("listen hs_lock_sync");
+    listen.on("notification", (n) => {
+      void pool
+        .query<{ id: string }>("select id from control.tenants where schema_name = $1", [n.payload ?? ""])
+        .then(({ rows }) => (rows[0] ? boss.send(QUEUES.locks, { tenantId: rows[0].id } satisfies TenantJobData, { singletonKey: `locks:${rows[0].id}`, singletonSeconds: 5 }) : null))
+        .catch((err: unknown) => console.error("[locks] notify", err));
+    });
   }
 
   await boss.work<TenantJobData>(QUEUES.groups, async (jobs) => {

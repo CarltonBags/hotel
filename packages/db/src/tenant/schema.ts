@@ -675,6 +675,7 @@ export const reservations = pgTable(
     groupHoldingId: uuid("group_holding_id").references((): AnyPgColumn => groupHoldings.id),
     namePending: boolean("name_pending").notNull().default(false),
     roomChargeBlocked: boolean("room_charge_blocked").notNull().default(false),
+    lateCheckout: time("late_checkout"),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -3147,6 +3148,7 @@ export const roomKeys = pgTable(
     reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
     roomId: uuid("room_id").notNull().references(() => rooms.id),
     kind: text("kind").notNull(),
+    lockRef: text("lock_ref").notNull(),
     externalId: text("external_id"),
     pinSealed: text("pin_sealed"),
     encoderId: text("encoder_id"),
@@ -3185,6 +3187,7 @@ export const keyEvents = pgTable(
 export const lockSync = pgTable("lock_sync", {
   reservationId: uuid("reservation_id").primaryKey().references(() => reservations.id),
   nextAt: timestamp("next_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  lease: uuid("lease"),
   attempts: integer("attempts").notNull().default(0),
   error: text("error"),
 });

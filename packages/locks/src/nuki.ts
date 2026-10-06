@@ -1,9 +1,10 @@
 import type { LockCapabilities } from "@hoteloftware/domain";
-import { LockUnavailable, type CardRead, type IssuedKey, type KeyRequest, type LockPlugin } from "./plugin";
+import { LockRefused, LockUnavailable, type CardRead, type IssuedKey, type KeyRequest, type LockPlugin } from "./plugin";
 
 /**
  * Nuki through its public Web API (decision "Digital key": the first cloud
- * plugin, run in the worker). A key is a keypad code (door PIN) on the
+ * plugin). Keys are made, changed and taken back by the worker; the
+ * settings page only asks its health. A key is a keypad code (door PIN) on the
  * room's smartlock, valid from check-in to check-out plus the grace; the lock
  * is online, so taking a code back works at once. No cards, no encoders.
  * Web API: https://api.nuki.io (Bearer API token of the hotel's Nuki Web account).
@@ -13,6 +14,9 @@ const API = "https://api.nuki.io";
 const KEYPAD_CODE = 13;
 
 type Fetch = typeof fetch;
+
+/** The authorization's name at Nuki: our key's id, within Nuki's 32 characters. */
+const nameOf = (keyId: string) => `hs-${keyId.replace(/-/g, "")}`.slice(0, 32);
 
 export class NukiLocks implements LockPlugin {
   readonly name = "nuki";
@@ -35,6 +39,8 @@ export class NukiLocks implements LockPlugin {
     } catch (err) {
       throw new LockUnavailable(`Nuki did not answer: ${err instanceof Error ? err.message : String(err)}`);
     }
+    // a refusal (bad token, a code Nuki does not take) is not tried again; a server error is
+    if (res.status >= 400 && res.status < 500 && res.status !== 429) throw new LockRefused(`Nuki refused: ${res.status}`);
     if (!res.ok) throw new LockUnavailable(`Nuki answered ${res.status}`);
     const text = await res.text();
     return text ? (JSON.parse(text) as unknown) : null;
@@ -42,16 +48,26 @@ export class NukiLocks implements LockPlugin {
 
   private authBody(r: KeyRequest) {
     if (!r.pin) throw new Error("A Nuki key is a door PIN");
-    return { name: `hs-${r.keyId}`.slice(0, 32), type: KEYPAD_CODE, code: Number(r.pin), allowedFromDate: r.validFrom.toISOString(), allowedUntilDate: r.validUntil.toISOString(), allowedWeekDays: 127, allowedFromTime: 0, allowedUntilTime: 0 };
+    return { name: nameOf(r.keyId), type: KEYPAD_CODE, code: Number(r.pin), allowedFromDate: r.validFrom.toISOString(), allowedUntilDate: r.validUntil.toISOString(), allowedWeekDays: 127, allowedFromTime: 0, allowedUntilTime: 0 };
+  }
+
+  private async findByKeyId(keyId: string, lockRef: string): Promise<string | null> {
+    // Nuki answers a new authorization without its id: found again by the name we gave it
+    const list = (await this.call("GET", `/smartlock/${encodeURIComponent(lockRef)}/auth`)) as { id: string | number; name: string }[] | null;
+    const made = (list ?? []).find((a) => a.name === nameOf(keyId));
+    return made ? String(made.id) : null;
   }
 
   async issueKey(r: KeyRequest): Promise<IssuedKey> {
     await this.call("PUT", `/smartlock/${encodeURIComponent(r.lockRef)}/auth`, this.authBody(r));
-    // Nuki answers without the new authorization's id: found again by its name
-    const list = (await this.call("GET", `/smartlock/${encodeURIComponent(r.lockRef)}/auth`)) as { id: string; name: string }[] | null;
-    const made = (list ?? []).find((a) => a.name === `hs-${r.keyId}`.slice(0, 32));
-    if (!made) throw new LockUnavailable("Nuki did not keep the keypad code");
-    return { externalId: made.id };
+    const id = await this.findByKeyId(r.keyId, r.lockRef);
+    if (!id) throw new LockUnavailable("Nuki did not keep the keypad code");
+    return { externalId: id };
+  }
+
+  async revokeByKeyId(keyId: string, lockRef: string): Promise<void> {
+    const id = await this.findByKeyId(keyId, lockRef);
+    if (id) await this.revokeKey(id, lockRef);
   }
 
   async updateKey(externalId: string, r: KeyRequest): Promise<void> {
@@ -59,7 +75,12 @@ export class NukiLocks implements LockPlugin {
   }
 
   async revokeKey(externalId: string, lockRef: string): Promise<void> {
-    await this.call("DELETE", `/smartlock/${encodeURIComponent(lockRef)}/auth/${encodeURIComponent(externalId)}`);
+    try {
+      await this.call("DELETE", `/smartlock/${encodeURIComponent(lockRef)}/auth/${encodeURIComponent(externalId)}`);
+    } catch (err) {
+      // already gone at Nuki: taken back all the same
+      if (!(err instanceof LockRefused && err.message.endsWith("404"))) throw err;
+    }
   }
 
   async readCard(): Promise<CardRead | null> {

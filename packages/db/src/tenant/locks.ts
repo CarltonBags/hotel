@@ -1,7 +1,6 @@
 import type { Pool, PoolClient } from "pg";
-import { KEY_HANDOVERS, automaticKeyKind, can, doorPin, keyActions, keyPlan, keyValidUntil, type KeyHandover, type KeyKind, type LockCapabilities, type PlannedKey, type RevokeReason } from "@hoteloftware/domain";
-import { seal, unseal } from "@hoteloftware/fiscal";
-import { LOCK_CAPABILITIES, LOCK_SYSTEMS, lockPlugin, type LockPlugin, type LockSystem } from "@hoteloftware/locks";
+import { KEY_HANDOVERS, automaticKeyKind, can, doorPin, handoverSupported, keyActions, keyPlan, keyValidUntil, type KeyHandover, type KeyKind, type LockCapabilities, type PlannedKey, type RevokeReason } from "@hoteloftware/domain";
+import { LOCK_CAPABILITIES, LOCK_SYSTEMS, LockUnavailable, hasPlugin, lockPlugin, sealLockSecret, unsealLockSecret, type LockPlugin, type LockSystem } from "@hoteloftware/locks";
 import { isUuid } from "./catalogue-common";
 import type { Viewer } from "./room-state";
 import { withTenant } from "./with-tenant";
@@ -17,14 +16,22 @@ import { withTenant } from "./with-tenant";
  */
 
 export interface LockDeps {
-  /** The platform secret the lock system's credential and door PINs are sealed with. */
+  /** The platform's lock secret the lock system's credential and door PINs are sealed with. */
   sealKey: string;
   /** The plugin of a lock system (tests pass their own). */
   pluginFor?: (system: string, secret: string | null) => LockPlugin | null;
 }
 
 const SYNC_BY = "lock-sync";
-const sealed = (deps: LockDeps) => `${deps.sealKey}:locks`;
+const seal = (deps: LockDeps, plain: string) => sealLockSecret(deps.sealKey, plain);
+/** What is sealed, or null where the lock secret changed since (the credential is entered again, PINs are reissued). */
+const unseal = (deps: LockDeps, sealed: string): string | null => {
+  try {
+    return unsealLockSecret(deps.sealKey, sealed);
+  } catch {
+    return null;
+  }
+};
 
 interface Settings {
   system: LockSystem;
@@ -39,10 +46,10 @@ async function settingsIn(tx: PoolClient, propertyId: string): Promise<Settings>
   return r ? { system: r.system, otherName: r.other_name, handover: r.handover, graceMinutes: r.grace_minutes, secretSealed: r.secret_sealed } : { system: "none", otherName: "", handover: "reception", graceMinutes: 60, secretSealed: null };
 }
 
-const capabilitiesOf = (system: LockSystem): LockCapabilities | null => (system === "simulated" || system === "nuki" ? LOCK_CAPABILITIES[system] : null);
+const capabilitiesOf = (system: LockSystem): LockCapabilities | null => (hasPlugin(system) ? LOCK_CAPABILITIES[system] : null);
 
 function pluginOf(s: Settings, deps: LockDeps): LockPlugin | null {
-  const secret = s.secretSealed ? unseal(sealed(deps), s.secretSealed) : null;
+  const secret = s.secretSealed ? unseal(deps, s.secretSealed) : null;
   return (deps.pluginFor ?? lockPlugin)(s.system, secret);
 }
 
@@ -73,7 +80,9 @@ export async function saveLockSettings(pool: Pool, schema: string, propertyId: s
   if (!Number.isInteger(input.graceMinutes) || input.graceMinutes < 0 || input.graceMinutes > 720) throw new Error("The grace is 0 to 720 minutes");
   const otherName = input.system === "other" ? input.otherName.trim().slice(0, 60) : "";
   if (input.system === "other" && !otherName) throw new Error("Name the lock system");
-  const secret = input.secret?.trim() ? seal(sealed(deps), input.secret.trim()) : null;
+  const caps = capabilitiesOf(input.system as LockSystem);
+  if (caps && !handoverSupported(input.handover as KeyHandover, caps)) throw new Error("This lock system cannot hand keys over that way");
+  const secret = input.secret?.trim() ? seal(deps, input.secret.trim()) : null;
   await withTenant(pool, schema, async (tx) => {
     await tx.query(
       `insert into property_locks (property_id, system, other_name, handover, grace_minutes, secret_sealed, updated_by) values ($1, $2, $3, $4, $5, $6, $7)
@@ -106,7 +115,8 @@ export async function setDeskEncoder(pool: Pool, schema: string, propertyId: str
   await withTenant(pool, schema, async (tx) => {
     const enc = encoderId.trim().slice(0, 100);
     if (!enc) await tx.query("delete from lock_encoders where device_id = $1 and property_id = $2", [deviceId, propertyId]);
-    else await tx.query("insert into lock_encoders (device_id, property_id, encoder_id) values ($1, $2, $3) on conflict (device_id) do update set property_id = excluded.property_id, encoder_id = excluded.encoder_id", [deviceId, propertyId, enc]);
+    // the caller checked the Device is the property's; a mapping never moves to another property
+    else await tx.query("insert into lock_encoders (device_id, property_id, encoder_id) values ($1, $2, $3) on conflict (device_id) do update set encoder_id = excluded.encoder_id where lock_encoders.property_id = excluded.property_id", [deviceId, propertyId, enc]);
   });
 }
 
@@ -159,8 +169,11 @@ interface Stay {
 
 async function stayIn(tx: PoolClient, reservationId: string, s: Settings): Promise<Stay | null> {
   const r = (await tx.query<{ id: string; property_id: string; status: string; departure: string; time_zone: string; checkout: string; guest: string; room_id: string | null }>(
-    `select r.id, r.property_id, r.status, to_char(r.departure, 'YYYY-MM-DD') as departure, p.time_zone, to_char(coalesce(m.checkout_time, '11:00'), 'HH24:MI') as checkout, coalesce(g.last_name, '') as guest,
-       (select a.room_id from room_assignments a where a.reservation_id = r.id and a.from_date <= coalesce(p.business_date, r.arrival) and a.to_date > coalesce(p.business_date, r.arrival) order by a.from_date desc limit 1) as room_id
+    `select r.id, r.property_id, r.status, to_char(r.departure, 'YYYY-MM-DD') as departure, p.time_zone, to_char(coalesce(r.late_checkout, m.checkout_time, '11:00'), 'HH24:MI') as checkout, coalesce(g.last_name, '') as guest,
+       -- the room of tonight (on the departure morning: of the last night); a night not yet assigned keeps the room before it
+       (select a.room_id from room_assignments a where a.reservation_id = r.id
+          and a.from_date <= least(coalesce(p.business_date, r.arrival), r.departure - 1)
+        order by a.from_date desc limit 1) as room_id
      from reservations r join properties p on p.id = r.property_id left join property_messaging m on m.property_id = p.id left join guests g on g.id = r.primary_guest_id
      where r.id = $1`,
     [reservationId],
@@ -172,6 +185,7 @@ async function stayIn(tx: PoolClient, reservationId: string, s: Settings): Promi
 interface KeyRow {
   id: string;
   room_id: string;
+  lock_ref: string;
   kind: KeyKind;
   status: PlannedKey["status"];
   valid_from: Date;
@@ -179,9 +193,10 @@ interface KeyRow {
   external_id: string | null;
   pin_sealed: string | null;
   encoder_id: string | null;
+  issued_at: Date;
 }
 
-const KEY_SELECT = "select id, room_id, kind, status, valid_from, valid_until, external_id, pin_sealed, encoder_id from room_keys";
+const KEY_SELECT = "select id, room_id, lock_ref, kind, status, valid_from, valid_until, external_id, pin_sealed, encoder_id, issued_at from room_keys";
 
 const doorOf = async (tx: PoolClient, roomId: string) => (await tx.query<{ lock_ref: string }>("select lock_ref from lock_doors where room_id = $1", [roomId])).rows[0]?.lock_ref ?? null;
 
@@ -191,38 +206,47 @@ async function issueKey(pool: Pool, schema: string, plugin: LockPlugin, stay: St
   const pending = await withTenant(pool, schema, async (tx) => {
     const lockRef = await doorOf(tx, roomId);
     if (!lockRef) {
-      await event(tx, stay.id, null, "no_door", { roomId }, by);
+      // said once, not at every run
+      const said = (await tx.query("select 1 from key_events where reservation_id = $1 and action = 'no_door' and detail->>'roomId' = $2", [stay.id, roomId])).rows.length;
+      if (!said) await event(tx, stay.id, null, "no_door", { roomId }, by);
       return null;
     }
     const id = (await tx.query<{ id: string }>(
-      "insert into room_keys (reservation_id, room_id, kind, pin_sealed, encoder_id, valid_from, valid_until, issued_by) values ($1, $2, $3, $4, $5, clock_timestamp(), $6, $7) returning id",
-      [stay.id, roomId, kind, pin ? seal(sealed(deps), pin) : null, encoderId ?? null, stay.validUntil, by],
+      "insert into room_keys (reservation_id, room_id, lock_ref, kind, pin_sealed, encoder_id, valid_from, valid_until, issued_by) values ($1, $2, $3, $4, $5, $6, clock_timestamp(), $7, $8) returning id",
+      [stay.id, roomId, lockRef, kind, pin ? seal(deps, pin) : null, encoderId ?? null, stay.validUntil, by],
     )).rows[0]!.id;
     return { id, lockRef };
   });
   if (!pending) throw new Error("The room has no door at the lock system");
+  let made;
   try {
-    const made = await plugin.issueKey({ keyId: pending.id, lockRef: pending.lockRef, kind, validFrom: new Date(), validUntil: stay.validUntil, guestName: stay.guest, pin, encoderId });
-    await withTenant(pool, schema, async (tx) => {
-      await tx.query("update room_keys set status = 'active', external_id = $2 where id = $1", [pending.id, made.externalId]);
-      await event(tx, stay.id, pending.id, "issued", { kind, roomId, encoderId: encoderId ?? null }, by);
-    });
-    return pending.id;
+    made = await plugin.issueKey({ keyId: pending.id, lockRef: pending.lockRef, kind, validFrom: new Date(), validUntil: stay.validUntil, guestName: stay.guest, pin, encoderId });
   } catch (err) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+    // the key may exist at the lock all the same: taken back by its name; where that fails too, it stays pending and the next run cleans up
+    const cleaned = await plugin.revokeByKeyId(pending.id, pending.lockRef).then(() => true, () => false);
     await withTenant(pool, schema, async (tx) => {
-      await tx.query("update room_keys set status = 'failed', error = $2 where id = $1", [pending.id, message]);
+      await tx.query(`update room_keys set ${cleaned ? "status = 'failed', " : ""}error = $2 where id = $1 and status = 'pending'`, [pending.id, message]);
       await event(tx, stay.id, pending.id, "failed", { kind, roomId, error: message }, by);
     });
     throw err;
   }
+  // revoked at the desk while it was being made: taken back at the lock at once
+  const kept = await withTenant(pool, schema, async (tx) => {
+    const r = await tx.query("update room_keys set status = 'active', external_id = $2 where id = $1 and status = 'pending'", [pending.id, made.externalId]);
+    if (r.rowCount) await event(tx, stay.id, pending.id, "issued", { kind, roomId, encoderId: encoderId ?? null }, by);
+    else await tx.query("update room_keys set external_id = $2 where id = $1", [pending.id, made.externalId]);
+    return !!r.rowCount;
+  });
+  if (!kept) await plugin.revokeKey(made.externalId, pending.lockRef);
+  return pending.id;
 }
 
 async function revokeKey(pool: Pool, schema: string, plugin: LockPlugin, stay: Stay, k: KeyRow, reason: RevokeReason, by: string): Promise<void> {
   // an offline card cannot be taken back at the door: it runs to its written expiry
-  if (k.external_id && (plugin.capabilities.remoteRevoke || k.kind !== "card")) {
-    const lockRef = await withTenant(pool, schema, (tx) => doorOf(tx, k.room_id));
-    if (lockRef) await plugin.revokeKey(k.external_id, lockRef);
+  if (plugin.capabilities.remoteRevoke || k.kind !== "card") {
+    if (k.external_id) await plugin.revokeKey(k.external_id, k.lock_ref);
+    else await plugin.revokeByKeyId(k.id, k.lock_ref);
   }
   await withTenant(pool, schema, async (tx) => {
     await tx.query("update room_keys set status = 'revoked', revoked_at = clock_timestamp(), revoked_by = $2, revoke_reason = $3 where id = $1 and status in ('pending', 'active')", [k.id, by, reason]);
@@ -237,22 +261,26 @@ async function syncStay(pool: Pool, schema: string, reservationId: string, deps:
     if (!propertyId) return null;
     const s = await settingsIn(tx, propertyId);
     const stay = await stayIn(tx, reservationId, s);
-    // a key left pending by an interrupted run is given up and made again
-    await tx.query("update room_keys set status = 'failed', error = 'interrupted' where reservation_id = $1 and status = 'pending' and external_id is null and issued_at < clock_timestamp() - interval '2 minutes'", [reservationId]);
     const keys = (await tx.query<KeyRow>(`${KEY_SELECT} where reservation_id = $1`, [reservationId])).rows;
     return stay ? { s, stay, keys } : null;
   });
   if (!loaded) return;
   const plugin = pluginOf(loaded.s, deps);
   if (!plugin) return;
-  const { stay, keys } = loaded;
+  const { stay } = loaded;
+  // a key left pending by an interrupted run: taken back at the lock by its name, then made again
+  for (const k of loaded.keys.filter((x) => x.status === "pending" && !x.external_id && x.issued_at.getTime() < Date.now() - 120_000)) {
+    await plugin.revokeByKeyId(k.id, k.lock_ref);
+    await withTenant(pool, schema, (tx) => tx.query("update room_keys set status = 'failed', error = coalesce(error, 'interrupted') where id = $1 and status = 'pending'", [k.id]));
+    k.status = "failed";
+  }
+  const keys = loaded.keys;
   const plan = keyPlan(stay, keys.map((k) => ({ id: k.id, roomId: k.room_id, kind: k.kind, status: k.status, validUntil: k.valid_until })), plugin.capabilities, automaticKeyKind(loaded.s.handover, plugin.capabilities));
   for (const r of plan.revoke) await revokeKey(pool, schema, plugin, stay, keys.find((k) => k.id === r.keyId)!, r.reason, SYNC_BY);
   for (const u of plan.update) {
     const k = keys.find((x) => x.id === u.keyId)!;
-    const pin = k.pin_sealed ? unseal(sealed(deps), k.pin_sealed) : undefined;
-    const lockRef = await withTenant(pool, schema, (tx) => doorOf(tx, k.room_id));
-    if (k.external_id && lockRef) await plugin.updateKey(k.external_id, { keyId: k.id, lockRef, kind: k.kind, validFrom: k.valid_from, validUntil: u.validUntil, guestName: stay.guest, pin, encoderId: k.encoder_id ?? undefined });
+    const pin = (k.pin_sealed ? unseal(deps, k.pin_sealed) : null) ?? undefined;
+    if (k.external_id) await plugin.updateKey(k.external_id, { keyId: k.id, lockRef: k.lock_ref, kind: k.kind, validFrom: k.valid_from, validUntil: u.validUntil, guestName: stay.guest, pin, encoderId: k.encoder_id ?? undefined });
     await withTenant(pool, schema, async (tx) => {
       await tx.query("update room_keys set valid_until = $2 where id = $1", [k.id, u.validUntil]);
       await event(tx, stay.id, k.id, "updated", { validUntil: u.validUntil.toISOString() }, SYNC_BY);
@@ -266,23 +294,38 @@ async function syncStay(pool: Pool, schema: string, reservationId: string, deps:
 
 /**
  * The worker's run: every queued stay brought in line, one at a time. A run
- * leases the stay; a change while it runs queues it again. A lock system that
- * does not answer is tried again with back-off.
+ * leases the stay and holds its lock, so two workers never run one stay at
+ * once; a change while it runs clears the lease, and the stay runs again. A
+ * lock system that does not answer is tried again with back-off; the first
+ * failure is logged on the reservation.
  */
 export async function syncLockKeys(pool: Pool, schema: string, deps: LockDeps, limit = 50): Promise<{ done: number; failed: number }> {
   const due = await withTenant(pool, schema, async (tx) => (await tx.query<{ reservation_id: string }>("select reservation_id from lock_sync where next_at <= clock_timestamp() order by next_at limit $1", [limit])).rows.map((r) => r.reservation_id));
   const out = { done: 0, failed: 0 };
   for (const id of due) {
-    const lease = await withTenant(pool, schema, async (tx) => (await tx.query<{ next_at: Date }>("update lock_sync set next_at = clock_timestamp() + interval '5 minutes' where reservation_id = $1 and next_at <= clock_timestamp() returning next_at", [id])).rows[0]?.next_at ?? null);
-    if (!lease) continue;
+    const c = await pool.connect();
     try {
-      await syncStay(pool, schema, id, deps);
-      await withTenant(pool, schema, (tx) => tx.query("delete from lock_sync where reservation_id = $1 and next_at = $2", [id, lease]));
-      out.done++;
-    } catch (err) {
-      const message = (err instanceof Error ? err.message : String(err)).slice(0, 200);
-      await withTenant(pool, schema, (tx) => tx.query("update lock_sync set attempts = attempts + 1, next_at = clock_timestamp() + least(attempts + 1, 30) * interval '1 minute', error = $3 where reservation_id = $1 and next_at = $2", [id, lease, message]));
-      out.failed++;
+      if (!(await c.query<{ ok: boolean }>("select pg_try_advisory_lock(hashtext($1)) as ok", [`${schema}:lock-sync:${id}`])).rows[0]!.ok) continue;
+      try {
+        const lease = await withTenant(pool, schema, async (tx) => (await tx.query<{ lease: string }>("update lock_sync set lease = gen_random_uuid(), next_at = clock_timestamp() + interval '5 minutes' where reservation_id = $1 and next_at <= clock_timestamp() returning lease", [id])).rows[0]?.lease ?? null);
+        if (!lease) continue;
+        try {
+          await syncStay(pool, schema, id, deps);
+          await withTenant(pool, schema, (tx) => tx.query("delete from lock_sync where reservation_id = $1 and lease = $2", [id, lease]));
+          out.done++;
+        } catch (err) {
+          const message = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+          await withTenant(pool, schema, async (tx) => {
+            const r = (await tx.query<{ attempts: number }>("update lock_sync set attempts = attempts + 1, next_at = clock_timestamp() + least(attempts + 1, 30) * interval '1 minute', error = $3 where reservation_id = $1 and lease = $2 returning attempts", [id, lease, message])).rows[0];
+            if (r?.attempts === 1) await event(tx, id, null, "sync_failed", { error: message, retried: err instanceof LockUnavailable }, SYNC_BY);
+          });
+          out.failed++;
+        }
+      } finally {
+        await c.query("select pg_advisory_unlock(hashtext($1))", [`${schema}:lock-sync:${id}`]);
+      }
+    } finally {
+      c.release();
     }
   }
   return out;
@@ -314,14 +357,31 @@ export async function issueCardKey(pool: Pool, schema: string, reservationId: st
   return issueKey(pool, schema, plugin, stay, "card", stay.roomId, deps, viewer.userId, enc);
 }
 
+/** A late check-out agreed for the stay (null: the property's check-out time); its keys follow. */
+export async function setLateCheckout(pool: Pool, schema: string, reservationId: string, time: string | null, viewer: Viewer): Promise<void> {
+  if (!isUuid(reservationId)) throw new Error("Reservation not found");
+  if (time !== null && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error("Choose a time");
+  await withTenant(pool, schema, async (tx) => {
+    const r = (await tx.query<{ property_id: string; status: string }>("select property_id, status from reservations where id = $1 for update", [reservationId])).rows[0];
+    if (!r) throw new Error("Reservation not found");
+    need(viewer, "check_in", r.property_id);
+    if (r.status !== "confirmed" && r.status !== "checked_in") throw new Error("The stay is over");
+    await tx.query("update reservations set late_checkout = $2 where id = $1", [reservationId, time]);
+    await event(tx, reservationId, null, "late_checkout", { time }, viewer.userId);
+  });
+}
+
 /** A lost key taken back. */
 export async function revokeRoomKey(pool: Pool, schema: string, keyId: string, viewer: Viewer, deps: LockDeps): Promise<void> {
   if (!isUuid(keyId)) throw new Error("Key not found");
   const k = await withTenant(pool, schema, async (tx) => (await tx.query<KeyRow & { reservation_id: string }>(`${KEY_SELECT.replace("select id", "select reservation_id, id")} where id = $1`, [keyId])).rows[0]);
   if (!k) throw new Error("Key not found");
   const { stay, plugin } = await deskContext(pool, schema, k.reservation_id, viewer, deps);
-  if (k.status !== "active" && k.status !== "pending") throw new Error("The key is not in use");
+  if (k.status === "pending") throw new Error("The key is still being made; try again in a moment");
+  if (k.status !== "active") throw new Error("The key is not in use");
   await revokeKey(pool, schema, plugin, stay, k, "lost", viewer.userId);
+  // a lost door PIN or Digital Key is replaced by the next run
+  await withTenant(pool, schema, (tx) => tx.query("select queue_lock_sync($1)", [stay.id]));
   if (k.kind === "card" && !plugin.capabilities.remoteRevoke) await withTenant(pool, schema, (tx) => event(tx, stay.id, k.id, "warning", { warning: "offline_card_runs_to_expiry" }, viewer.userId));
 }
 
@@ -356,6 +416,10 @@ export interface ReservationKeys {
   deskEncoder: string | null;
   /** The lock system's encoders, where the desk writes cards. */
   encoders: { id: string; name: string }[];
+  /** A late check-out agreed for the stay (HH:MM). */
+  lateCheckout: string | null;
+  /** Who checks guests in may change keys and the late check-out. */
+  desk: boolean;
 }
 
 /** A stay's keys and their log, for its reservation page; door PINs only for who checks guests in. */
@@ -367,11 +431,11 @@ export async function reservationKeys(pool: Pool, schema: string, reservationId:
     const s = await settingsIn(tx, propertyId);
     const desk = can(viewer.actor, "check_in", propertyId);
     const keys = (await tx.query<KeyRow & { number: string; revoke_reason: string | null; error: string | null }>(
-      "select k.id, k.room_id, k.kind, k.status, k.valid_from, k.valid_until, k.external_id, k.pin_sealed, k.encoder_id, m.number, k.revoke_reason, k.error from room_keys k join rooms m on m.id = k.room_id where k.reservation_id = $1 order by k.issued_at",
+      "select k.id, k.room_id, k.lock_ref, k.kind, k.status, k.valid_from, k.valid_until, k.external_id, k.pin_sealed, k.encoder_id, k.issued_at, m.number, k.revoke_reason, k.error from room_keys k join rooms m on m.id = k.room_id where k.reservation_id = $1 order by k.issued_at",
       [reservationId],
     )).rows;
     const events = (await tx.query<{ at: Date; action: string; detail: Record<string, unknown>; by: string }>("select at, action, detail, by from key_events where reservation_id = $1 order by at, id", [reservationId])).rows;
-    const caps = s.system === "nuki" && !s.secretSealed ? LOCK_CAPABILITIES.nuki : capabilitiesOf(s.system);
+    const caps = capabilitiesOf(s.system);
     const deskEncoder = deviceId && isUuid(deviceId) ? ((await tx.query<{ encoder_id: string }>("select encoder_id from lock_encoders where device_id = $1 and property_id = $2", [deviceId, propertyId])).rows[0]?.encoder_id ?? null) : null;
     return {
       system: s.system,
@@ -385,12 +449,14 @@ export async function reservationKeys(pool: Pool, schema: string, reservationId:
         status: k.status,
         validFrom: k.valid_from.toISOString(),
         validUntil: k.valid_until.toISOString(),
-        pin: desk && k.pin_sealed && k.status === "active" ? unseal(sealed(deps), k.pin_sealed) : null,
+        pin: desk && k.pin_sealed && k.status === "active" ? unseal(deps, k.pin_sealed) : null,
         revokeReason: k.revoke_reason,
         error: k.error,
       })),
       events: events.map((e) => ({ at: e.at.toISOString(), action: e.action, detail: e.detail, by: e.by })),
       deskEncoder,
+      lateCheckout: (await tx.query<{ t: string | null }>("select to_char(late_checkout, 'HH24:MI') as t from reservations where id = $1", [reservationId])).rows[0]!.t,
+      desk,
       settings: s,
     };
   });

@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { ReservationKeys } from "@hoteloftware/db";
 import type { Messages } from "@/i18n/messages";
-import { issueCardAction, readCardAction, revokeKeyAction } from "./key-actions";
+import { issueCardAction, lateCheckoutAction, readCardAction, revokeKeyAction } from "./key-actions";
 
 /**
  * The stay's door keys (ticket 67): what is issued, until when, the door PIN,
@@ -16,6 +16,7 @@ export function KeysPanel({ propertyId, reservationId, keys, language, timeZone,
   const [pending, start] = useTransition();
   const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
   const [encoder, setEncoder] = useState(keys.deskEncoder ?? keys.encoders[0]?.id ?? "");
+  const [late, setLate] = useState(keys.lateCheckout ?? "");
   const when = (iso: string) => new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "short", timeStyle: "short", timeZone }).format(new Date(iso));
   const run = (fn: () => Promise<{ error?: string; message?: string }>) =>
     start(async () => {
@@ -96,6 +97,18 @@ export function KeysPanel({ propertyId, reservationId, keys, language, timeZone,
               {m["keys.readCard"]}
             </button>
           ) : null}
+        </div>
+      ) : null}
+      {keys.desk ? (
+        // a late check-out agreed: the keys run to it
+        <div className="flex flex-wrap items-center gap-2" data-late-checkout>
+          <label className="flex items-center gap-2">
+            {m["keys.lateCheckout"]}
+            <input type="time" value={late} onChange={(e) => setLate(e.target.value)} className="h-9 rounded-xl border border-ink-10 bg-surface px-3" />
+          </label>
+          <button type="button" disabled={pending} onClick={() => run(() => lateCheckoutAction(propertyId, reservationId, late))} className={button}>
+            {m["action.save"]}
+          </button>
         </div>
       ) : null}
       {keys.events.length ? (

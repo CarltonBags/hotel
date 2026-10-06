@@ -39,10 +39,15 @@ export interface LockPlugin {
   issueKey(r: KeyRequest): Promise<IssuedKey>;
   updateKey(externalId: string, r: KeyRequest): Promise<void>;
   revokeKey(externalId: string, lockRef: string): Promise<void>;
+  /** Take back a key whose id at the lock we never learnt (the issue answered with an error after the key was made). */
+  revokeByKeyId(keyId: string, lockRef: string): Promise<void>;
   readCard(encoderId: string): Promise<CardRead | null>;
   listEncoders(): Promise<{ id: string; name: string }[]>;
   health(): Promise<{ ok: boolean; detail: string }>;
 }
 
-/** The lock system did not answer or refused; tried again later where it makes sense. */
+/** The lock system did not answer; tried again later. */
 export class LockUnavailable extends Error {}
+
+/** The lock system refused the request (a wrong token, a code it does not take): trying again will not help. */
+export class LockRefused extends Error {}

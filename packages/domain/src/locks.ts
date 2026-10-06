@@ -27,6 +27,14 @@ export interface LockCapabilities {
 export const KEY_HANDOVERS = ["reception", "kiosk_encoder", "digital_key", "door_pin"] as const;
 export type KeyHandover = (typeof KEY_HANDOVERS)[number];
 
+/** Whether the lock system can hand keys over this way. */
+export function handoverSupported(handover: KeyHandover, caps: LockCapabilities): boolean {
+  if (handover === "door_pin") return caps.pin;
+  if (handover === "digital_key") return caps.phoneKey;
+  if (handover === "kiosk_encoder") return caps.card && caps.encoders;
+  return true;
+}
+
 /** The kind of key issued without anyone at the desk, for a handover setting the lock system supports. */
 export function automaticKeyKind(handover: KeyHandover, caps: LockCapabilities): KeyKind | null {
   if (handover === "door_pin" && caps.pin) return "pin";
@@ -40,7 +48,7 @@ export function keyValidUntil(departure: string, checkoutTime: string, graceMinu
 }
 
 export type RevokeReason = "checked_out" | "no_show" | "cancelled" | "room_move" | "not_checked_in" | "lost";
-export type KeyWarning = "offline_card_runs_to_expiry" | "new_card_needed";
+export type KeyWarning = "offline_card_runs_to_expiry" | "new_card_needed" | "card_reencode_needed";
 
 export interface PlannedKey {
   id: string;
@@ -79,7 +87,12 @@ export function keyPlan(stay: { status: string; roomId: string | null; validUnti
     if (k.kind === "card") warn("new_card_needed");
   }
   const here = live.filter((x) => x.roomId === stay.roomId);
-  for (const k of here) if (k.validUntil.getTime() !== stay.validUntil.getTime()) plan.update.push({ keyId: k.id, validUntil: stay.validUntil });
+  for (const k of here) {
+    if (k.validUntil.getTime() === stay.validUntil.getTime()) continue;
+    // an offline card keeps what was written on it: the desk writes it again
+    if (k.kind === "card" && !caps.remoteRevoke) warn("card_reencode_needed");
+    else plan.update.push({ keyId: k.id, validUntil: stay.validUntil });
+  }
   if (automatic && !here.some((k) => k.kind === automatic)) plan.issue.push({ roomId: stay.roomId, kind: automatic });
   return plan;
 }
@@ -92,7 +105,14 @@ export function keyActions(caps: LockCapabilities | null): { issueCard: boolean;
 
 /** A door PIN: six digits from 1 to 9, not starting with 12 (keypad rules, Nuki). */
 export function doorPin(): string {
-  const digits = () => Array.from(globalThis.crypto.getRandomValues(new Uint8Array(6)), (b) => String((b % 9) + 1)).join("");
+  // bytes from 252 up are drawn again, so each digit is equally likely
+  const digit = (): string => {
+    for (;;) {
+      const b = globalThis.crypto.getRandomValues(new Uint8Array(1))[0]!;
+      if (b < 252) return String((b % 9) + 1);
+    }
+  };
+  const digits = () => Array.from({ length: 6 }, digit).join("");
   let pin = digits();
   while (pin.startsWith("12")) pin = digits();
   return pin;

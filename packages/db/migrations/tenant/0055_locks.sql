@@ -33,7 +33,8 @@ create table room_keys (
   reservation_id uuid not null references reservations(id),
   room_id uuid not null references rooms(id),
   kind text not null constraint room_keys_kind_check check (kind in ('card', 'pin', 'phone')),
-  -- the key's id at the lock system
+  -- the door and the key's id at the lock system, as issued (a door renamed later does not lose the key)
+  lock_ref text not null,
   external_id text,
   -- a door PIN, sealed
   pin_sealed text,
@@ -63,37 +64,47 @@ create table key_events (
 );
 create index key_events_reservation_idx on key_events(reservation_id, at);
 
+-- a late check-out agreed for one stay: its keys run to this time on the departure day (plus the grace)
+alter table reservations add column late_checkout time;
+
 -- stays whose keys the worker brings in line with where they stand (check-in, extension, room move, check-out, no-show, cancellation)
 create table lock_sync (
   reservation_id uuid primary key references reservations(id),
   next_at timestamptz not null default clock_timestamp(),
+  -- the run holding the stay; a change while it runs clears it, so the stay is run again
+  lease uuid,
   attempts integer not null default 0,
   error text
 );
 
 -- any change of a stay's status, dates or rooms queues it, whatever path made the change; only where a plugin runs the locks
-create function queue_lock_sync(reservation uuid) returns void language sql set search_path from current as $$
+-- the worker hears of it at once (revocation at check-out should not wait for the minute)
+create function queue_lock_sync(reservation uuid) returns void language plpgsql set search_path from current as $$
+begin
   insert into lock_sync (reservation_id)
   select r.id from reservations r join property_locks l on l.property_id = r.property_id
   where r.id = reservation and l.system in ('simulated', 'nuki')
-  on conflict (reservation_id) do update set next_at = clock_timestamp(), attempts = 0, error = null;
-$$;
+  on conflict (reservation_id) do update set next_at = clock_timestamp(), attempts = 0, error = null, lease = null;
+  if found then perform pg_notify('hs_lock_sync', current_schema()); end if;
+end $$;
 
 create function reservations_lock_sync() returns trigger language plpgsql set search_path from current as $$
 begin
   perform queue_lock_sync(new.id);
   return null;
 end $$;
-create trigger reservations_lock_sync after update of status, arrival, departure on reservations for each row
-  when (old.status is distinct from new.status or old.departure is distinct from new.departure or old.arrival is distinct from new.arrival)
+create trigger reservations_lock_sync after update of status, arrival, departure, late_checkout on reservations for each row
+  when (old.status is distinct from new.status or old.departure is distinct from new.departure or old.arrival is distinct from new.arrival or old.late_checkout is distinct from new.late_checkout)
   execute function reservations_lock_sync();
 
 create function room_assignments_lock_sync() returns trigger language plpgsql set search_path from current as $$
 begin
-  perform queue_lock_sync(coalesce(new.reservation_id, old.reservation_id));
+  if tg_op <> 'DELETE' then perform queue_lock_sync(new.reservation_id); end if;
+  -- an assignment taken from one stay to another: both follow
+  if tg_op <> 'INSERT' and (tg_op = 'DELETE' or old.reservation_id is distinct from new.reservation_id) then perform queue_lock_sync(old.reservation_id); end if;
   return null;
 end $$;
-create trigger room_assignments_lock_sync after insert or update or delete on room_assignments for each row execute function room_assignments_lock_sync();
+create trigger room_assignments_lock_sync after insert or delete or update of reservation_id, room_id, from_date, to_date on room_assignments for each row execute function room_assignments_lock_sync();
 
 -- a new Business Date: stays in house may change doors tonight (a room move from this night on)
 create function properties_lock_sync() returns trigger language plpgsql set search_path from current as $$

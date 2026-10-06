@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { LockCapabilities } from "@hoteloftware/domain";
 import { LockUnavailable, type CardRead, type IssuedKey, type KeyRequest, type LockPlugin } from "./plugin";
 
@@ -12,7 +13,6 @@ export class SimulatedLocks implements LockPlugin {
   /** The last card written on each encoder, for reading it back. */
   private readonly lastCard = new Map<string, string>();
   down = false;
-  private next = 1;
 
   constructor(readonly capabilities: LockCapabilities = { card: true, pin: true, phoneKey: true, remoteRevoke: true, readCard: true, encoders: true }) {}
 
@@ -22,7 +22,7 @@ export class SimulatedLocks implements LockPlugin {
 
   async issueKey(r: KeyRequest): Promise<IssuedKey> {
     this.up();
-    const externalId = `sim-${this.next++}`;
+    const externalId = `sim-${randomUUID()}`;
     this.keys.set(externalId, { ...r, revoked: false });
     if (r.kind === "card" && r.encoderId) this.lastCard.set(r.encoderId, externalId);
     return { externalId };
@@ -30,8 +30,8 @@ export class SimulatedLocks implements LockPlugin {
 
   async updateKey(externalId: string, r: KeyRequest): Promise<void> {
     this.up();
-    const k = this.keys.get(externalId);
-    if (!k) throw new LockUnavailable("Key not found at the lock system");
+    // a key made by another process's simulation is taken as it comes
+    const k = this.keys.get(externalId) ?? { ...r, revoked: false };
     this.keys.set(externalId, { ...k, validUntil: r.validUntil });
   }
 
@@ -39,6 +39,11 @@ export class SimulatedLocks implements LockPlugin {
     this.up();
     const k = this.keys.get(externalId);
     if (k) k.revoked = true;
+  }
+
+  async revokeByKeyId(keyId: string): Promise<void> {
+    this.up();
+    for (const k of this.keys.values()) if (k.keyId === keyId) k.revoked = true;
   }
 
   async readCard(encoderId: string): Promise<CardRead | null> {
