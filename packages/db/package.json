@@ -18,11 +18,12 @@
     "check-tenant-sql": "tsx src/cli/check-tenant-sql.ts"
   },
   "dependencies": {
-    "drizzle-orm": "^0.45.3",
-    "pg": "^8.23.0",
     "@hoteloftware/domain": "workspace:*",
+    "@hoteloftware/invoices": "workspace:*",
     "@hoteloftware/payments": "workspace:*",
-    "@hoteloftware/invoices": "workspace:*"
+    "drizzle-orm": "^0.45.3",
+    "fflate": "^0.8.3",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/node": "^20",

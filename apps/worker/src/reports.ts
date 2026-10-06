@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
-import { REPORT_ACCESS, addDays, can, scheduledRange, type Grain, type ScheduleFrequency } from "@hoteloftware/domain";
-import { dueReportSchedules, listTenantUsers, logReportExport, markReportScheduleSent, queueMail, runReport, stopReportSchedule } from "@hoteloftware/db";
+import { REPORT_ACCESS, addDays, can, lockedByNonPayment, scheduledRange, type Grain, type ScheduleFrequency } from "@hoteloftware/domain";
+import { dueReportSchedules, listTenantUsers, nonPaymentStatus, logReportExport, markReportScheduleSent, queueMail, runReport, stopReportSchedule } from "@hoteloftware/db";
 import { renderReportPdf } from "@hoteloftware/invoices";
 
 const DEFAULT_GRAIN: Record<ScheduleFrequency, Grain> = { daily: "day", weekly: "day", monthly: "week" };
@@ -14,11 +14,14 @@ const DEFAULT_GRAIN: Record<ScheduleFrequency, Grain> = { daily: "day", weekly: 
 export async function sendScheduledReports(pool: Pool, tenant: { id: string; name: string; schemaName: string }, now = new Date()): Promise<number> {
   const due = await dueReportSchedules(pool, tenant.schemaName, now);
   if (!due.length) return 0;
+  // reports are locked while the subscription is 30 days overdue (ticket 89): the schedules wait, they do not stop
+  const stage = (await nonPaymentStatus(pool, tenant.id, new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Berlin" }).format(now))).stage;
   const users = await listTenantUsers(pool, tenant.id);
   let sent = 0;
   for (const s of due) {
     const u = users.find((x) => x.id === s.userId && !x.pendingInvitation);
     const actor = u ? { tenantRole: u.tenantRole, propertyRoles: u.propertyRoles } : null;
+    if (lockedByNonPayment(stage, REPORT_ACCESS[s.kind])) continue;
     if (!actor || !s.propertyIds.every((p) => can(actor, REPORT_ACCESS[s.kind], p))) {
       await stopReportSchedule(pool, tenant.schemaName, s.id, "The user may no longer see this report at every property in it");
       continue;

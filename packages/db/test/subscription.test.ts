@@ -8,6 +8,9 @@ import { createProperty } from "../src/tenant/properties";
 import { createRoomType, createRooms } from "../src/tenant/rooms";
 import { propertyModules, switchModuleOff, switchModuleOn, setModuleStep } from "../src/tenant/modules";
 import { issueSubscriptionInvoices, listSubscriptionInvoices, recordUsage, setDirectDebit, setPrice, setYearly, subscriptionInvoiceFile } from "../src/control/subscription";
+import { claimDueReminders, deleteEndedTenants, endTenant, markSubscriptionInvoicePaid, nonPaymentStatus } from "../src/control/exit";
+import { exitExport } from "../src/tenant/exit-export";
+import { unzipSync, strFromU8 } from "fflate";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**
@@ -96,5 +99,43 @@ describe("Modules and subscription billing", () => {
     expect((await pool.query("select to_char(yearly_from, 'YYYY-MM-DD') as f from control.subscriptions where tenant_id = $1", [tenant.id])).rows[0].f).toBe("2026-12-01");
     await expect(setYearly(pool, tenant.id, false, "2027-03-10", owner)).rejects.toThrow(/runs to its end/);
     await setYearly(pool, tenant.id, false, "2027-11-10", owner);
+  });
+
+  it("the ladder on a simulated timeline: reminders, restricted, no new bookings, termination; paying clears it", async () => {
+    // HS-2026-00001 is due 2026-11-15
+    const at = async (today: string) => (await nonPaymentStatus(pool, tenant.id, today)).stage;
+    expect(await at("2026-11-15")).toBe("none");
+    expect(await at("2026-11-16")).toBe("reminders");
+    expect(await at("2026-12-15")).toBe("restricted");
+    expect(await at("2027-01-14")).toBe("no_new_bookings");
+    expect(await at("2027-02-13")).toBe("termination");
+    // reminders: the latest day reached, once
+    expect((await claimDueReminders(pool, "2026-11-26")).map((r) => r.day)).toEqual([10]);
+    expect(await claimDueReminders(pool, "2026-11-27")).toEqual([]);
+    expect((await claimDueReminders(pool, "2026-12-16")).map((r) => r.day)).toEqual([30]);
+    await expect(endTenant(pool, tenant.id, { reason: "terminated", today: "2026-12-20" }, "user_sam")).rejects.toThrow(/after 90 days/);
+    const [inv] = (await pool.query("select id from control.subscription_invoices where tenant_id = $1", [tenant.id])).rows;
+    await markSubscriptionInvoicePaid(pool, inv.id, "user_sam");
+    expect(await at("2027-02-14")).toBe("none");
+  });
+
+  it("the exit export holds the documented spreadsheets and every invoice as issued", async () => {
+    const { zip, counts } = await exitExport(pool, s(), "Alpha");
+    const files = unzipSync(zip);
+    expect(Object.keys(files)).toEqual(expect.arrayContaining(["README.md", "reservations.csv", "guests.csv", "companies.csv", "folio_charges.csv", "payments.csv", "receipts.csv", "invoices.csv"]));
+    expect(strFromU8(files["README.md"]!)).toContain("Columns: confirmation_number, reservation_id");
+    expect(strFromU8(files["reservations.csv"]!).replace(/^\uFEFF/, "").split("\r\n")[0]).toBe("confirmation_number;reservation_id;property;status;arrival;departure;room_type;rate_plan;guest_id;adults;children;source;channel;created_at;cancelled_at");
+    expect(counts["guests.csv"]).toBe(0);
+  });
+
+  it("an ended tenant is deleted 90 days later, schema and all, and the deletion is logged", async () => {
+    const due = await endTenant(pool, tenant.id, { reason: "cancelled", today: "2027-03-01" }, owner);
+    expect(due).toBe("2027-05-30");
+    expect(await deleteEndedTenants(pool, "2027-05-29")).toEqual([]);
+    expect(await deleteEndedTenants(pool, "2027-05-30")).toEqual(["alpha"]);
+    expect((await pool.query("select 1 from pg_namespace where nspname = $1", [s()])).rowCount).toBe(0);
+    expect((await pool.query("select slug, ended_reason, deleted_by from control.tenant_deletions")).rows).toEqual([{ slug: "alpha", ended_reason: `cancelled by ${owner}`, deleted_by: "deletion job" }]);
+    // our own invoices to the customer are kept for the statutory period
+    expect((await pool.query("select number from control.subscription_invoices")).rows).toEqual([{ number: "HS-2026-00001" }]);
   });
 });

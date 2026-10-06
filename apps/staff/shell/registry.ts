@@ -99,6 +99,7 @@ export const MODULES: ModuleDef[] = [
   { id: "city_tax_report", group: "reports", label: "module.city_tax_report", icon: "Landmark", hue: "#6b7280", href: "/city-tax-report", requiresProperty: "view_financial_reports" },
   { ...soon("outlets", "front_desk", "module.outlets", "UtensilsCrossed", "#e2552b", 60), requiresModule: "point_of_sale" },
   { id: "settings_modules", group: "settings", label: "module.settings_modules", icon: "LayoutGrid", hue: "#7c5cff", href: "/settings/modules", requires: "manage_modules" },
+  { id: "settings_exit", group: "settings", label: "module.settings_exit", icon: "LogOut", hue: "#6b7280", href: "/settings/exit", requires: "delete_tenant" },
   { id: "settings_subscription", group: "settings", label: "module.settings_subscription", icon: "CreditCard", hue: "#1a9d5a", href: "/settings/subscription", requires: "manage_subscription" },
   { id: "settings_tenant", group: "settings", label: "module.settings_tenant", icon: "Palette", hue: "#0071e3", href: "/settings/tenant", requires: "manage_tenant_settings" },
   { id: "settings_legal_entities", group: "settings", label: "module.settings_legal_entities", icon: "Landmark", hue: "#4f5bd5", href: "/settings/legal-entities", requires: "manage_legal_entities" },

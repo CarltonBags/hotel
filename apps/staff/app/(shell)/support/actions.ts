@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { endSupportAccess, reportIncident, scheduleMaintenance, setBankTransfer, setPrice, startSupportAccess, updateIncident } from "@hoteloftware/db";
+import { endSupportAccess, endTenant, markSubscriptionInvoicePaidByNumber, reportIncident, scheduleMaintenance, setBankTransfer, setPrice, startSupportAccess, updateIncident } from "@hoteloftware/db";
 import { todayIn, zonedInstant, type IncidentState } from "@hoteloftware/domain";
 import { authorize } from "@/lib/authorize";
 import { isSupportConsoleUser } from "@/lib/support";
@@ -76,6 +76,25 @@ export async function setPriceAction(_prev: FormState, formData: FormData): Prom
     const amount = field(formData, "amount");
     await setPrice(pool(), { key: field(formData, "key"), unit: unit === "property" ? "property" : unit === "percent" ? "percent" : "room", amount: amount ? Number(amount.replace(",", ".")) : Number.NaN, validFrom: field(formData, "validFrom") }, userId, todayIn("Europe/Berlin"));
     return { ok: true, message: "Price saved." };
+  });
+}
+
+/** A subscription invoice paid (from the bank statement, until the provider reports it). */
+export async function markPaidAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const userId = await supportStaffId();
+    const number = field(formData, "number");
+    await markSubscriptionInvoicePaidByNumber(pool(), number, userId);
+    return { ok: true, message: `${number} paid.` };
+  });
+}
+
+/** Termination by us, after 90 days of non-payment: the customer's data goes 90 days later. */
+export async function terminateAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  return formAction(async () => {
+    const userId = await supportStaffId();
+    const due = await endTenant(pool(), field(formData, "tenantId"), { reason: "terminated", today: todayIn("Europe/Berlin") }, userId);
+    return { ok: true, message: `Terminated; the data is deleted on ${due}.` };
   });
 }
 

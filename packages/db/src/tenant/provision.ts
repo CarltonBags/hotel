@@ -84,15 +84,20 @@ export async function setTenantAccent(pool: Pool, tenantId: string, accent: stri
   await pool.query("update control.tenants set accent = $2 where id = $1", [tenantId, accent]);
 }
 
-/** Delete a tenant that never went live, with all its data: schema, users, sessions, roles (control rows cascade). A live tenant leaves by the exit process instead. */
-export async function deleteTenant(pool: Pool, tenantId: string): Promise<void> {
+/**
+ * Delete a tenant with all its data: schema, users, sessions, roles (control
+ * rows cascade), logged. Only one that never went live, or one whose end is
+ * recorded (the exit process, ticket 89).
+ */
+export async function deleteTenant(pool: Pool, tenantId: string, deletedBy = "system"): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const t = (await client.query<{ schema_name: string; live_at: Date | null }>("select schema_name, live_at from control.tenants where id = $1 for update", [tenantId])).rows[0];
+    const t = (await client.query<{ schema_name: string; slug: string; name: string; live_at: Date | null; ended_at: Date | null; ended_reason: string | null }>("select schema_name, slug, name, live_at, ended_at, ended_reason from control.tenants where id = $1 for update", [tenantId])).rows[0];
     if (!t) throw new Error("Tenant not found");
-    if (t.live_at) throw new Error("A live tenant is not deleted here");
+    if (t.live_at && !t.ended_at) throw new Error("A live tenant is deleted only after its end");
     assertTenantSchemaName(t.schema_name);
+    await client.query("insert into control.tenant_deletions (tenant_id, slug, name, ended_at, ended_reason, deleted_by) values ($1, $2, $3, $4, $5, $6)", [tenantId, t.slug, t.name, t.ended_at, t.ended_reason, deletedBy]);
     await client.query(`drop schema "${t.schema_name}" cascade`);
     await client.query("delete from control.tenants where id = $1", [tenantId]);
     await client.query("commit");

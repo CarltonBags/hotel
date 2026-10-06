@@ -254,3 +254,4 @@ export * from "./registration";
 export * from "./budget";
 export * from "./report-builder";
 export * from "./subscription";
+export * from "./non-payment";

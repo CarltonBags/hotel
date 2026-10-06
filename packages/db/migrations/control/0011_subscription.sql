@@ -64,7 +64,8 @@ create table control.room_counts (
 -- the monthly invoice per Legal Entity of the customer, numbered without gaps
 create table control.subscription_invoices (
   id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references control.tenants(id) on delete cascade,
+  -- no cascade: our own issued invoices are kept for the statutory period after a customer is deleted (tenant_deletions names it)
+  tenant_id uuid not null,
   legal_entity_id uuid not null,
   month date not null,
   constraint subscription_invoices_once unique (tenant_id, legal_entity_id, month),
