@@ -69,6 +69,8 @@ export interface Charge {
 export interface Folio {
   id: string;
   number: number;
+  /** The group's Master Folio (ticket 59): on a reservation's view, only this reservation's Charges on it. */
+  master: { groupId: string; groupName: string } | null;
   billTo: "guest" | "company";
   billToId: string;
   billToName: string;
@@ -108,12 +110,14 @@ interface ResRow {
   legal_entity_id: string;
   /** The property's open Business Date (ticket 32). */
   businessDate: string;
+  /** The group the reservation was booked for (ticket 59). */
+  group_id: string | null;
 }
 
 const RES_SELECT = `select r.id, r.property_id, r.rate_plan_id, r.status, to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
     r.primary_guest_id, coalesce(b.booker_company_id, b.rate_code_company_id) as company_id, p.legal_entity_id,
-    to_char(p.business_date, 'YYYY-MM-DD') as "businessDate"
-  from reservations r join bookings b on b.id = r.booking_id join properties p on p.id = r.property_id where r.id = $1`;
+    to_char(p.business_date, 'YYYY-MM-DD') as "businessDate", gh.group_id
+  from reservations r join bookings b on b.id = r.booking_id join properties p on p.id = r.property_id left join group_holdings gh on gh.id = r.group_holding_id where r.id = $1`;
 
 /** The reservation row locked for a Charge write (posting, voiding, moving: no effect on Availability or prices). */
 async function loadReservation(tx: PoolClient, id: string): Promise<ResRow> {
@@ -151,6 +155,11 @@ async function ensureFolios(tx: PoolClient, res: ResRow, userId: string): Promis
   const { rows } = await tx.query("select 1 from folios where reservation_id = $1 limit 1", [res.id]);
   if (rows.length) return;
   await tx.query("insert into folios (reservation_id, number, bill_to_guest_id, created_by) values ($1, 1, $2, $3)", [res.id, res.primary_guest_id, userId]);
+  // a group's reservation: the group's Routing Rules send their categories to its Master Folio (the organiser pays there, not on a folio per room)
+  if (res.group_id) {
+    await routeToMasterFolio(tx, res.id, res.group_id, userId);
+    return;
+  }
   if (!res.company_id) return;
   const folio = await tx.query<{ id: string }>("insert into folios (reservation_id, number, bill_to_company_id, created_by) values ($1, 2, $2, $3) returning id", [res.id, res.company_id, userId]);
   await tx.query(
@@ -158,6 +167,39 @@ async function ensureFolios(tx: PoolClient, res: ResRow, userId: string): Promis
      select $1, unnest(routing), $2 from companies where id = $3`,
     [res.id, folio.rows[0]!.id, res.company_id],
   );
+}
+
+/**
+ * The group's Master Folio (ticket 59), made on first need: one per group,
+ * billed to the organiser (a Company or a person). Charges on it keep the
+ * reservation they come from.
+ */
+export async function masterFolioIn(tx: PoolClient, groupId: string, userId: string): Promise<string> {
+  const have = (await tx.query<{ id: string }>("select id from folios where group_id = $1", [groupId])).rows[0];
+  if (have) return have.id;
+  const g = (await tx.query<{ organiser_company_id: string | null; organiser_guest_id: string | null }>("select organiser_company_id, organiser_guest_id from groups where id = $1 for update", [groupId])).rows[0];
+  if (!g) throw new Error("Group not found");
+  if (!g.organiser_company_id && !g.organiser_guest_id) throw new Error("The Master Folio is billed to the organiser: set the group's organiser first");
+  const again = (await tx.query<{ id: string }>("select id from folios where group_id = $1", [groupId])).rows[0];
+  if (again) return again.id;
+  return (await tx.query<{ id: string }>("insert into folios (group_id, number, bill_to_guest_id, bill_to_company_id, created_by) values ($1, 1, $2, $3, $4) returning id", [groupId, g.organiser_guest_id, g.organiser_company_id, userId])).rows[0]!.id;
+}
+
+/** The group's Routing Rules on one of its reservations: those categories go to the Master Folio (a rule the reservation has already is kept). */
+export async function routeToMasterFolio(tx: PoolClient, reservationId: string, groupId: string, userId: string): Promise<void> {
+  const cats = (await tx.query<{ category: RoutingCategory }>("select category from group_routing where group_id = $1", [groupId])).rows;
+  if (!cats.length) return;
+  const master = await masterFolioIn(tx, groupId, userId);
+  await tx.query(
+    "insert into reservation_routing (reservation_id, category, folio_id) select $1, unnest($2::text[]), $3 on conflict (reservation_id, category) do nothing",
+    [reservationId, cats.map((c) => c.category), master],
+  );
+}
+
+/** A folio a Charge of the reservation may go to: its own, or its group's Master Folio. */
+async function folioOfReservation(tx: PoolClient, res: ResRow, folioId: string): Promise<boolean> {
+  const { rows } = await tx.query("select 1 from folios where id = $1 and (reservation_id = $2 or (group_id is not null and group_id = $3))", [folioId, res.id, res.group_id]);
+  return rows.length > 0;
 }
 
 interface NewCharge {
@@ -662,8 +704,7 @@ export async function moveCharge(pool: Pool, schema: string, reservationId: stri
   if (!isUuid(folioId)) throw new Error("Folio not found");
   await withTenant(pool, schema, async (tx) => {
     const res = await chargeReservation(tx, reservationId, chargeId);
-    const folio = await tx.query("select 1 from folios where id = $1 and reservation_id = $2", [folioId, res.id]);
-    if (!folio.rows.length) throw new Error("Folio not found on this reservation");
+    if (!(await folioOfReservation(tx, res, folioId))) throw new Error("Folio not found on this reservation");
     const { rows } = await tx.query<{ folio_id: string; invoice_id: string | null }>("select folio_id, invoice_id from charges where id = $1 and voided_at is null", [chargeId]);
     if (!rows[0]) throw new Error("A voided Charge cannot be moved");
     if (rows[0].invoice_id) throw new Error("The Charge is invoiced and cannot be moved");
@@ -713,8 +754,7 @@ export async function setRouting(pool: Pool, schema: string, reservationId: stri
       return;
     }
     if (!isUuid(folioId)) throw new Error("Folio not found");
-    const folio = await tx.query("select 1 from folios where id = $1 and reservation_id = $2", [folioId, res.id]);
-    if (!folio.rows.length) throw new Error("Folio not found on this reservation");
+    if (!(await folioOfReservation(tx, res, folioId))) throw new Error("Folio not found on this reservation");
     await tx.query(
       "insert into reservation_routing (reservation_id, category, folio_id) values ($1, $2, $3) on conflict (reservation_id, category) do update set folio_id = excluded.folio_id",
       [res.id, category, folioId],
@@ -751,11 +791,14 @@ interface ChargeRow {
 export async function loadFolios(pool: Pool, schema: string, reservationId: string): Promise<FolioView> {
   if (!isUuid(reservationId)) return { folios: [], routing: [] };
   return withTenant(pool, schema, async (tx) => {
-    const folios = await tx.query<{ id: string; number: number; guest_id: string | null; company_id: string | null; name: string }>(
+    // the reservation's own folios, then its group's Master Folio (where it has Charges or routing)
+    const folios = await tx.query<{ id: string; number: number; guest_id: string | null; company_id: string | null; name: string; group_id: string | null; group_name: string | null }>(
       `select f.id, f.number, f.bill_to_guest_id as guest_id, f.bill_to_company_id as company_id,
-         coalesce(c.name, trim(g.first_name || ' ' || g.last_name)) as name
-       from folios f left join guests g on g.id = f.bill_to_guest_id left join companies c on c.id = f.bill_to_company_id
-       where f.reservation_id = $1 order by f.number`,
+         coalesce(c.name, trim(g.first_name || ' ' || g.last_name)) as name, f.group_id, gr.name as group_name
+       from folios f left join guests g on g.id = f.bill_to_guest_id left join companies c on c.id = f.bill_to_company_id left join groups gr on gr.id = f.group_id
+       where f.reservation_id = $1
+          or f.id in (select folio_id from reservation_routing where reservation_id = $1 union select folio_id from charges where reservation_id = $1)
+       order by f.group_id is not null, f.number`,
       [reservationId],
     );
     const charges = await tx.query<ChargeRow>(
@@ -800,6 +843,7 @@ export async function loadFolios(pool: Pool, schema: string, reservationId: stri
         return {
           id: f.id,
           number: f.number,
+          master: f.group_id ? { groupId: f.group_id, groupName: f.group_name ?? "" } : null,
           billTo: f.company_id ? "company" : "guest",
           billToId: (f.company_id ?? f.guest_id)!,
           billToName: f.name,

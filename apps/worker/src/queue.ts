@@ -4,7 +4,7 @@ import type { Pool } from "pg";
 import { notifyGroupDuties, pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { runGroupDuties, connectedProperties, enqueueFullPushes, pruneChannelOutbox, claimDueReminders, deleteEndedTenants, deleteExpiredConversations, deleteOldUnassignedWhatsApp, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
+import { remindGroupDeposits, runGroupDuties, connectedProperties, enqueueFullPushes, pruneChannelOutbox, claimDueReminders, deleteEndedTenants, deleteExpiredConversations, deleteOldUnassignedWhatsApp, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -53,7 +53,7 @@ export const QUEUES = {
   /** Every minute: Receipts signed, days closed for DSFinV-K, one job per tenant (ticket 51). */
   fiscalAll: "fiscal.all",
   fiscal: "fiscal",
-  /** Hourly: Held Rooms released on their date, warnings 3 days ahead, Tentative groups lapsed, one job per tenant (ticket 58). */
+  /** Hourly: Held Rooms released on their date, warnings 3 days ahead, Tentative groups lapsed, deposits reminded (ticket 59), one job per tenant (ticket 58). */
   groupsAll: "groups.duties.all",
   groups: "groups.duties",
   /** At night: the months' signed data and DSFinV-K exports archived outside the provider. */
@@ -329,7 +329,9 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     for (const job of jobs) {
       const tenant = await findTenantById(pool, job.data.tenantId);
       if (!tenant) continue;
-      const d = await runGroupDuties(pool, tenant.schemaName);
+      // the release has committed: a failing deposit look must not swallow its notices
+      const depositsDue = await remindGroupDeposits(pool, tenant.schemaName).catch((err) => (console.error("[groups] deposits", err), []));
+      const d = { ...(await runGroupDuties(pool, tenant.schemaName)), depositsDue };
       await notifyGroupDuties(pool, tenant, d).catch((err) => console.error("[groups] not told", err));
       if (d.released.length || d.lapsed.length) console.log(`[groups] ${tenant.slug}: released ${d.released.length}, lapsed ${d.lapsed.length}`);
     }

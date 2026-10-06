@@ -13,7 +13,7 @@ import { formAction, type FormState } from "@/lib/form";
 export async function issueInvoiceAction(reservationId: string, folioId: string): Promise<FormState> {
   return formAction(async () => {
     const { schema, tenantId, reservation, userId } = await reservationScope(reservationId, "issue_invoices");
-    if (!(await loadFolios(pool(), schema, reservation.id)).folios.some((f) => f.id === String(folioId))) throw new Error("Folio not found on this reservation");
+    if (!(await loadFolios(pool(), schema, reservation.id)).folios.some((f) => f.id === String(folioId) && !f.master)) throw new Error("Folio not found on this reservation");
     const inv = await issueInvoice(pool(), schema, String(folioId), userId);
     revalidatePath(`/reservations/${reservation.id}`);
     await announceReservations(tenantId, reservation.propertyId);

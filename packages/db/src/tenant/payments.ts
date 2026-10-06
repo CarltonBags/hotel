@@ -300,8 +300,8 @@ export function failureOf(err: unknown): { definite: boolean; message: string } 
 /** Open amount on the guest's own folios: Charges less payments received. */
 export async function guestBalance(tx: PoolClient, reservationId: string): Promise<number> {
   const { rows } = await tx.query<{ b: string }>(
-    `select (select coalesce(sum(ch.amount), 0) from charges ch join folios f on f.id = ch.folio_id where ch.reservation_id = $1 and ch.voided_at is null and f.bill_to_guest_id is not null)
-          - (select coalesce(sum(pa.amount), 0) from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null) as b`,
+    `select (select coalesce(sum(ch.amount), 0) from charges ch join folios f on f.id = ch.folio_id where ch.reservation_id = $1 and ch.voided_at is null and f.bill_to_guest_id is not null and f.group_id is null)
+          - (select coalesce(sum(pa.amount), 0) from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null and f.group_id is null) as b`,
     [reservationId],
   );
   return roundMoney(Number(rows[0]!.b));
@@ -334,7 +334,7 @@ export async function amountDueIn(tx: PoolClient, reservationId: string): Promis
   if (r.status !== "confirmed") return guestBalance(tx, reservationId);
   const nights = (await tx.query<{ total: string }>("select total from reservation_nights where reservation_id = $1 order by date", [reservationId])).rows.map((n) => Number(n.total));
   const received = Number((await tx.query<{ n: string }>(
-    "select coalesce(sum(pa.amount), 0) as n from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null",
+    "select coalesce(sum(pa.amount), 0) as n from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null and f.group_id is null",
     [reservationId],
   )).rows[0]!.n);
   return depositDue({ kind: r.kind, depositPercent: r.deposit_percent === null ? null : Number(r.deposit_percent) }, nights, received);

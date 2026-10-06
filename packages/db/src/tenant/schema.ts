@@ -671,6 +671,7 @@ export const reservations = pgTable(
     precheckinAt: timestamp("precheckin_at", { withTimezone: true }),
     expressCheckoutAt: timestamp("express_checkout_at", { withTimezone: true }),
     groupHoldingId: uuid("group_holding_id").references((): AnyPgColumn => groupHoldings.id),
+    namePending: boolean("name_pending").notNull().default(false),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -762,16 +763,19 @@ export const folios = pgTable(
   "folios",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    reservationId: uuid("reservation_id").references(() => reservations.id),
     number: integer("number").notNull(),
     billToGuestId: uuid("bill_to_guest_id").references(() => guests.id),
     billToCompanyId: uuid("bill_to_company_id").references(() => companies.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdBy: text("created_by").notNull(),
+    groupId: uuid("group_id").references((): AnyPgColumn => groups.id),
   },
   (t) => [
     unique("folios_reservation_id_number_key").on(t.reservationId, t.number),
     check("folios_bill_to_check", sql`(${t.billToGuestId} is null) <> (${t.billToCompanyId} is null)`),
+    check("folios_owner_check", sql`(${t.reservationId} is null) <> (${t.groupId} is null)`),
+    uniqueIndex("folios_group_idx").on(t.groupId).where(sql`${t.groupId} is not null`),
   ],
 );
 
@@ -790,7 +794,7 @@ export const charges = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     folioId: uuid("folio_id").notNull().references(() => folios.id),
-    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    reservationId: uuid("reservation_id").references(() => reservations.id),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
     serviceId: uuid("service_id").references(() => services.id),
     description: text("description").notNull(),
@@ -897,7 +901,7 @@ export const payments = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     realAt: timestamp("real_at", { withTimezone: true }),
     folioId: uuid("folio_id").notNull().references(() => folios.id),
-    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    reservationId: uuid("reservation_id").references(() => reservations.id),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
     tender: text("tender").notNull(),
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
@@ -997,7 +1001,7 @@ export const invoices = pgTable(
     test: boolean("test").notNull().default(sql`in_test_mode()`),
     legalEntityId: uuid("legal_entity_id").notNull().references(() => legalEntities.id),
     propertyId: uuid("property_id").notNull().references(() => properties.id),
-    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    reservationId: uuid("reservation_id").references(() => reservations.id),
     folioId: uuid("folio_id").notNull().references(() => folios.id),
     kind: text("kind").notNull(),
     number: text("number").notNull(),
@@ -1624,8 +1628,9 @@ export const mailOutbox = pgTable(
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
     propertyId: uuid("property_id").references(() => properties.id),
     voucherId: uuid("voucher_id").references((): AnyPgColumn => vouchers.id, { onDelete: "cascade" }),
+    groupId: uuid("group_id").references((): AnyPgColumn => groups.id, { onDelete: "cascade" }),
   },
-  (t) => [check("mail_outbox_recipient_check", sql`(${t.toUserId} is null) <> (${t.voucherId} is null)`), check("mail_outbox_attachment_check", sql`(${t.attachment} is null) = (${t.attachmentName} is null)`), index("mail_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
+  (t) => [check("mail_outbox_recipient_check", sql`num_nonnulls(${t.toUserId}, ${t.voucherId}, ${t.groupId}) = 1`), check("mail_outbox_attachment_check", sql`(${t.attachment} is null) = (${t.attachmentName} is null)`), index("mail_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
 );
 
 export const propertyOutages = pgTable(
@@ -2499,6 +2504,7 @@ export const groups = pgTable(
     ratePlanId: uuid("rate_plan_id").unique().references(() => ratePlans.id),
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    roomingToken: text("rooming_token").unique("groups_rooming_token_key"),
   },
   (t) => [
     check("groups_name_check", sql`length(trim(${t.name})) between 1 and 120`),
@@ -2533,6 +2539,44 @@ export const groupHeldRooms = pgTable(
   },
   (t) => [primaryKey({ columns: [t.holdingId, t.roomTypeId, t.date] }), check("group_held_rooms_rooms_check", sql`${t.rooms} between 0 and 999`), index("group_held_rooms_type_idx").on(t.roomTypeId, t.date)],
 );
+
+export const groupRouting = pgTable(
+  "group_routing",
+  {
+    groupId: uuid("group_id").notNull().references(() => groups.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.groupId, t.category] }), check("group_routing_category_check", sql`${t.category} in ('accommodation', 'package', 'extras', 'city_tax')`)],
+);
+
+export const groupDeposits = pgTable(
+  "group_deposits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    groupId: uuid("group_id").notNull().references(() => groups.id, { onDelete: "cascade" }),
+    dueDate: date("due_date").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    remindedAt: timestamp("reminded_at", { withTimezone: true }),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [check("group_deposits_amount_check", sql`${t.amount} > 0`), index("group_deposits_group_idx").on(t.groupId, t.dueDate)],
+);
+
+export const groupRegistrations = pgTable("group_registrations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  holdingId: uuid("holding_id").notNull().unique("group_registrations_holding_key").references(() => groupHoldings.id, { onDelete: "cascade" }),
+  leaderFirstName: text("leader_first_name").notNull(),
+  leaderLastName: text("leader_last_name").notNull(),
+  leaderNationality: char("leader_nationality", { length: 2 }).notNull(),
+  leaderBirthDate: date("leader_birth_date"),
+  leaderAddress: text("leader_address").notNull().default(""),
+  members: jsonb("members").notNull().default(sql`'[]'::jsonb`),
+  signedOnPaperAt: timestamp("signed_on_paper_at", { withTimezone: true }),
+  createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+});
 
 export const tenantSchema = {
   tenantSettings,
@@ -2656,4 +2700,7 @@ export const tenantSchema = {
   groups,
   groupHoldings,
   groupHeldRooms,
+  groupRouting,
+  groupDeposits,
+  groupRegistrations,
 };

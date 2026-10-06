@@ -110,7 +110,8 @@ async function nextNumber(tx: PoolClient, legalEntityId: string, kind: RangeKind
 // ── document parts ──
 
 interface Context {
-  reservationId: string;
+  /** Null for the Master Folio of a group (ticket 59). */
+  reservationId: string | null;
   propertyId: string;
   legalEntityId: string;
   currency: string;
@@ -142,6 +143,40 @@ async function contextOf(tx: PoolClient, reservationId: string): Promise<Context
     arrival: r.arrival,
     departure: r.departure,
     status: r.status,
+    country: r.country,
+    timeZone: r.time_zone,
+  };
+}
+
+/**
+ * A group's Master Folio: the group's property, its name as the reference.
+ * Money is a deposit while an arrival still lies ahead of the Business Date
+ * (for a Series, the next departure's); its dates are that arrival's.
+ */
+async function groupContextOf(tx: PoolClient, groupId: string): Promise<Context> {
+  const r = (await tx.query<{ property_id: string; legal_entity_id: string; currency: string; today: string; name: string; arrival: string | null; departure: string | null; country: string; time_zone: string; ahead: boolean }>(
+    `select g.property_id, p.legal_entity_id, p.currency, p.time_zone, to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today, g.name, p.country,
+       coalesce(
+         (select to_char(min(arrival), 'YYYY-MM-DD') from group_holdings where group_id = g.id and arrival > coalesce(p.business_date, (now() at time zone p.time_zone)::date)),
+         (select to_char(min(arrival), 'YYYY-MM-DD') from group_holdings where group_id = g.id)) as arrival,
+       coalesce(
+         (select to_char(departure, 'YYYY-MM-DD') from group_holdings where group_id = g.id and arrival > coalesce(p.business_date, (now() at time zone p.time_zone)::date) order by arrival limit 1),
+         (select to_char(max(departure), 'YYYY-MM-DD') from group_holdings where group_id = g.id)) as departure,
+       exists (select 1 from group_holdings where group_id = g.id and arrival > coalesce(p.business_date, (now() at time zone p.time_zone)::date)) as ahead
+     from groups g join properties p on p.id = g.property_id where g.id = $1`,
+    [groupId],
+  )).rows[0]!;
+  return {
+    reservationId: null,
+    propertyId: r.property_id,
+    legalEntityId: r.legal_entity_id,
+    currency: r.currency.trim(),
+    today: r.today,
+    confirmation: r.name,
+    arrival: r.arrival ?? r.today,
+    departure: r.departure ?? addDays(r.today, 1),
+    // before an arrival: a payment is a deposit
+    status: r.ahead ? "confirmed" : "checked_in",
     country: r.country,
     timeZone: r.time_zone,
   };
@@ -253,19 +288,23 @@ async function storeInvoice(tx: PoolClient, ctx: Stored, folioId: string, issued
  * Deposit Invoices not yet netted are deducted with their VAT.
  */
 async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: string): Promise<IssuedInvoice | null> {
-  const charges = (await tx.query<{ id: string; description: string; service_date: string; amount: string; unit_price: string; quantity: string; tax_code: string; tax_rate: string; origin: string }>(
-    `select ch.id, ch.description, to_char(ch.service_date, 'YYYY-MM-DD') as service_date, ch.amount, ch.unit_price, ch.quantity, t.code as tax_code, ch.tax_rate, ch.origin
-     from charges ch join tax_codes t on t.id = ch.tax_code_id
-     where ch.folio_id = $1 and ch.invoice_id is null and ch.voided_at is null order by ch.service_date, ch.posted_at`,
+  // on a group's Master Folio every line names the room and guest it is for (the invoice lists rooms and nights)
+  const charges = (await tx.query<{ id: string; description: string; service_date: string; amount: string; unit_price: string; quantity: string; tax_code: string; tax_rate: string; origin: string; room: string | null; guest: string | null }>(
+    `select ch.id, ch.description, to_char(ch.service_date, 'YYYY-MM-DD') as service_date, ch.amount, ch.unit_price, ch.quantity, t.code as tax_code, ch.tax_rate, ch.origin,
+       case when f.group_id is not null then (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = ch.reservation_id and a.from_date <= ch.service_date and a.to_date > ch.service_date limit 1) end as room,
+       case when f.group_id is not null then (select trim(g.first_name || ' ' || g.last_name) from reservations r join guests g on g.id = r.primary_guest_id where r.id = ch.reservation_id) end as guest
+     from charges ch join tax_codes t on t.id = ch.tax_code_id join folios f on f.id = ch.folio_id
+     where ch.folio_id = $1 and ch.invoice_id is null and ch.voided_at is null order by ch.service_date, room nulls last, ch.posted_at`,
     [folioId],
   )).rows;
   if (charges.length === 0) return null;
   const pending = (await tx.query("select 1 from payments where folio_id = $1 and status = 'pending' and refund_of is null limit 1", [folioId])).rows.length;
   if (pending) throw new Error("A payment is still waiting at the reader; finish or cancel it first");
   const billTo = await billToOf(tx, folioId, ctx.country);
+  const roomAndGuest = (c: (typeof charges)[number]) => (c.guest ? `${c.room ? `${LABELS[billTo.language].room} ${c.room} · ` : ""}${c.guest}: ` : "");
   const lines: InvoiceCharge[] = charges.map((c) => ({
     // the early-departure fee is stored in English; the invoice speaks the buyer's language
-    description: c.origin === "fee" ? LABELS[billTo.language].earlyDepartureFee : c.description,
+    description: roomAndGuest(c) + (c.origin === "fee" ? LABELS[billTo.language].earlyDepartureFee : c.description),
     serviceDate: c.service_date,
     amount: Number(c.amount),
     unitPrice: Number(c.unit_price),
@@ -332,11 +371,16 @@ async function issueIn(tx: PoolClient, ctx: Context, folioId: string, userId: st
 export async function issueInvoice(pool: Pool, schema: string, folioId: string, userId: string): Promise<IssuedInvoice> {
   if (!isUuid(folioId)) throw new Error("Folio not found");
   return withTenant(pool, schema, async (tx) => {
-    const f = (await tx.query<{ reservation_id: string; property_id: string }>("select f.reservation_id, r.property_id from folios f join reservations r on r.id = f.reservation_id where f.id = $1", [folioId])).rows[0];
+    const f = (await tx.query<{ reservation_id: string | null; group_id: string | null; property_id: string }>(
+      "select f.reservation_id, f.group_id, coalesce(r.property_id, g.property_id) as property_id from folios f left join reservations r on r.id = f.reservation_id left join groups g on g.id = f.group_id where f.id = $1",
+      [folioId],
+    )).rows[0];
     if (!f) throw new Error("Folio not found");
     await lockProperty(tx, f.property_id);
-    await tx.query("select 1 from reservations where id = $1 for update", [f.reservation_id]);
-    const issued = await issueIn(tx, await contextOf(tx, f.reservation_id), folioId, userId);
+    // a reservation's folio, or a group's Master Folio (ticket 59)
+    if (f.reservation_id) await tx.query("select 1 from reservations where id = $1 for update", [f.reservation_id]);
+    else await tx.query("select 1 from groups where id = $1 for update", [f.group_id]);
+    const issued = await issueIn(tx, f.reservation_id ? await contextOf(tx, f.reservation_id) : await groupContextOf(tx, f.group_id!), folioId, userId);
     if (!issued) throw new Error("The folio has no open Charges to invoice");
     return issued;
   });
@@ -361,6 +405,33 @@ export async function stayComposition(tx: PoolClient, reservationId: string): Pr
     [reservationId],
   )).rows;
   return rows.map((x) => ({ taxCode: x.code, rate: Number(x.rate), gross: Number(x.gross) }));
+}
+
+/** A group's stays together, by Tax Code: what a deposit on its Master Folio is taxed by. */
+async function groupComposition(tx: PoolClient, groupId: string): Promise<{ taxCode: string; rate: number; gross: number }[]> {
+  const ids = (await tx.query<{ id: string }>("select r.id from reservations r join group_holdings h on h.id = r.group_holding_id where h.group_id = $1 and r.status = 'confirmed'", [groupId])).rows;
+  // no reservations yet (the organiser pays first): the Held Rooms at the contract prices, taxed like the group's accommodation
+  if (!ids.length) {
+    return (await tx.query<{ code: string; rate: string; gross: string }>(
+      `select t.code, tr.rate, sum(hr.rooms * ra.price) as gross
+       from group_held_rooms hr join group_holdings h on h.id = hr.holding_id join groups g on g.id = h.group_id
+       join rates ra on ra.rate_plan_id = g.rate_plan_id and ra.room_type_id = hr.room_type_id and ra.date = hr.date
+       join rate_plans pl on pl.id = g.rate_plan_id left join rate_plans b on b.id = pl.base_plan_id
+       join services s on s.id = coalesce(pl.accommodation_service_id, b.accommodation_service_id) join tax_codes t on t.id = s.tax_code_id
+       cross join lateral (select rate from tax_code_rates where tax_code_id = t.id and valid_from <= hr.date order by valid_from desc limit 1) tr
+       where g.id = $1 and hr.rooms > 0 group by t.code, tr.rate order by t.code`,
+      [groupId],
+    )).rows.filter((x) => Number(x.gross) > 0).map((x) => ({ taxCode: x.code, rate: Number(x.rate), gross: Number(x.gross) }));
+  }
+  const sum = new Map<string, { taxCode: string; rate: number; gross: number }>();
+  for (const { id } of ids) {
+    for (const x of await stayComposition(tx, id)) {
+      const k = `${x.taxCode}|${x.rate}`;
+      const cur = sum.get(k);
+      sum.set(k, cur ? { ...cur, gross: roundMoney(cur.gross + x.gross) } : { ...x });
+    }
+  }
+  return [...sum.values()].sort((a, b) => a.taxCode.localeCompare(b.taxCode));
 }
 
 /** Tenders whose money the hotel receives: a payment by them before check-in needs a Deposit Invoice. */
@@ -394,14 +465,16 @@ export async function depositIn(tx: PoolClient, paymentId: string, userId: strin
     [paymentId],
   )).rows[0];
   if (!p || p.status !== "succeeded" || p.refund_of || p.invoice_id || !RECEIVED.has(p.tender)) return null;
-  const ctx = await contextOf(tx, p.reservation_id);
+  // a payment on a group's Master Folio (ticket 59) is a deposit before the group's first arrival, taxed like its stays
+  const groupId = p.reservation_id ? null : (await tx.query<{ group_id: string }>("select group_id from folios where id = $1", [p.folio_id])).rows[0]!.group_id;
+  const ctx = groupId ? await groupContextOf(tx, groupId) : await contextOf(tx, p.reservation_id!);
   if (ctx.status !== "confirmed") return null;
-  const stay = await stayComposition(tx, p.reservation_id);
-  if (stay.length === 0) throw new Error("Money before check-in needs a Deposit Invoice: set the Rate Plan's Accommodation Service first (Settings → Rate Plans)");
+  const stay = groupId ? await groupComposition(tx, groupId) : await stayComposition(tx, p.reservation_id!);
+  if (stay.length === 0) throw new Error(groupId ? "A deposit of the group is taxed like its stays: set the contract prices of its Held Rooms first" : "Money before check-in needs a Deposit Invoice: set the Rate Plan's Accommodation Service first (Settings → Rate Plans)");
   const amount = Number(p.amount);
   const parts = allocateDeposit(amount, stay);
   const billTo = await billToOf(tx, p.folio_id, ctx.country);
-  const label = LABELS[billTo.language].depositLine;
+  const label = LABELS[billTo.language][groupId ? "groupDepositLine" : "depositLine"];
   const lines: InvoiceCharge[] = parts.map((x) => ({ description: label, serviceDate: ctx.arrival, amount: x.gross, unitPrice: x.gross, quantity: 1, taxCode: x.taxCode, taxRate: x.rate }));
   const totals = invoiceTotals(invoiceLines(lines), { paid: amount });
   const doc: InvoiceDocument = {
@@ -450,10 +523,10 @@ export async function listInvoices(pool: Pool, schema: string, reservationId: st
 }
 
 /** The frozen document of an issued invoice, to render as PDF or XML. */
-export async function invoiceDocument(pool: Pool, schema: string, invoiceId: string): Promise<InvoiceDocument & { reservationId: string; propertyId: string }> {
+export async function invoiceDocument(pool: Pool, schema: string, invoiceId: string): Promise<InvoiceDocument & { reservationId: string | null; propertyId: string }> {
   if (!isUuid(invoiceId)) throw new Error("Invoice not found");
   return withTenant(pool, schema, async (tx) => {
-    const r = (await tx.query<{ document: InvoiceDocument; reservation_id: string; property_id: string }>("select document, reservation_id, property_id from invoices where id = $1", [invoiceId])).rows[0];
+    const r = (await tx.query<{ document: InvoiceDocument; reservation_id: string | null; property_id: string }>("select document, reservation_id, property_id from invoices where id = $1", [invoiceId])).rows[0];
     if (!r) throw new Error("Invoice not found");
     return { ...r.document, reservationId: r.reservation_id, propertyId: r.property_id };
   });
@@ -482,7 +555,7 @@ export async function cancelInvoice(pool: Pool, schema: string, invoiceId: strin
     await lockProperty(tx, pre.property_id);
     await tx.query("select 1 from invoices where id = $1 for update", [invoiceId]);
     // read after the lock, in its own statement: a transfer matched meanwhile is seen
-    const inv = (await tx.query<{ id: string; kind: IssuedInvoice["kind"]; reservation_id: string; folio_id: string; document: InvoiceDocument; cancelled_by: string | null; netted_by: string | null; payment_id: string | null; matched: boolean }>(
+    const inv = (await tx.query<{ id: string; kind: IssuedInvoice["kind"]; reservation_id: string | null; folio_id: string; document: InvoiceDocument; cancelled_by: string | null; netted_by: string | null; payment_id: string | null; matched: boolean }>(
       `select i.id, i.kind, i.reservation_id, i.folio_id, i.document, i.cancelled_by, i.netted_by, i.payment_id,
          exists (select 1 from receivable_matches m where m.invoice_id = i.id) as matched
        from invoices i where i.id = $1`,
@@ -492,7 +565,7 @@ export async function cancelInvoice(pool: Pool, schema: string, invoiceId: strin
     if (inv.cancelled_by) throw new Error("This invoice is already cancelled");
     if (inv.netted_by) throw new Error("This Deposit Invoice is netted on a final invoice; cancel that one first");
     if (inv.matched) throw new Error("Money is matched to this invoice; it cannot be cancelled");
-    const ctx = await contextOf(tx, inv.reservation_id);
+    const ctx = inv.reservation_id ? await contextOf(tx, inv.reservation_id) : await groupContextOf(tx, (await tx.query<{ group_id: string }>("select group_id from folios where id = $1", [inv.folio_id])).rows[0]!.group_id);
     const original = inv.document;
     const doc: InvoiceDocument = {
       ...original,

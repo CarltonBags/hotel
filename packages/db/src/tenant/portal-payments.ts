@@ -301,9 +301,9 @@ export async function expressCheckoutView(pool: Pool, schema: string, key: strin
   return withTenant(pool, schema, async (tx) => {
     const r = await reservationByKey(tx, key);
     const { rows: lines } = await tx.query<{ description: string; amount: string }>(
-      `select ch.description, ch.amount from charges ch join folios f on f.id = ch.folio_id where ch.reservation_id = $1 and ch.voided_at is null and f.bill_to_guest_id is not null
+      `select ch.description, ch.amount from charges ch join folios f on f.id = ch.folio_id where ch.reservation_id = $1 and ch.voided_at is null and f.bill_to_guest_id is not null and f.group_id is null
        union all
-       select 'Payment', -pa.amount from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null`,
+       select 'Payment', -pa.amount from payments pa join folios f on f.id = pa.folio_id where pa.reservation_id = $1 and pa.status = 'succeeded' and f.bill_to_guest_id is not null and f.group_id is null`,
       [r.id],
     );
     const { rows: x } = await tx.query<{ express_checkout_at: Date | null }>("select express_checkout_at from reservations where id = $1", [r.id]);

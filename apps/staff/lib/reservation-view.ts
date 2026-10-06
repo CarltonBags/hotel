@@ -119,7 +119,8 @@ export async function reservationView(id: string, options: { propertyId?: string
     invoices,
     /** Folios with Charges not invoiced yet. */
     openFolios: folios.folios
-      .filter((f) => f.charges.some((c) => !c.voided && !c.invoiceId))
+      // the group's Master Folio is invoiced from the group (ticket 59)
+      .filter((f) => !f.master && f.charges.some((c) => !c.voided && !c.invoiceId))
       .map((f) => ({ id: f.id, label: fill(m["folio.label"], { n: String(f.number), name: f.billToName }) })),
     /** City Tax exemptions per person; null when the property has no City Tax Rule. */
     cityTax: cityTaxRule.rule
@@ -146,12 +147,12 @@ export async function reservationView(id: string, options: { propertyId?: string
       readers: readers.map((x) => ({ readerId: x.readerId, label: x.label })),
       testMode: provider.testMode,
       currency,
-      folios: folios.folios.map((f) => ({ id: f.id, number: f.number, billToName: f.billToName, gross: f.totals.gross, balance: f.balance, payments: f.payments })),
+      folios: folios.folios.filter((f) => !f.master).map((f) => ({ id: f.id, number: f.number, billToName: f.billToName, gross: f.totals.gross, balance: f.balance, payments: f.payments })),
       receipts,
       cash,
       holds,
       /** Open amount on the guest's own folios, what a hold capture takes by default. */
-      guestBalance: folios.folios.filter((f) => f.billTo === "guest").reduce((sum, f) => sum + f.balance, 0),
+      guestBalance: folios.folios.filter((f) => f.billTo === "guest" && !f.master).reduce((sum, f) => sum + f.balance, 0),
     },
   };
 }

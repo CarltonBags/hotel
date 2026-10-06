@@ -126,8 +126,18 @@ export async function notifyGroupDuties(
     released: { groupId: string; propertyId: string; groupName: string; arrival: string; rooms: number }[];
     releasingSoon: { groupId: string; propertyId: string; groupName: string; arrival: string; releaseDate: string; unsold: number }[];
     lapsed: { groupId: string; propertyId: string; groupName: string }[];
+    /** Deposit installments open after their date (ticket 59). */
+    depositsDue?: { groupId: string; propertyId: string; groupName: string; dueDate: string; open: number; mailed: boolean }[];
   },
 ): Promise<void> {
+  for (const r of d.depositsDue ?? []) {
+    await notifyWithRight(pool, tenant, "manage_groups", r.propertyId, {
+      kind: "group.deposit_due",
+      title: `${r.groupName}: deposit of ${r.dueDate} still open`,
+      body: `${r.open.toFixed(2)} not received yet. ${r.mailed ? "The organiser was reminded by mail." : "No organiser address on file: remind the organiser yourself."}`,
+      href: `/groups/${r.groupId}`,
+    });
+  }
   for (const r of d.releasingSoon) {
     await notifyWithRight(pool, tenant, "manage_groups", r.propertyId, { kind: "group.release_soon", title: `${r.groupName}: Held Rooms release on ${r.releaseDate}`, body: `${r.unsold} room(s) of the arrival on ${r.arrival} are not booked yet. Extend the Release Date before it passes if the group needs them.`, href: `/groups/${r.groupId}` });
   }

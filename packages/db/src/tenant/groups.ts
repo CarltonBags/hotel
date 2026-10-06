@@ -367,6 +367,8 @@ export interface GroupView {
   series: boolean;
   releaseDays: number;
   ratePlanId: string;
+  /** The organiser's link to fill in names (ticket 59), once made. */
+  roomingToken: string | null;
   holdings: {
     id: string;
     arrival: string;
@@ -383,9 +385,9 @@ export interface GroupView {
 /** A group with its holdings, per room type and night: held, picked up, unsold, free, the tentative warning and the contract price. */
 export async function groupView(pool: Pool, schema: string, groupId: string, viewer: Viewer): Promise<GroupView> {
   return withTenant(pool, schema, async (tx) => {
-    const g = (await tx.query<{ id: string; property_id: string; name: string; status: GroupStatus; organiser_company_id: string | null; company: string | null; organiser_guest_id: string | null; guest: string | null; contact: string; option_date: string | null; terms: string; reduction_rules: string; series: boolean; release_days: number; rate_plan_id: string }>(
+    const g = (await tx.query<{ id: string; property_id: string; name: string; status: GroupStatus; organiser_company_id: string | null; company: string | null; organiser_guest_id: string | null; guest: string | null; contact: string; option_date: string | null; terms: string; reduction_rules: string; series: boolean; release_days: number; rate_plan_id: string; rooming_token: string | null }>(
       `select g.id, g.property_id, g.name, g.status, g.organiser_company_id, c.name as company, g.organiser_guest_id, trim(gu.first_name || ' ' || gu.last_name) as guest, g.contact,
-              to_char(g.option_date, 'YYYY-MM-DD') as option_date, g.terms, g.reduction_rules, g.series, g.release_days, g.rate_plan_id
+              to_char(g.option_date, 'YYYY-MM-DD') as option_date, g.terms, g.reduction_rules, g.series, g.release_days, g.rate_plan_id, g.rooming_token
        from groups g left join companies c on c.id = g.organiser_company_id left join guests gu on gu.id = g.organiser_guest_id where g.id = $1`,
       [isUuid(groupId) ? groupId : null],
     )).rows[0];
@@ -439,6 +441,7 @@ export async function groupView(pool: Pool, schema: string, groupId: string, vie
       series: g.series,
       releaseDays: g.release_days,
       ratePlanId: g.rate_plan_id,
+      roomingToken: g.rooming_token,
       holdings: out,
     };
   });
