@@ -152,7 +152,7 @@ Check-in completed by the guest on a lobby kiosk or on their own phone while at 
 _Avoid_: Express check-in, kiosk check-in, online check-in
 
 **Check-in Conditions**:
-The property-configured requirements that must all hold for self check-in to complete without staff.
+The requirements that must all hold for self check-in to complete without staff: the arrival day from the property's check-in time, the registration done by a legal path, the balance paid or a card guaranteed, and a ready room of the type.
 _Avoid_: Eligibility rules, check-in policy
 
 **Arrived, Waiting for Room**:
@@ -168,7 +168,7 @@ The thread of messages between the property and the guests of one reservation, o
 _Avoid_: Chat, ticket, case
 
 **Device**:
-A piece of hardware enrolled to one property: a guest-facing tablet or kiosk that shows only what staff push to it, or a staff phone or tablet on which enrolled users sign in.
+A piece of hardware enrolled to one property: a guest-facing registration tablet that shows only what staff push to it, a lobby kiosk on which guests do Self Check-in, or a staff phone or tablet on which enrolled users sign in.
 _Avoid_: Terminal, tablet session, iPad
 
 **PIN Sign-in**:

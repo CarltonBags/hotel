@@ -25,7 +25,7 @@ export async function RegistrationPanel({ reservationId, propertyId, propertyCou
       </section>
     );
   }
-  const tablets = (await listDevices(pool(), tenantId, propertyId)).filter((d) => d.kind === "guest" && !d.revokedAt);
+  const tablets = (await listDevices(pool(), tenantId, propertyId)).filter((d) => d.kind === "guest" && d.guestMode === "tablet" && !d.revokedAt);
   const onTablet = tablets.find((d) => d.id === reg.deviceId);
   const input = "h-9 rounded-xl border border-ink-10 bg-surface px-2";
   return (

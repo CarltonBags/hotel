@@ -91,6 +91,12 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
           {t("booking")} {s.confirmationNumber}
         </p>
         {s.status === "cancelled" ? <p className="text-red-300">{t("cancelled")}</p> : null}
+        {/* Self Check-in on the phone, on the arrival day (ticket 49) */}
+        {open && s.arrival === view.property.businessDate ? (
+          <Link href={`/g/${key}/checkin?lang=${language}`} className="mt-2 grid h-11 place-items-center rounded-full bg-white px-5 font-medium text-black" data-self-checkin-link>
+            {t("selfCheckin")}
+          </Link>
+        ) : null}
       </Glass>
 
       {open ? (

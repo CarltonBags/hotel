@@ -10,6 +10,7 @@ const T = {
   guest: { de: "1 Person", en: "1 guest" },
   cancelled: { de: "Diese Buchung ist storniert.", en: "This booking is cancelled." },
   precheckin: { de: "Vorab einchecken", en: "Check in ahead" },
+  selfCheckin: { de: "Jetzt einchecken", en: "Check in now" },
   precheckinDone: { de: "Vorab-Check-in erledigt", en: "Checked in ahead" },
   precheckinHelp: { de: "Sparen Sie Zeit an der Rezeption: Ihre Angaben jetzt, das Zimmer bei Ankunft.", en: "Save time at reception: your details now, your room on arrival." },
   you: { de: "Ihre Angaben", en: "About you" },

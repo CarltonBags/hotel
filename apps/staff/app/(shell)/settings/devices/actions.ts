@@ -44,7 +44,9 @@ export async function enrolAction(_prev: EnrolState, formData: FormData): Promis
     const { code, expiresAt } = await createEnrolment(pool(), {
       tenantId: tenant.id,
       propertyId,
-      kind: field(formData, "kind") as DeviceKind,
+      // a kiosk is a guest Device for Self Check-in (ticket 49)
+      kind: (field(formData, "kind") === "kiosk" ? "guest" : field(formData, "kind")) as DeviceKind,
+      guestMode: field(formData, "kind") === "kiosk" ? "kiosk" : "tablet",
       name: field(formData, "name"),
       ownerUserId: owner || null,
       userIds: owner ? [] : formData.getAll("userIds").map(String),

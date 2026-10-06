@@ -1,8 +1,10 @@
 import { listDevices, pinEvents, pinStates } from "@hoteloftware/auth";
-import { listTenantUsers } from "@hoteloftware/db";
+import QRCode from "qrcode";
+import { listTenantUsers, lobbyToken } from "@hoteloftware/db";
 import { can, canUsePin, mayLookAfterPinUser, pinRolesFor } from "@hoteloftware/domain";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
+import { tenantUrl } from "@/lib/env";
 import { loadShell } from "@/lib/shell";
 import { ActionForm, Field, Select } from "@/components/form-fields";
 import { createPinUserAction, deviceUsersAction, idleAction, resetPinAction, revokeAction } from "./actions";
@@ -35,6 +37,10 @@ export default async function DevicesSettingsPage() {
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;
   const section = "grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm";
   const floorIds = new Set(floor.map((u) => u.id));
+  // the lobby QR code for Self Check-in on the phone (ticket 49), from the configured domain
+  const token = manager ? await lobbyToken(pool(), tenant.schemaName, property.id) : null;
+  const lobbyUrl = token ? tenantUrl(tenant.slug, `/here/${token}`) : null;
+  const lobbyQr = lobbyUrl ? await QRCode.toString(lobbyUrl, { type: "svg", margin: 1 }) : null;
   return (
     <div className="mx-auto grid max-w-4xl gap-6 p-6">
       <div>
@@ -51,9 +57,19 @@ export default async function DevicesSettingsPage() {
             <EnrolForm
               propertyId={property.id}
               people={floor.map((u) => ({ id: u.id, name: u.name }))}
-              labels={{ name: m["dev.name"], kind: m["dev.kind"], staff: m["dev.kind.staff"], guest: m["dev.kind.guest"], shared: m["dev.shared"], owner: m["dev.owner"], who: m["dev.allowed"], create: m["dev.createCode"], pending: m["action.saving"], scan: m["dev.scan"], until: m["dev.validUntil"] }}
+              labels={{ name: m["dev.name"], kind: m["dev.kind"], staff: m["dev.kind.staff"], guest: m["dev.kind.guest"], kiosk: m["dev.kind.kiosk"], shared: m["dev.shared"], owner: m["dev.owner"], who: m["dev.allowed"], create: m["dev.createCode"], pending: m["action.saving"], scan: m["dev.scan"], until: m["dev.validUntil"] }}
             />
           </section>
+
+          {lobbyQr && lobbyUrl ? (
+            <section aria-label={m["sci.lobbyQr"]} className={section} data-lobby-qr>
+              <h2 className="font-medium">{m["sci.lobbyQr"]}</h2>
+              <p className="text-ink-60">{m["sci.lobbyQrHelp"]}</p>
+              {/* the SVG is made on our server from our own link */}
+              <div className="w-40 bg-white p-2" dangerouslySetInnerHTML={{ __html: lobbyQr }} />
+              <p className="break-all text-xs text-ink-60">{lobbyUrl}</p>
+            </section>
+          ) : null}
 
           <section aria-label={m["dev.list"]} className={section}>
             <h2 className="font-medium">{m["dev.list"]}</h2>
@@ -62,7 +78,7 @@ export default async function DevicesSettingsPage() {
               <div key={d.id} className={`grid gap-2 rounded-xl bg-surface p-3 ${d.revokedAt ? "opacity-60" : ""}`}>
                 <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
                   <span className="font-medium">{d.name}</span>
-                  <span className="text-ink-60">{m[`dev.kind.${d.kind}`]}</span>
+                  <span className="text-ink-60">{d.kind === "guest" && d.guestMode === "kiosk" ? m["dev.kind.kiosk"] : m[`dev.kind.${d.kind}`]}</span>
                   {d.ownerUserId ? <span>{`${m["dev.owner"]}: ${name.get(d.ownerUserId) ?? "?"}`}</span> : null}
                   <span>{`${m["dev.lastUse"]}: ${when(d.lastSeenAt)}`}</span>
                   <span>{`${m["dev.lastUser"]}: ${d.lastUserId ? (name.get(d.lastUserId) ?? "?") : "–"}`}</span>

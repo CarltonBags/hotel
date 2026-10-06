@@ -22,11 +22,13 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const secret = () => randomBytes(32).toString("base64url");
 
 export type DeviceKind = "staff" | "guest";
+/** A guest Device is a registration tablet the desk sends to, or a lobby kiosk for Self Check-in (ticket 49). */
+export type GuestMode = "tablet" | "kiosk";
 
 /** A one-time enrolment code (shown as QR) for a Device of the property. */
 export async function createEnrolment(
   pool: Pool,
-  input: { tenantId: string; propertyId: string; kind: DeviceKind; name: string; ownerUserId?: string | null; userIds?: string[]; createdBy: string },
+  input: { tenantId: string; propertyId: string; kind: DeviceKind; guestMode?: GuestMode; name: string; ownerUserId?: string | null; userIds?: string[]; createdBy: string },
 ): Promise<{ code: string; expiresAt: Date }> {
   const name = input.name.trim().slice(0, 80);
   if (!name) throw new Error("Give the Device a name");
@@ -37,9 +39,9 @@ export async function createEnrolment(
   if (known !== people.length) throw new Error("Unknown user");
   const code = secret();
   const { rows } = await pool.query<{ expires_at: Date }>(
-    `insert into control.device_enrolments (code_hash, tenant_id, property_id, kind, name, owner_user_id, user_ids, created_by, expires_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $9)) returning expires_at`,
-    [hash(code), input.tenantId, input.propertyId, input.kind, name, input.kind === "guest" ? null : (input.ownerUserId ?? null), input.ownerUserId ? [] : people, input.createdBy, ENROL_MINUTES],
+    `insert into control.device_enrolments (code_hash, tenant_id, property_id, kind, guest_mode, name, owner_user_id, user_ids, created_by, expires_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now() + make_interval(mins => $10)) returning expires_at`,
+    [hash(code), input.tenantId, input.propertyId, input.kind, input.kind === "guest" && input.guestMode === "kiosk" ? "kiosk" : "tablet", name, input.kind === "guest" ? null : (input.ownerUserId ?? null), input.ownerUserId ? [] : people, input.createdBy, ENROL_MINUTES],
   );
   return { code, expiresAt: rows[0]!.expires_at };
 }
@@ -49,15 +51,15 @@ export async function redeemEnrolment(pool: Pool, input: { tenantId: string; cod
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const e = (await client.query<{ tenant_id: string; property_id: string; kind: DeviceKind; name: string; owner_user_id: string | null; user_ids: string[]; created_by: string }>(
-      "update control.device_enrolments set used_at = now() where code_hash = $1 and tenant_id = $2 and used_at is null and expires_at > now() returning tenant_id, property_id, kind, name, owner_user_id, user_ids, created_by",
+    const e = (await client.query<{ tenant_id: string; property_id: string; kind: DeviceKind; guest_mode: GuestMode; name: string; owner_user_id: string | null; user_ids: string[]; created_by: string }>(
+      "update control.device_enrolments set used_at = now() where code_hash = $1 and tenant_id = $2 and used_at is null and expires_at > now() returning tenant_id, property_id, kind, guest_mode, name, owner_user_id, user_ids, created_by",
       [hash(input.code), input.tenantId],
     )).rows[0];
     if (!e) throw new Error("This enrolment code is not valid (used, expired or for another hotel)");
     const token = secret();
     const { rows } = await client.query<{ id: string }>(
-      "insert into control.devices (tenant_id, property_id, kind, name, owner_user_id, token_hash, enrolled_by) values ($1, $2, $3, $4, $5, $6, $7) returning id",
-      [e.tenant_id, e.property_id, e.kind, e.name, e.owner_user_id, hash(token), e.created_by],
+      "insert into control.devices (tenant_id, property_id, kind, guest_mode, name, owner_user_id, token_hash, enrolled_by) values ($1, $2, $3, $4, $5, $6, $7, $8) returning id",
+      [e.tenant_id, e.property_id, e.kind, e.guest_mode, e.name, e.owner_user_id, hash(token), e.created_by],
     );
     const users = e.owner_user_id ? [e.owner_user_id] : e.user_ids;
     for (const u of users) await client.query("insert into control.device_users (device_id, user_id) values ($1, $2) on conflict do nothing", [rows[0]!.id, u]);
@@ -76,6 +78,7 @@ export interface DeviceInfo {
   tenantId: string;
   propertyId: string;
   kind: DeviceKind;
+  guestMode: GuestMode;
   name: string;
   revoked: boolean;
   ownerUserId: string | null;
@@ -85,20 +88,21 @@ export interface DeviceInfo {
 /** The Device a token belongs to (also a revoked one, so it can be told to wipe); touches its last use. */
 export async function deviceByToken(pool: Pool, token: string | null | undefined): Promise<DeviceInfo | null> {
   if (!token) return null;
-  const d = (await pool.query<{ id: string; tenant_id: string; property_id: string; kind: DeviceKind; name: string; revoked: boolean; owner_user_id: string | null; user_ids: string[] | null }>(
+  const d = (await pool.query<{ id: string; tenant_id: string; property_id: string; kind: DeviceKind; guest_mode: GuestMode; name: string; revoked: boolean; owner_user_id: string | null; user_ids: string[] | null }>(
     `update control.devices set last_seen_at = case when revoked_at is null then now() else last_seen_at end where token_hash = $1
-     returning id, tenant_id, property_id, kind, name, revoked_at is not null as revoked, owner_user_id,
+     returning id, tenant_id, property_id, kind, guest_mode, name, revoked_at is not null as revoked, owner_user_id,
        (select array_agg(user_id) from control.device_users where device_id = control.devices.id) as user_ids`,
     [hash(token)],
   )).rows[0];
   if (!d) return null;
-  return { id: d.id, tenantId: d.tenant_id, propertyId: d.property_id, kind: d.kind, name: d.name, revoked: d.revoked, ownerUserId: d.owner_user_id, userIds: d.user_ids ?? [] };
+  return { id: d.id, tenantId: d.tenant_id, propertyId: d.property_id, kind: d.kind, guestMode: d.guest_mode, name: d.name, revoked: d.revoked, ownerUserId: d.owner_user_id, userIds: d.user_ids ?? [] };
 }
 
 export interface DeviceRow {
   id: string;
   propertyId: string;
   kind: DeviceKind;
+  guestMode: GuestMode;
   name: string;
   ownerUserId: string | null;
   userIds: string[];
@@ -110,13 +114,13 @@ export interface DeviceRow {
 
 /** The tenant's Devices with last use and last user. */
 export async function listDevices(pool: Pool, tenantId: string, propertyId?: string): Promise<DeviceRow[]> {
-  const { rows } = await pool.query<{ id: string; property_id: string; kind: DeviceKind; name: string; owner_user_id: string | null; user_ids: string[] | null; enrolled_at: Date; last_seen_at: Date | null; last_user_id: string | null; revoked_at: Date | null }>(
-    `select d.id, d.property_id, d.kind, d.name, d.owner_user_id, (select array_agg(user_id) from control.device_users where device_id = d.id) as user_ids,
+  const { rows } = await pool.query<{ id: string; property_id: string; kind: DeviceKind; guest_mode: GuestMode; name: string; owner_user_id: string | null; user_ids: string[] | null; enrolled_at: Date; last_seen_at: Date | null; last_user_id: string | null; revoked_at: Date | null }>(
+    `select d.id, d.property_id, d.kind, d.guest_mode, d.name, d.owner_user_id, (select array_agg(user_id) from control.device_users where device_id = d.id) as user_ids,
        d.enrolled_at, d.last_seen_at, d.last_user_id, d.revoked_at
      from control.devices d where d.tenant_id = $1 and ($2::uuid is null or d.property_id = $2) order by d.revoked_at nulls first, d.enrolled_at desc`,
     [tenantId, propertyId ?? null],
   );
-  return rows.map((r) => ({ id: r.id, propertyId: r.property_id, kind: r.kind, name: r.name, ownerUserId: r.owner_user_id, userIds: r.user_ids ?? [], enrolledAt: r.enrolled_at, lastSeenAt: r.last_seen_at, lastUserId: r.last_user_id, revokedAt: r.revoked_at }));
+  return rows.map((r) => ({ id: r.id, propertyId: r.property_id, kind: r.kind, guestMode: r.guest_mode, name: r.name, ownerUserId: r.owner_user_id, userIds: r.user_ids ?? [], enrolledAt: r.enrolled_at, lastSeenAt: r.last_seen_at, lastUserId: r.last_user_id, revokedAt: r.revoked_at }));
 }
 
 /** Who may sign in on a shared staff Device: people of the tenant, replaced in one go. */

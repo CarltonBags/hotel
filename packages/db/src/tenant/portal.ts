@@ -61,6 +61,8 @@ export interface PortalProperty {
   photoFileId: string | null;
   /** The property is on WhatsApp (ticket 44): guests may opt in. */
   whatsapp: boolean;
+  /** The property's open Business Date: its arrival day opens Self Check-in (ticket 49). */
+  businessDate: string;
 }
 
 export interface PortalStay {
@@ -113,7 +115,10 @@ async function cantonProfileIn(tx: PoolClient, propertyId: string): Promise<Cant
 }
 
 async function propertyOf(tx: PoolClient, propertyId: string): Promise<PortalProperty> {
-  const { rows } = await tx.query("select id, name, country, time_zone, currency, portal_info, portal_document_images, portal_photo_file_id from properties where id = $1", [propertyId]);
+  const { rows } = await tx.query(
+    "select id, name, country, time_zone, currency, portal_info, portal_document_images, portal_photo_file_id, to_char(coalesce(business_date, (now() at time zone time_zone)::date), 'YYYY-MM-DD') as business_date from properties where id = $1",
+    [propertyId],
+  );
   const p = rows[0]!;
   const profile = await cantonProfileIn(tx, propertyId);
   return {
@@ -128,6 +133,7 @@ async function propertyOf(tx: PoolClient, propertyId: string): Promise<PortalPro
     registrationAtReception: registrationAtReception(p.country, profile),
     photoFileId: p.portal_photo_file_id,
     whatsapp: !!(await whatsAppConnectionIn(tx, propertyId)),
+    businessDate: p.business_date,
   };
 }
 

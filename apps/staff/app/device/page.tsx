@@ -41,7 +41,7 @@ export default async function DevicePage() {
     );
   }
   // a guest tablet shows only what the desk sends it (ticket 45)
-  if (device.kind !== "staff") redirect("/tablet");
+  if (device.kind !== "staff") redirect(device.guestMode === "kiosk" ? "/kiosk" : "/tablet");
   const people = await deviceSignInList(pool(), device);
   return card(
     <div className="grid gap-4">
