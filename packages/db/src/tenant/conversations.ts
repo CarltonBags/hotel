@@ -852,7 +852,7 @@ export async function receiveWhatsAppEcho(pool: Pool, schema: string, msg: { pro
 }
 
 /** Staff link an Unassigned WhatsApp message to a stay: it joins the stay's Conversation, which talks to that number from now on. */
-export async function linkUnassignedWhatsApp(pool: Pool, schema: string, propertyId: string, unassignedId: string, reservationId: string, viewer: Viewer, links: PortalLinks | null): Promise<string> {
+export async function linkUnassignedWhatsApp(pool: Pool, schema: string, propertyId: string, unassignedId: string, reservationId: string, viewer: Viewer, links: PortalLinks | null, now = new Date()): Promise<string> {
   if (!isUuid(unassignedId) || !isUuid(reservationId)) throw new Error("Not found");
   if (!can(viewer.actor, "use_guest_inbox", propertyId)) throw new Error("Not allowed");
   return withTenant(pool, schema, async (tx) => {
@@ -869,7 +869,7 @@ export async function linkUnassignedWhatsApp(pool: Pool, schema: string, propert
     if (u.file_id) await setFileRetention(tx, [u.file_id], null);
     // the message moves into the thread (with its id at WhatsApp); the waiting copy goes
     await tx.query("delete from whatsapp_unassigned where id = $1", [u.id]);
-    await guestMessagesIn(tx, c, { body: u.body, fileIds: u.file_id ? [u.file_id] : [], via: "whatsapp", providerId: u.provider_id }, links, new Date());
+    await guestMessagesIn(tx, c, { body: u.body, fileIds: u.file_id ? [u.file_id] : [], via: "whatsapp", providerId: u.provider_id }, links, now);
     return c.id;
   });
 }

@@ -181,7 +181,9 @@ export async function openShift(pool: Pool, schema: string, input: { registerId:
   if (!isUuid(input.registerId)) throw new Error("Register not found");
   return withTenant(pool, schema, async (tx) => {
     const r = await lockRegister(tx, input.registerId);
-    if (!can(viewer.actor, "handle_cash", r.propertyId)) throw new Error("Not allowed to open a Shift");
+    // an outlet's register is opened by its staff (ticket 60), the desk's by the desk
+    const atOutlet = (await tx.query("select 1 from outlets where cash_register_id = $1", [r.id])).rows.length > 0;
+    if (!can(viewer.actor, atOutlet ? "outlet_cash" : "handle_cash", r.propertyId)) throw new Error("Not allowed to open a Shift");
     const settings = await settingsOf(tx, r.propertyId);
     if (!settings.enabled) throw new Error("The cash desk is off at this property");
     if (!r.active) throw new Error("This register is not in use");
@@ -450,7 +452,10 @@ export async function cashBook(pool: Pool, schema: string, registerId: string, v
   return withTenant(pool, schema, async (tx) => {
     const g = (await tx.query<{ id: string; name: string; property_id: string }>("select id, name, property_id from cash_registers where id = $1", [registerId])).rows[0];
     if (!g) throw new Error("Register not found");
-    const all = can(viewer.actor, "manage_cash", g.property_id);
+    // an Outlet Manager sees the Cash Books of own outlets' registers (ticket 60)
+    const all =
+      can(viewer.actor, "manage_cash", g.property_id) ||
+      (can(viewer.actor, "manage_own_outlets", g.property_id) && (await tx.query("select 1 from outlets o join outlet_managers m on m.outlet_id = o.id where o.cash_register_id = $1 and m.user_id = $2", [g.id, viewer.userId])).rows.length > 0);
     const own = !all ? (await tx.query<{ id: string; counted: boolean }>("select id, counted_at is not null as counted from cash_shifts where register_id = $1 and user_id = $2 and closed_at is null", [g.id, viewer.userId])).rows[0] : undefined;
     if (!all && !own) throw new Error("Not allowed to see this Cash Book");
     const { rows } = await tx.query<{ id: string; at: Date; kind: CashMovementKind; amount: string; reason: string; account: string; by_user: string; approved_by: string | null; shift_id: string | null; payment_id: string | null; confirmation_number: string | null; has_photo: boolean }>(
@@ -534,6 +539,8 @@ export interface ReceiptView {
   stay: { arrival: string; departure: string } | null;
   /** A Voucher sold (ticket 53): its code's last group. */
   voucherSale: { codeEnd: string } | null;
+  /** An Outlet Sale (ticket 60): the outlet, the bill and its items (type and quantity, KassenSichV). */
+  outletSale: { outlet: string; bill: number; lines: { description: string; quantity: number; amount: number }[] } | null;
   /** Initial and surname: the Receipt may be opened by anyone holding its code. */
   guestName: string;
   token: string;
@@ -547,12 +554,19 @@ const RECEIPT_SELECT = `select rc.id, rc.number, rc.issued_at, rc.token, pr.name
     coalesce(p.amount, v.amount) as amount, coalesce(p.currency, v.currency) as currency, coalesce(p.tender, v.tender) as tender, p.card_brand, p.card_last4, p.refund_of is not null as refund,
     b.confirmation_number, coalesce(g.first_name, split_part(v.buyer_name, ' ', 1)) as first_name,
     coalesce(g.last_name, nullif(regexp_replace(v.buyer_name, '^[^ ]+ *', ''), ''), v.buyer_name) as last_name, v.code as voucher_code,
-    to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure
+    to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure,
+    p.folio_id, ob.number as outlet_bill, o.name as outlet_name, ob.customer_name
   from receipts rc join properties pr on pr.id = rc.property_id join legal_entities le on le.id = pr.legal_entity_id
   left join payments p on p.id = rc.payment_id left join vouchers v on v.id = rc.voucher_id
-  left join reservations r on r.id = p.reservation_id left join bookings b on b.id = r.booking_id left join guests g on g.id = r.primary_guest_id`;
+  left join reservations r on r.id = p.reservation_id left join bookings b on b.id = r.booking_id left join guests g on g.id = r.primary_guest_id
+  left join folios f on f.id = p.folio_id left join outlet_bills ob on ob.id = f.outlet_bill_id left join outlets o on o.id = ob.outlet_id`;
 
-function toReceipt(r: Record<string, unknown>, fiscal: ReceiptFiscal | null = null): ReceiptView {
+/** An Outlet Sale's items as on its folio. */
+async function outletLinesIn(tx: PoolClient, folioId: string): Promise<{ description: string; quantity: number; amount: number }[]> {
+  return (await tx.query<{ description: string; quantity: string; amount: string }>("select description, quantity, amount from charges where folio_id = $1 and voided_at is null order by posted_at, id", [folioId])).rows.map((c) => ({ description: c.description, quantity: Number(c.quantity), amount: Number(c.amount) }));
+}
+
+function toReceipt(r: Record<string, unknown>, fiscal: ReceiptFiscal | null = null, outletLines: { description: string; quantity: number; amount: number }[] = []): ReceiptView {
   return {
     id: r.id as string,
     number: r.number as number,
@@ -569,7 +583,9 @@ function toReceipt(r: Record<string, unknown>, fiscal: ReceiptFiscal | null = nu
     confirmationNumber: (r.confirmation_number as string | null) ?? null,
     stay: r.arrival ? { arrival: r.arrival as string, departure: r.departure as string } : null,
     voucherSale: r.voucher_code ? { codeEnd: String(r.voucher_code).slice(-4) } : null,
-    guestName: `${String(r.first_name ?? "").slice(0, 1)}${r.first_name ? ". " : ""}${r.last_name as string}`.trim(),
+    outletSale: r.outlet_bill ? { outlet: r.outlet_name as string, bill: r.outlet_bill as number, lines: outletLines } : null,
+    // an Outlet Sale names its customer only when given
+    guestName: r.outlet_bill ? String(r.customer_name ?? "") : `${String(r.first_name ?? "").slice(0, 1)}${r.first_name ? ". " : ""}${r.last_name as string}`.trim(),
     timeZone: r.time_zone as string,
     fiscal,
   };
@@ -580,14 +596,14 @@ export async function receiptByToken(pool: Pool, schema: string, token: string):
   if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) return null;
   return withTenant(pool, schema, async (tx) => {
     const r = (await tx.query(`${RECEIPT_SELECT} where rc.token = $1`, [token])).rows[0];
-    return r ? toReceipt(r, await receiptFiscalIn(tx, r.id)) : null;
+    return r ? toReceipt(r, await receiptFiscalIn(tx, r.id), r.outlet_bill ? await outletLinesIn(tx, r.folio_id) : []) : null;
   });
 }
 
 /** Every Receipt as issued, in number order per property (the exit export, ticket 89). */
 export async function allReceiptsIn(tx: PoolClient): Promise<ReceiptView[]> {
   const rows = (await tx.query(`${RECEIPT_SELECT} order by pr.name, rc.number`)).rows;
-  return Promise.all(rows.map(async (r) => toReceipt(r, await receiptFiscalIn(tx, r.id))));
+  return Promise.all(rows.map(async (r) => toReceipt(r, await receiptFiscalIn(tx, r.id), r.outlet_bill ? await outletLinesIn(tx, r.folio_id) : [])));
 }
 
 /** The Receipts of a reservation's payments, by payment. */

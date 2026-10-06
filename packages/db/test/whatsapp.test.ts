@@ -39,6 +39,10 @@ describe("WhatsApp Module", () => {
   const mail = new FakeMailProvider();
   const providers = { mail, sms: new FakeSmsProvider(), whatsapp: { provider: wa } };
   const read = async () => null;
+  /** Messages wait for their send time of day: dispatched as at the end of today in Berlin, so the test does not depend on the hour it runs at. */
+  /** A guest writing at night gets the out-of-hours answer by email: their messages here are written at midday. */
+  const midday = () => new Date(`${today}T10:00:00Z`);
+  const dayLater = () => new Date(Math.max(Date.now(), Date.parse(`${today}T21:59:00Z`)));
 
   beforeAll(async () => {
     pool = testPool(10);
@@ -78,11 +82,11 @@ describe("WhatsApp Module", () => {
     const refused = await postStaffMessage(pool, s(), propertyId, c.id, fd, { body: "Hello?", note: false, fileId: null, seenUpTo: null, transport: "whatsapp" }, links);
     await expect(deliverStaffWhatsApp(pool, s(), wa, { propertyId, messageId: refused.messageId, read })).rejects.toThrow(/approved template or by email/);
     await sendWhatsAppTemplate(pool, s(), { propertyId, conversationId: c.id, type: "pre_arrival", links }, fd.userId);
-    await dispatchMessages(pool, s(), tenant.id, providers, { platformDomain: "mail.test" });
+    await dispatchMessages(pool, s(), tenant.id, providers, { platformDomain: "mail.test" }, dayLater());
     // the guest's number stored nationally ("0170…") is reached internationally
     expect(wa.sent.at(-1)).toMatchObject({ to: "491701234567", template: { name: "hs_pre_arrival", language: "en" } });
     // the guest writes (national number on the profile is matched): free text within 24 hours
-    await receiveWhatsApp(pool, s(), { propertyId, providerId: "wamid.in1", from: "491701234567", name: "Mira", text: "Great,\nthanks!", at: new Date(), fileId: null }, links);
+    await receiveWhatsApp(pool, s(), { propertyId, providerId: "wamid.in1", from: "491701234567", name: "Mira", text: "Great,\nthanks!", at: new Date(), fileId: null }, links, midday());
     const free = await postStaffMessage(pool, s(), propertyId, c.id, fd, { body: "You're welcome.", note: false, fileId: null, seenUpTo: null, transport: "whatsapp" }, links);
     await deliverStaffWhatsApp(pool, s(), wa, { propertyId, messageId: free.messageId, read });
     expect(wa.sent.at(-1)).toMatchObject({ text: "You're welcome." });
@@ -91,10 +95,10 @@ describe("WhatsApp Module", () => {
   });
 
   it("an unknown number lands Unassigned and can be linked to a reservation", async () => {
-    expect(await receiveWhatsApp(pool, s(), { propertyId, providerId: "wamid.in2", from: "41791112233", name: "Unknown", text: "Is the sauna open?", at: new Date(), fileId: null }, links)).toBeNull();
+    expect(await receiveWhatsApp(pool, s(), { propertyId, providerId: "wamid.in2", from: "41791112233", name: "Unknown", text: "Is the sauna open?", at: new Date(), fileId: null }, links, midday())).toBeNull();
     const [u] = await listUnassignedWhatsApp(pool, s(), [propertyId]);
     expect(u).toMatchObject({ fromPhone: "41791112233", body: "Is the sauna open?" });
-    const conversationId = await linkUnassignedWhatsApp(pool, s(), propertyId, u!.id, reservationId, { userId: fd.userId, actor: { tenantRole: undefined, propertyRoles: [{ propertyId, role: "front_desk" }] } }, links);
+    const conversationId = await linkUnassignedWhatsApp(pool, s(), propertyId, u!.id, reservationId, { userId: fd.userId, actor: { tenantRole: undefined, propertyRoles: [{ propertyId, role: "front_desk" }] } }, links, midday());
     expect(await listUnassignedWhatsApp(pool, s(), [propertyId])).toHaveLength(0);
     expect((await listConversations(pool, s(), [propertyId])).find((c) => c.id === conversationId)?.lastText).toBe("Is the sauna open?");
   });
@@ -103,14 +107,14 @@ describe("WhatsApp Module", () => {
     await sendGuestMessage(pool, s(), { reservationId, type: "card_request", links }, fd.userId);
     expect((await pool.query(`select transport from ${s()}.guest_messages where type = 'card_request' order by created_at desc limit 1`)).rows[0].transport).toBe("whatsapp");
     const mailsBefore = mail.sent.length;
-    await receiveWhatsApp(pool, s(), { propertyId, providerId: "wamid.stop", from: "491701234567", name: "Mira", text: "Stopp", at: new Date(), fileId: null }, links);
+    await receiveWhatsApp(pool, s(), { propertyId, providerId: "wamid.stop", from: "491701234567", name: "Mira", text: "Stopp", at: new Date(), fileId: null }, links, midday());
     expect(await whatsAppConsentOf(pool, s(), guestId)).toBe(false);
-    await dispatchMessages(pool, s(), tenant.id, providers, { platformDomain: "mail.test" });
-    await dispatchMessages(pool, s(), tenant.id, providers, { platformDomain: "mail.test" });
+    await dispatchMessages(pool, s(), tenant.id, providers, { platformDomain: "mail.test" }, dayLater());
+    await dispatchMessages(pool, s(), tenant.id, providers, { platformDomain: "mail.test" }, dayLater());
     expect((await pool.query(`select transport, status from ${s()}.guest_messages where type = 'card_request' order by created_at desc limit 1`)).rows[0]).toEqual({ transport: "email", status: "sent" });
     expect(mail.sent.length).toBe(mailsBefore + 1);
     // writing again does not opt back in: a withdrawal stands until the guest opts in again
-    await receiveWhatsApp(pool, s(), { propertyId, providerId: "wamid.after", from: "491701234567", name: "Mira", text: "One more question", at: new Date(), fileId: null }, links);
+    await receiveWhatsApp(pool, s(), { propertyId, providerId: "wamid.after", from: "491701234567", name: "Mira", text: "One more question", at: new Date(), fileId: null }, links, midday());
     expect(await whatsAppConsentOf(pool, s(), guestId)).toBe(false);
   });
 

@@ -158,8 +158,8 @@ export const PROPERTY_ACTIONS = {
   tourism_statistics: ["property_manager"],
   /** Leave a stay out of the statistics with a reason (refugees, stays over a year). */
   exclude_from_statistics: ["property_manager", "front_desk"],
-  /** The cash desk page: the desk for its own Shift, Property Manager and Accounting for every register. */
-  view_cash_desk: ["property_manager", "front_desk", "accounting"],
+  /** The cash desk page: the desk and outlet staff for their own Shift, Property Manager and Accounting for every register. */
+  view_cash_desk: ["property_manager", "front_desk", "accounting", "service", "spa_staff", "outlet_manager"],
   /** The property's cash desk: on or off, Cash Registers, tolerance and Paid-out limit. */
   manage_cash_desk: ["property_manager"],
   /** Groups ("Groups and allotments", ticket 58): Front Desk and Property Manager create and edit Groups; Revenue and Accounting see them. */
@@ -169,6 +169,14 @@ export const PROPERTY_ACTIONS = {
   edit_group_contract: ["property_manager", "front_desk", "revenue"],
   /** Matrix "Sell and redeem Vouchers at the desk" (ticket 53); the list of Vouchers in circulation too. */
   sell_vouchers: ["property_manager", "front_desk"],
+  /** Outlets ("Permissions for cash, vouchers and outlet roles", ticket 60): define outlets, their Cash Register and Outlet Managers. */
+  manage_outlets: ["property_manager"],
+  /** Menus, prices, printers and tables: an Outlet Manager for own outlets only (see mayManageOutlet). */
+  manage_own_outlets: ["property_manager", "outlet_manager"],
+  /** Matrix "Tables, orders, send to printer, split and move bills". */
+  serve_outlet: ["property_manager", "service", "outlet_manager"],
+  /** Matrix "Open and close a Shift at an outlet register" and "Take card, cash, voucher; tips". */
+  outlet_cash: ["property_manager", "service", "spa_staff", "outlet_manager"],
   /** Enrol and revoke Devices of the property, choose who signs in on them (Property Manager). */
   manage_devices: ["property_manager"],
   /** Create Housekeeper users, reset their PIN and unlock them (amendment "Shared-device login"); the Property Manager for every user. */

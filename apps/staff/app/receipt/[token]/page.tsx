@@ -56,21 +56,44 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
       </p>
       <p className="text-center">{new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short", timeZone: r.timeZone }).format(r.issuedAt)}</p>
       <dl className="grid grid-cols-2 gap-1">
-        <dt>Gast / Guest</dt>
-        <dd className="text-right">{r.guestName}</dd>
+        {r.guestName ? (
+          <>
+            <dt>Gast / Guest</dt>
+            <dd className="text-right">{r.guestName}</dd>
+          </>
+        ) : null}
         {r.confirmationNumber ? (
           <>
             <dt>Buchung / Booking</dt>
             <dd className="text-right">{r.confirmationNumber}</dd>
           </>
         ) : null}
-        {/* the service paid for (KassenSichV: type and quantity) */}
-        <dt>Leistung / Service</dt>
-        <dd className="text-right" data-receipt-service>
-          {r.voucherSale
-            ? `1 × Wertgutschein / Voucher ••••-${r.voucherSale.codeEnd}`
-            : `1 × ${f && "businessCase" in f && f.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} ${r.stay ? `${day(r.stay.arrival)}–${day(r.stay.departure)}` : ""}`}
-        </dd>
+        {/* the service paid for (KassenSichV: type and quantity); an Outlet Sale lists its items */}
+        {r.outletSale ? (
+          <>
+            <dt>Outlet</dt>
+            <dd className="text-right">
+              {r.outletSale.outlet} · Bon {r.outletSale.bill}
+            </dd>
+            {r.outletSale.lines.map((l, i) => (
+              <div key={i} className="col-span-2 flex justify-between" data-receipt-line={l.description}>
+                <span>
+                  {l.quantity} × {l.description}
+                </span>
+                <span>{money(l.amount)}</span>
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            <dt>Leistung / Service</dt>
+            <dd className="text-right" data-receipt-service>
+              {r.voucherSale
+                ? `1 × Wertgutschein / Voucher ••••-${r.voucherSale.codeEnd}`
+                : `1 × ${f && "businessCase" in f && f.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} ${r.stay ? `${day(r.stay.arrival)}–${day(r.stay.departure)}` : ""}`}
+            </dd>
+          </>
+        )}
         <dt>Zahlungsart / Tender</dt>
         <dd className="text-right">{tender}</dd>
         <dt className="font-bold">{r.refund ? "Erstattet / Refunded" : "Bezahlt / Paid"}</dt>
