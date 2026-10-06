@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const auth = await tillOf(url.searchParams.get("apiKey"), "lightspeed");
+  const auth = await tillOf(url.searchParams.get("apiKey"), ["lightspeed"]);
   if (auth instanceof Response) return auth;
   // the venue, where Lightspeed names it, must be this till's
   const venue = url.searchParams.get("businessExternalReference");

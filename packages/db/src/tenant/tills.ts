@@ -21,7 +21,8 @@ import { withTenant } from "./with-tenant";
 export interface TillConnection {
   id: string;
   propertyId: string;
-  kind: "api" | "lightspeed";
+  /** "fias": a FIAS till, served by the Site Bridge's FIAS plugin, which calls our interface. */
+  kind: "api" | "lightspeed" | "fias";
   name: string;
   keyHint: string;
   businessReference: string;
@@ -78,7 +79,7 @@ function needManage(viewer: Viewer, propertyId: string): void {
 // ── setup ──
 
 export interface TillConnectionInput {
-  kind: "api" | "lightspeed";
+  kind: "api" | "lightspeed" | "fias";
   name: string;
   businessReference: string;
   revenueAccount: string;
@@ -109,7 +110,7 @@ async function checkedInput(tx: PoolClient, propertyId: string, input: Omit<Till
 export async function createTillConnection(pool: Pool, schema: string, propertyId: string, input: TillConnectionInput, viewer: Viewer): Promise<{ id: string; key: string }> {
   if (!isUuid(propertyId)) throw new Error("Property not found");
   needManage(viewer, propertyId);
-  if (input.kind !== "api" && input.kind !== "lightspeed") throw new Error("Choose how the till connects");
+  if (input.kind !== "api" && input.kind !== "lightspeed" && input.kind !== "fias") throw new Error("Choose how the till connects");
   if (input.kind === "lightspeed" && !input.businessReference.trim()) throw new Error("Enter Lightspeed's business reference of the venue");
   const key = newKey();
   return withTenant(pool, schema, async (tx) => {

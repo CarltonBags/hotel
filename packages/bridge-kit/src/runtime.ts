@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { KeyRequest, LockPlugin } from "@hoteloftware/locks";
-import { asPluginModule, type BridgePluginModule } from "./plugin";
+import { asPluginModule, type BridgePluginInstance, type BridgePluginModule } from "./plugin";
 
 /** The Bridge program's own version (the plugins have theirs). */
 export const BRIDGE_VERSION = "1.0.0";
@@ -33,7 +33,7 @@ const versionOrder = (v: string) => v.split(".").map((n) => n.padStart(6, "0")).
  * a reinstall.
  */
 export class BridgeRuntime {
-  private readonly active = new Map<string, { module: BridgePluginModule; plugin: LockPlugin }>();
+  private readonly active = new Map<string, { module: BridgePluginModule; plugin: BridgePluginInstance }>();
 
   constructor(
     private readonly opts: {
@@ -49,6 +49,8 @@ export class BridgeRuntime {
     // a file URL per version: a new version is a new module, the old one is left behind
     const module = asPluginModule(await import(pathToFileURL(file).href));
     if (module.name !== expect.name || module.version !== expect.version) throw new Error(`${file} is ${module.name} ${module.version}, not ${expect.name} ${expect.version}`);
+    // the version it replaces lets go first (a till plugin frees its port)
+    await this.active.get(module.name)?.plugin.stop?.().catch(() => undefined);
     this.active.set(module.name, { module, plugin: module.create(this.opts.config[module.name] ?? {}) });
     return module;
   }
@@ -100,6 +102,11 @@ export class BridgeRuntime {
     return { version: BRIDGE_VERSION, plugins };
   }
 
+  /** Stops every plugin (the Bridge shutting down). */
+  async stop(): Promise<void> {
+    for (const { plugin } of this.active.values()) await plugin.stop?.().catch(() => undefined);
+  }
+
   /** One command carried out; a plugin's refusal is told apart from the lock system being away. */
   async execute(c: BridgeCommandIn): Promise<BridgeResult> {
     try {
@@ -107,13 +114,13 @@ export class BridgeRuntime {
       if (typeof c.payload.expiresAt === "string" && Date.parse(c.payload.expiresAt) < Date.now()) throw new Error("expired before it arrived");
       if (c.kind === "plugin_install") return { id: c.id, ok: true, result: await this.install(String(c.payload.name), String(c.payload.version), String(c.payload.sha256)) };
       const p = this.active.get(String(c.payload.plugin));
-      if (!p) throw new Error(`No plugin ${String(c.payload.plugin)} on this Bridge`);
+      if (!p || p.module.kind !== "lock") throw new Error(`No lock plugin ${String(c.payload.plugin)} on this Bridge`);
       const op = String(c.payload.op) as keyof LockPlugin;
       if (!LOCK_OPS.includes(op)) throw new Error(`No operation ${op}`);
       const args = (c.payload.args as unknown[]) ?? [];
       // a key request crosses as JSON: its dates come back to life
       const revived = args.map((a) => (a && typeof a === "object" && "validUntil" in a ? { ...(a as KeyRequest), validFrom: new Date((a as KeyRequest).validFrom), validUntil: new Date((a as KeyRequest).validUntil) } : a));
-      const fn = p.plugin[op] as unknown;
+      const fn = (p.plugin as LockPlugin)[op] as unknown;
       if (typeof fn !== "function") throw new Error(`No operation ${op}`);
       return { id: c.id, ok: true, result: (await (fn as (...a: unknown[]) => Promise<unknown>).apply(p.plugin, revived)) ?? null };
     } catch (err) {

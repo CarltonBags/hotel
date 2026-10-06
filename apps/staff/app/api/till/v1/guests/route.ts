@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 /** Guest lookup (docs/room-charge-interface.md): Checked-in guests the till may charge, by surname or room. */
 export async function GET(request: Request): Promise<Response> {
-  const auth = await tillOf(bearer(request), "api");
+  const auth = await tillOf(bearer(request), ["api", "fias"]);
   if (auth instanceof Response) return auth;
   const term = new URL(request.url).searchParams.get("term") ?? "";
   const guests = await tillGuests(pool(), auth.tenant.schemaName, auth.till, term);

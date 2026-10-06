@@ -18,7 +18,7 @@ const list = <T>(v: unknown): T[] | undefined => (Array.isArray(v) ? (v as T[]) 
 
 /** Post a bill to a room (docs/room-charge-interface.md): 201 posted, 200 the same id again, 422 refused. */
 export async function POST(request: Request): Promise<Response> {
-  const auth = await tillOf(bearer(request), "api");
+  const auth = await tillOf(bearer(request), ["api", "fias"]);
   if (auth instanceof Response) return auth;
   const b = (await body(request)) as ChargeBody | null;
   if (!b || typeof b !== "object") return json({ error: "invalid", message: "The body is not JSON" }, 400);

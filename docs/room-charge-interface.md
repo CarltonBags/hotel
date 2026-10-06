@@ -118,6 +118,10 @@ Hoteloftware keeps every refused posting, with what you sent, under **Till posti
 
 Requests for one stay are handled one at a time, so two bills arriving together never both pass the spending limit.
 
+## FIAS tills
+
+Tills that speak FIAS (Oracle Simphony, Vectron and others) do not call this interface themselves. They connect to the FIAS plugin of the Site Bridge on the hotel's network, and the plugin calls this interface with a key of the connection kind "FIAS till". See `docs/bridge/install.md`.
+
 ## Lightspeed Restaurant (K-Series)
 
 **Status: not yet tested against Lightspeed.** Lightspeed's interface is open only to approved partners, and our partner application is still outstanding. The connection below follows the integration guide as read in the research "Point-of-sale systems and room charge interfaces". It is tested with requests of that shape, not with Lightspeed itself.

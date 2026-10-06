@@ -3063,7 +3063,7 @@ export const tillConnections = pgTable(
     createdBy: text("created_by").notNull(),
   },
   (t) => [
-    check("till_connections_kind_check", sql`${t.kind} in ('api', 'lightspeed')`),
+    check("till_connections_kind_check", sql`${t.kind} in ('api', 'lightspeed', 'fias')`),
     check("till_connections_name_check", sql`length(trim(${t.name})) between 1 and 60`),
     unique("till_connections_key_hash_key").on(t.keyHash),
     unique("till_connections_property_id_name_key").on(t.propertyId, t.name),

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 /** Take a whole posted bill back (docs/room-charge-interface.md): a Correction of each of its Charges. */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
-  const auth = await tillOf(bearer(request), "api");
+  const auth = await tillOf(bearer(request), ["api", "fias"]);
   if (auth instanceof Response) return auth;
   const b = (await body(request)) as { id?: unknown; receiptNumber?: unknown; fiscalId?: unknown } | null;
   if (!b || typeof b !== "object") return json({ error: "invalid", message: "The body is not JSON" }, 400);

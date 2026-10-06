@@ -184,6 +184,8 @@ const catalog = {
   "module.till_postings": { en: "Till postings", de: "Kassenbuchungen" },
   "till.help": { en: "A till with its own fiscal register charges rooms here: through our room charge interface, or Lightspeed Restaurant's room charge contract. It sees only checked-in guests it may charge.", de: "Eine Kasse mit eigener Fiskalisierung belastet hier Zimmer: über unsere Zimmerbelastungs-Schnittstelle oder den Room-Charge-Vertrag von Lightspeed Restaurant. Sie sieht nur eingecheckte Gäste, auf die gebucht werden darf." },
   "till.docs": { en: "Interface documentation", de: "Dokumentation der Schnittstelle" },
+  "till.fias": { en: "FIAS till (Simphony, Vectron …) through the Site Bridge", de: "FIAS-Kasse (Simphony, Vectron …) über die Site Bridge" },
+  "till.fiasHelp": { en: "The till connects to the Site Bridge's FIAS plugin on the hotel's network. Send the plugin to the Bridge (Settings → Site Bridge) and put these settings, with this till's key and the tax rate of each subtotal, into its bridge.json:", de: "Die Kasse verbindet sich mit dem FIAS-Plugin der Site Bridge im Hotelnetz. Senden Sie das Plugin an die Bridge (Einstellungen → Site Bridge) und tragen Sie diese Einstellungen mit dem Schlüssel dieser Kasse und dem Steuersatz jeder Zwischensumme in ihre bridge.json ein:" },
   "till.api": { en: "Our room charge interface", de: "Unsere Zimmerbelastungs-Schnittstelle" },
   "till.key": { en: "key", de: "Schlüssel" },
   "till.name": { en: "Name (on the folio)", de: "Name (auf dem Folio)" },

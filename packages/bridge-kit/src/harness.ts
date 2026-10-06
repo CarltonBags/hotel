@@ -27,7 +27,7 @@ export async function runLockHarness(module: BridgePluginModule, config: Record<
     if (!ok) throw new Error(why);
   };
   const caps = module.capabilities;
-  const plugin = module.create(config);
+  const plugin = module.create(config) as import("@hoteloftware/locks").LockPlugin;
   let externalId = "";
   let encoder = "";
   const kind = caps?.card ? "card" : caps?.pin ? "pin" : "phone";

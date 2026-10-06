@@ -64,7 +64,7 @@ export default async function TillSettingsPage() {
       {tills.map((t) => (
         <section key={t.id} className={section} data-till={t.name}>
           <p className="text-ink-60">
-            {t.kind === "lightspeed" ? `Lightspeed · ${base}/api/lightspeed` : `${m["till.api"]} · ${base}/api/till/v1`} · {m["till.key"]} …{t.keyHint}
+            {t.kind === "lightspeed" ? `Lightspeed · ${base}/api/lightspeed` : t.kind === "fias" ? `${m["till.fias"]} · ${base}/api/till/v1` : `${m["till.api"]} · ${base}/api/till/v1`} · {m["till.key"]} …{t.keyHint}
           </p>
           <ActionForm action={updateTillAction} submitLabel={m["action.save"]} className="grid gap-3 sm:grid-cols-2">
             <input type="hidden" name="id" value={t.id} />
@@ -74,6 +74,12 @@ export default async function TillSettingsPage() {
               {m["till.active"]}
             </label>
           </ActionForm>
+          {t.kind === "fias" ? (
+            // the FIAS plugin on the Site Bridge carries the key; its settings go into the Bridge's bridge.json
+            <p className="text-ink-60" data-fias-help>
+              {m["till.fiasHelp"]} <code className="break-all">{`"fias-till": { "port": "5010", "api": "${base}/api/till/v1", "key": "hs_till_…", "subtotalRates": "1:19,2:7" }`}</code>
+            </p>
+          ) : null}
           <ActionForm action={rotateTillKeyAction} submitLabel={m["till.newKey"]} className="grid gap-2">
             <input type="hidden" name="propertyId" value={property.id} />
             <input type="hidden" name="id" value={t.id} />
@@ -89,6 +95,7 @@ export default async function TillSettingsPage() {
             options={[
               { value: "api", label: m["till.api"] },
               { value: "lightspeed", label: "Lightspeed Restaurant" },
+              { value: "fias", label: m["till.fias"] },
             ]}
           />
           {fields(null)}

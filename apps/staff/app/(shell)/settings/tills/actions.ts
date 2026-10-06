@@ -21,7 +21,8 @@ export async function createTillAction(_prev: FormState, formData: FormData): Pr
   return formAction(async () => {
     const propertyId = field(formData, "propertyId");
     const p = await authorize("manage_outlets", propertyId);
-    const kind = field(formData, "kind") === "lightspeed" ? "lightspeed" : "api";
+    const asked = field(formData, "kind");
+    const kind = asked === "lightspeed" || asked === "fias" ? asked : "api";
     const { key } = await createTillConnection(
       pool(),
       p.tenant.schemaName,
