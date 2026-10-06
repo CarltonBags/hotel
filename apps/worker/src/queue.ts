@@ -15,6 +15,8 @@ import type { MailProvider, SmsProvider, WhatsAppProvider } from "@hoteloftware/
 import { fileStore } from "@hoteloftware/storage";
 import type { ChannelManager } from "@hoteloftware/channels";
 import { pullChannelBookings, pushTenantChannels } from "./channels";
+import { archiveFiscal, runFiscal } from "./fiscal";
+import type { FiscalDeps } from "@hoteloftware/db";
 
 export const QUEUES = {
   webhook: WEBHOOK_QUEUE,
@@ -48,6 +50,12 @@ export const QUEUES = {
   /** Every five minutes: channel bookings pulled even if a webhook was lost (ticket 38). */
   channelBookingsAll: "channels.bookings.all",
   channelBookings: "channels.bookings",
+  /** Every minute: Receipts signed, days closed for DSFinV-K, one job per tenant (ticket 51). */
+  fiscalAll: "fiscal.all",
+  fiscal: "fiscal",
+  /** At night: the months' signed data and DSFinV-K exports archived outside the provider. */
+  fiscalArchiveAll: "fiscal.archive.all",
+  fiscalArchive: "fiscal.archive",
 } as const;
 
 /**
@@ -56,6 +64,8 @@ export const QUEUES = {
  */
 export interface QueueOptions {
   tenantCheckCron?: string | null;
+  /** The fiscal provider and the platform's fiscal secret (ticket 51). */
+  fiscal?: FiscalDeps;
   /** Webhook processors by source name; later tickets register theirs. */
   processors?: Record<string, TenantJobHandler<WebhookJobData>>;
   /** Processors that call a provider: run without an open tenant transaction. */
@@ -279,6 +289,37 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
       }
     });
     await boss.schedule(QUEUES.channelBookingsAll, "*/5 * * * *", {}, { tz: "Europe/Berlin" });
+  }
+
+  const fiscal = options.fiscal;
+  if (fiscal) {
+    await boss.work<TenantJobData>(QUEUES.fiscal, async (jobs) => {
+      for (const job of jobs) {
+        const tenant = await findTenantById(pool, job.data.tenantId);
+        if (!tenant) continue;
+        const r = await runFiscal(pool, tenant, fiscal);
+        if (r.signed || r.failed || r.closed) console.log(`[fiscal] ${tenant.slug}: signed ${r.signed}, unsigned ${r.failed}, closed ${r.closed}`);
+      }
+    });
+    await boss.work(QUEUES.fiscalAll, async () => {
+      const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+      for (const t of rows) await boss.send(QUEUES.fiscal, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `fiscal:${t.id}`, singletonSeconds: 50 });
+    });
+    await boss.schedule(QUEUES.fiscalAll, "* * * * *", {}, { tz: "Europe/Berlin" });
+    await boss.work<TenantJobData>(QUEUES.fiscalArchive, async (jobs) => {
+      for (const job of jobs) {
+        const tenant = await findTenantById(pool, job.data.tenantId);
+        if (!tenant) continue;
+        const n = await archiveFiscal(pool, tenant, { ...fiscal, store: fileStore() });
+        if (n) console.log(`[fiscal] ${tenant.slug}: ${n} archive(s) kept`);
+      }
+    });
+    await boss.work(QUEUES.fiscalArchiveAll, async () => {
+      const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+      for (const t of rows) await boss.send(QUEUES.fiscalArchive, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `fiscal.archive:${t.id}`, singletonSeconds: 1100 });
+    });
+    // every 20 minutes from 02:00 to 04:40: a provider export still being prepared is asked again
+    await boss.schedule(QUEUES.fiscalArchiveAll, "*/20 2-4 * * *", {}, { tz: "Europe/Berlin" });
   }
 
   await boss.work(QUEUES.subscriptionBilling, async () => {

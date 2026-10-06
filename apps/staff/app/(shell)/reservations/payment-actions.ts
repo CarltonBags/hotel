@@ -23,6 +23,7 @@ import { paymentProvider } from "@hoteloftware/payments";
 import { announceReservations } from "@/lib/live";
 import { reservationScope } from "@/lib/reservation-scope";
 import { pool } from "@/lib/db";
+import { signPaymentReceipts } from "@/lib/fiscal";
 import { formAction, type FormState } from "@/lib/form";
 import { withApproval, type ApprovalMode, type ApprovalState } from "@/lib/approval";
 
@@ -66,6 +67,7 @@ export async function takePaymentAction(
       userId,
     );
     extra = { paymentId: p.id, pending: p.status === "pending" };
+    await signPaymentReceipts({ id: tenantId, schemaName: schema }, p.id);
     return done(tenantId, reservation, p.status === "pending" ? "Waiting for the card on the reader…" : "Payment recorded.");
   });
   return { ...state, ...extra };
@@ -79,7 +81,10 @@ export async function paymentStatusAction(reservationId: string, paymentId: stri
     await ownPayment(schema, reservation.id, paymentId);
     const p = await syncPayment(pool(), schema, paymentProvider(), String(paymentId));
     out = { status: p.status, error: p.error };
-    if (p.status !== "pending") await done(tenantId, reservation, "");
+    if (p.status !== "pending") {
+      await signPaymentReceipts({ id: tenantId, schemaName: schema }, String(paymentId));
+      await done(tenantId, reservation, "");
+    }
   });
   return out ?? { failure: state.error ?? "Something went wrong." };
 }
@@ -89,6 +94,7 @@ export async function cancelPaymentAction(reservationId: string, paymentId: stri
     const { schema, tenantId, reservation } = await reservationScope(reservationId, "take_payments");
     await ownPayment(schema, reservation.id, paymentId);
     const p = await cancelPendingPayment(pool(), schema, paymentProvider(), String(paymentId));
+    await signPaymentReceipts({ id: tenantId, schemaName: schema }, String(paymentId));
     // the card may have been presented just before: then it was paid, not cancelled
     return done(tenantId, reservation, p.status === "succeeded" ? "The card had already been presented: the payment was received." : "Cancelled.");
   });
@@ -102,6 +108,7 @@ export async function simulateCardAction(reservationId: string, target: { paymen
     else if (target?.holdId) await ownHold(schema, reservation.id, target.holdId);
     else throw new Error("Nothing to present a card for");
     await simulateCard(pool(), schema, paymentProvider(), target.paymentId ? { paymentId: String(target.paymentId) } : { holdId: String(target.holdId) });
+    if (target.paymentId) await signPaymentReceipts({ id: tenantId, schemaName: schema }, String(target.paymentId));
     return done(tenantId, reservation, "Card presented.");
   });
 }
@@ -119,6 +126,7 @@ export async function refundAction(reservationId: string, paymentId: string, amo
         { paymentId: String(paymentId), amount: Number(amount), reason: String(reason ?? "") },
         { userId, unlimited: can(actor, "refund_without_limit", reservation.propertyId), approverId },
       );
+      await signPaymentReceipts({ id: tenantId, schemaName: schema }, r.id);
       return done(tenantId, reservation, r.status === "refund_pending_balance" ? "Refund waiting: the hotel's balance at the provider cannot cover it yet." : "Refunded.");
     });
   });

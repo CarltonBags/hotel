@@ -70,7 +70,7 @@ export function invoiceLines(charges: InvoiceCharge[]): InvoiceLine[] {
 }
 
 /** Split an amount over weights so the parts are whole cents and add up exactly (largest remainder). */
-function apportion(total: number, weights: number[]): number[] {
+export function apportion(total: number, weights: number[]): number[] {
   const cents = Math.round(total * 100);
   const sum = weights.reduce((s, w) => s + w, 0);
   if (sum === 0) return weights.map((_, i) => (i === 0 ? total : 0));

@@ -4,6 +4,7 @@ import { can, cashBookBalance, closeCount, countTotal, movementSign, paidOutNeed
 import { useApproval } from "./approvals";
 import { isUuid } from "./catalogue-common";
 import type { Viewer } from "./room-state";
+import { receiptFiscalIn, recordFiscalIn, type ReceiptFiscal } from "./fiscal";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -376,14 +377,16 @@ export async function issueReceiptIn(tx: PoolClient, payment: { id: string; prop
   if ((await tx.query("select 1 from receipts where payment_id = $1", [payment.id])).rowCount) return;
   await tx.query("insert into receipt_numbers (property_id) values ($1) on conflict do nothing", [payment.propertyId]);
   const n = (await tx.query<{ last: number }>("update receipt_numbers set last = last + 1 where property_id = $1 returning last", [payment.propertyId])).rows[0]!.last;
-  await tx.query("insert into receipts (property_id, number, payment_id, register_id, token, issued_by) values ($1, $2, $3, $4, $5, $6)", [
+  const receipt = (await tx.query<{ id: string }>("insert into receipts (property_id, number, payment_id, register_id, token, issued_by) values ($1, $2, $3, $4, $5, $6) returning id", [
     payment.propertyId,
     n,
     payment.id,
     registerId,
     randomBytes(18).toString("base64url"),
     userId,
-  ]);
+  ])).rows[0]!;
+  // Germany: what the TSE is to sign, on the Business Date of the Receipt (ticket 51); signed right after the payment
+  await recordFiscalIn(tx, receipt.id);
 }
 
 export interface CashBookRow {
@@ -479,6 +482,7 @@ export async function openShiftsIn(tx: PoolClient, propertyId: string): Promise<
 }
 
 export interface ReceiptView {
+  id: string;
   number: number;
   issuedAt: Date;
   propertyName: string;
@@ -490,19 +494,25 @@ export interface ReceiptView {
   cardLast4: string | null;
   refund: boolean;
   confirmationNumber: string;
+  /** The stay paid for: the service the Receipt names. */
+  stay: { arrival: string; departure: string };
   /** Initial and surname: the Receipt may be opened by anyone holding its code. */
   guestName: string;
   token: string;
   timeZone: string;
+  /** Germany: the TSE's signature or the outage notice (ticket 51); null where nothing is signed. */
+  fiscal: ReceiptFiscal | null;
 }
 
-const RECEIPT_SELECT = `select rc.number, rc.issued_at, rc.token, pr.name as property_name, pr.time_zone, le.name as le_name, le.address_line1, le.postal_code, le.city, le.country, le.vat_id,
-    p.amount, p.currency, p.tender, p.card_brand, p.card_last4, p.refund_of is not null as refund, b.confirmation_number, g.first_name, g.last_name
+const RECEIPT_SELECT = `select rc.id, rc.number, rc.issued_at, rc.token, pr.name as property_name, pr.time_zone, le.name as le_name, le.address_line1, le.postal_code, le.city, le.country, le.vat_id,
+    p.amount, p.currency, p.tender, p.card_brand, p.card_last4, p.refund_of is not null as refund, b.confirmation_number, g.first_name, g.last_name,
+    to_char(r.arrival, 'YYYY-MM-DD') as arrival, to_char(r.departure, 'YYYY-MM-DD') as departure
   from receipts rc join payments p on p.id = rc.payment_id join properties pr on pr.id = rc.property_id join legal_entities le on le.id = pr.legal_entity_id
   join reservations r on r.id = p.reservation_id join bookings b on b.id = r.booking_id join guests g on g.id = r.primary_guest_id`;
 
-function toReceipt(r: Record<string, unknown>): ReceiptView {
+function toReceipt(r: Record<string, unknown>, fiscal: ReceiptFiscal | null = null): ReceiptView {
   return {
+    id: r.id as string,
     number: r.number as number,
     issuedAt: r.issued_at as Date,
     token: r.token as string,
@@ -515,8 +525,10 @@ function toReceipt(r: Record<string, unknown>): ReceiptView {
     cardLast4: (r.card_last4 as string | null) ?? null,
     refund: r.refund as boolean,
     confirmationNumber: r.confirmation_number as string,
+    stay: { arrival: r.arrival as string, departure: r.departure as string },
     guestName: `${String(r.first_name ?? "").slice(0, 1)}${r.first_name ? ". " : ""}${r.last_name as string}`.trim(),
     timeZone: r.time_zone as string,
+    fiscal,
   };
 }
 
@@ -525,13 +537,14 @@ export async function receiptByToken(pool: Pool, schema: string, token: string):
   if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) return null;
   return withTenant(pool, schema, async (tx) => {
     const r = (await tx.query(`${RECEIPT_SELECT} where rc.token = $1`, [token])).rows[0];
-    return r ? toReceipt(r) : null;
+    return r ? toReceipt(r, await receiptFiscalIn(tx, r.id)) : null;
   });
 }
 
 /** Every Receipt as issued, in number order per property (the exit export, ticket 89). */
 export async function allReceiptsIn(tx: PoolClient): Promise<ReceiptView[]> {
-  return (await tx.query(`${RECEIPT_SELECT} order by pr.name, rc.number`)).rows.map(toReceipt);
+  const rows = (await tx.query(`${RECEIPT_SELECT} order by pr.name, rc.number`)).rows;
+  return Promise.all(rows.map(async (r) => toReceipt(r, await receiptFiscalIn(tx, r.id))));
 }
 
 /** The Receipts of a reservation's payments, by payment. */

@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
 import QRCode from "qrcode";
-import { receiptByToken } from "@hoteloftware/db";
-import { formatCurrency, localeFor } from "@hoteloftware/domain";
+import { receiptByToken, signReceipt } from "@hoteloftware/db";
+import { formatCurrency, localeFor, vatSplit } from "@hoteloftware/domain";
+import { notifyFiscalOutage } from "@hoteloftware/events";
 import { pool } from "@/lib/db";
+import { fiscalDeps } from "@/lib/fiscal";
 import { env } from "@/lib/env";
 import { currentTenant } from "@/lib/tenant";
 import { PrintButton } from "./print-button";
@@ -11,15 +13,27 @@ export const dynamic = "force-dynamic";
 
 /**
  * A desk Receipt (ticket 50), separate from the invoice: shown on screen,
- * printed, or opened by the guest from its code without signing in. The
- * fiscal signature data comes with tickets 51 and 52.
+ * printed, or opened by the guest from its code without signing in. In
+ * Germany it is signed by the TSE when first shown (ticket 51) and prints
+ * the amounts per VAT rate, the TSE data and its QR code; when the TSE could
+ * not sign, the outage notice instead.
  */
 export default async function ReceiptPage({ params }: { params: Promise<{ token: string }> }) {
   const tenant = await currentTenant();
   if (!tenant) notFound();
   const { token } = await params;
-  const r = await receiptByToken(pool(), tenant.schemaName, token);
+  let r = await receiptByToken(pool(), tenant.schemaName, token);
   if (!r) notFound();
+  if (r.fiscal?.state === "signing") {
+    // normally signed with the payment; one still open is tried once more here (the worker signs any left)
+    const signed = await signReceipt(pool(), tenant.schemaName, fiscalDeps(), r.id).catch((err) => (console.error("[fiscal] sign", err), null));
+    if (signed?.state === "failed" && signed.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: signed.propertyId, error: signed.error }).catch(() => undefined);
+    if (signed && signed.state !== "none") r = (await receiptByToken(pool(), tenant.schemaName, token)) ?? r;
+  }
+  const f = r.fiscal;
+  const tse = f?.state === "signed" ? await QRCode.toString(f.qrCodeData, { type: "svg", margin: 1, errorCorrectionLevel: "L" }) : null;
+  const unix = (d: Date) => Math.floor(d.getTime() / 1000);
+  const day = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}.`;
   const scheme = env.authUrl.startsWith("https") ? "https" : "http";
   const url = `${scheme}://${tenant.slug}.${env.appDomain}/receipt/${r.token}`;
   const qr = await QRCode.toString(url, { type: "svg", margin: 1 });
@@ -46,6 +60,11 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
         <dd className="text-right">{r.guestName}</dd>
         <dt>Buchung / Booking</dt>
         <dd className="text-right">{r.confirmationNumber}</dd>
+        {/* the service paid for (KassenSichV: type and quantity) */}
+        <dt>Leistung / Service</dt>
+        <dd className="text-right" data-receipt-service>
+          1 × {f?.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} {day(r.stay.arrival)}–{day(r.stay.departure)}
+        </dd>
         <dt>Zahlungsart / Tender</dt>
         <dd className="text-right">{tender}</dd>
         <dt className="font-bold">{r.refund ? "Erstattet / Refunded" : "Bezahlt / Paid"}</dt>
@@ -53,8 +72,69 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
           {money(Math.abs(r.amount))}
         </dd>
       </dl>
+      {f ? (
+        <table className="w-full" data-receipt-vat>
+          <thead>
+            <tr>
+              <th className="text-left font-normal">USt / VAT</th>
+              <th className="text-right font-normal">Netto</th>
+              <th className="text-right font-normal">USt</th>
+              <th className="text-right font-normal">Brutto</th>
+            </tr>
+          </thead>
+          <tbody>
+            {f.amounts.map((a) => {
+              const v = vatSplit(a.amount, a.rate);
+              return (
+                <tr key={String(a.rate)}>
+                  <td>{a.rate === null ? "n. b." : `${String(a.rate).replace(".", ",")} %`}</td>
+                  <td className="text-right">{money(Math.abs(v.excl))}</td>
+                  <td className="text-right">{money(Math.abs(v.vat))}</td>
+                  <td className="text-right">{money(Math.abs(v.incl))}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : null}
       <p className="text-[11px]">Keine Rechnung. Die Rechnung erhalten Sie separat. / Not an invoice; the invoice is issued separately.</p>
+      {f?.state === "signed" ? (
+        <section className="grid gap-1 text-[11px]" data-tse>
+          <hr className="border-dashed border-black" />
+          <dl className="grid grid-cols-[auto_1fr] gap-x-2 break-all">
+            <dt>TSE-Transaktion</dt>
+            <dd>{f.number}</dd>
+            <dt>TSE-Start</dt>
+            <dd>{unix(f.timeStart)}</dd>
+            <dt>TSE-Stop</dt>
+            <dd>{unix(f.timeEnd)}</dd>
+            <dt>TSE-Seriennummer</dt>
+            <dd>{f.tssSerial}</dd>
+            <dt>Kassen-Seriennummer</dt>
+            <dd>{f.clientSerial}</dd>
+            <dt>TSE-Signaturzähler</dt>
+            <dd>{f.signatureCounter}</dd>
+            <dt>TSE-Zeitformat</dt>
+            <dd>{f.timestampFormat}</dd>
+            <dt>TSE-Hashalgorithmus</dt>
+            <dd>{f.algorithm}</dd>
+            <dt>TSE-PublicKey</dt>
+            <dd>{f.publicKey}</dd>
+            <dt>TSE-Signatur</dt>
+            <dd>{f.signature}</dd>
+          </dl>
+          {/* the TSE's own QR code, printed as the provider gives it (made on our server from the signed data) */}
+          <div className="mx-auto w-40" data-tse-qr dangerouslySetInnerHTML={{ __html: tse! }} />
+        </section>
+      ) : f?.state === "failed" ? (
+        <section className="grid gap-1 text-[11px]" data-tse-outage>
+          <hr className="border-dashed border-black" />
+          <p className="font-bold">{f.notice}</p>
+          <p>Kassen-Seriennummer {f.clientSerial}</p>
+        </section>
+      ) : null}
       <hr className="border-dashed border-black" />
+      <p className="text-center text-[11px]">Beleg online / Receipt online</p>
       <div className="mx-auto w-32" dangerouslySetInnerHTML={{ __html: qr }} />
       <PrintButton />
     </main>

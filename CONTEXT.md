@@ -467,6 +467,14 @@ _Avoid_: Over/short, variance, discrepancy
 The document given for a payment at the desk, carrying the fiscal signature data; separate from the invoice.
 _Avoid_: Beleg, bon, slip, invoice
 
+**TSE**:
+The certified signing unit, run by a cloud fiscal provider, that signs every Receipt of a German property; each Cash Register is one of its clients with a serial that never changes.
+_Avoid_: TSS, signature device, fiscal printer
+
+**Fiscal Outage**:
+A period in which the TSE cannot sign: the desk goes on, the Receipts carry a notice instead of the signature and are never signed later, and the outage is logged from start to end.
+_Avoid_: TSE failure, offline mode
+
 **Voucher**:
 A prepaid amount sold by a legal entity, redeemable against charges at its properties until used up.
 _Avoid_: Gift card, coupon, Gutschein, credit

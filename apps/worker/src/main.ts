@@ -2,6 +2,7 @@ import { config } from "dotenv";
 import { resolve } from "node:path";
 import { createPool } from "@hoteloftware/db";
 import { paymentProvider } from "@hoteloftware/payments";
+import { fiscalProvider, fiscalSecret } from "@hoteloftware/fiscal";
 import { mailProvider, smsProvider, whatsAppProvider } from "@hoteloftware/messaging";
 import { channelManager } from "@hoteloftware/channels";
 import { inboundProcessor, inboundWebhookSource, INBOUND_SOURCE, mailProcessor, mailWebhookSource, MAIL_SOURCE, whatsAppProcessor, whatsAppWebhookSource } from "./messaging";
@@ -36,6 +37,15 @@ const sms = smsProvider();
 // Meta's Cloud API with META_SYSTEM_TOKEN, else the in-memory fake (development only)
 const whatsapp = whatsAppProvider();
 const channels = channelManager();
+// fiskaly with FISKALY_API_KEY and FISKALY_API_SECRET, else a stand-in TSE (development only; production signs nothing without keys)
+const fiscalKey = (() => {
+  try {
+    return fiscalSecret();
+  } catch {
+    console.warn("FISCAL_SECRET not set; new TSE clients cannot be registered");
+    return null;
+  }
+})();
 const channelWebhookSecret = process.env.CHANNEX_WEBHOOK_SECRET ?? (process.env.NODE_ENV === "production" ? "" : (process.env.WEBHOOK_TEST_SECRET ?? ""));
 const workerUrl = process.env.WORKER_PUBLIC_URL?.replace(/\/$/, "");
 const platformDomain = process.env.MAIL_FROM_DOMAIN ?? process.env.MAILGUN_DOMAIN ?? "mail.hoteloftware.test";
@@ -46,6 +56,7 @@ const boss = await startQueue(pool, directUrl, {
   messaging: { mail, sms, whatsapp, platformDomain },
   // Channex with CHANNEX_API_KEY (staging unless CHANNEX_URL says otherwise), else the in-memory fake
   channelManager: channels,
+  fiscal: { provider: fiscalProvider(), secret: fiscalKey },
   channelWebhook: workerUrl && channelWebhookSecret ? { url: `${workerUrl}/webhooks/${channels.name}`, secret: channelWebhookSecret } : undefined,
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });

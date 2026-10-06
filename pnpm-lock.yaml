@@ -66,6 +66,9 @@ importers:
       '@hoteloftware/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@hoteloftware/fiscal':
+        specifier: workspace:*
+        version: link:../../packages/fiscal
       '@hoteloftware/invoices':
         specifier: workspace:*
         version: link:../../packages/invoices
@@ -148,6 +151,9 @@ importers:
       '@hoteloftware/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@hoteloftware/fiscal':
+        specifier: workspace:*
+        version: link:../../packages/fiscal
       '@hoteloftware/invoices':
         specifier: workspace:*
         version: link:../../packages/invoices
@@ -243,6 +249,9 @@ importers:
       '@hoteloftware/domain':
         specifier: workspace:*
         version: link:../domain
+      '@hoteloftware/fiscal':
+        specifier: workspace:*
+        version: link:../fiscal
       '@hoteloftware/invoices':
         specifier: workspace:*
         version: link:../invoices
@@ -317,6 +326,18 @@ importers:
       dotenv:
         specifier: ^18.0.4
         version: 18.0.4
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)
+
+  packages/fiscal:
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
       typescript:
         specifier: 5.9.3
         version: 5.9.3
