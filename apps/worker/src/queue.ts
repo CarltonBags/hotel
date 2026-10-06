@@ -4,14 +4,14 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { connectedProperties, enqueueFullPushes, pruneChannelOutbox, claimDueReminders, deleteEndedTenants, deleteExpiredConversations, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
+import { connectedProperties, enqueueFullPushes, pruneChannelOutbox, claimDueReminders, deleteEndedTenants, deleteExpiredConversations, deleteOldUnassignedWhatsApp, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
 import { alertMajorIncidents } from "./outage-alert";
-import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
+import { prunePersonalEvents, WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 import { runMessaging } from "./messaging";
-import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
+import type { MailProvider, SmsProvider, WhatsAppProvider } from "@hoteloftware/messaging";
 import { fileStore } from "@hoteloftware/storage";
 import type { ChannelManager } from "@hoteloftware/channels";
 import { pullChannelBookings, pushTenantChannels } from "./channels";
@@ -63,7 +63,7 @@ export interface QueueOptions {
   /** The payment provider, for the Card Hold check. */
   paymentProvider?: PaymentProvider;
   /** Mail and SMS providers, and the platform's sending domain, for messages and alerts. */
-  messaging?: { mail: MailProvider; sms: SmsProvider; platformDomain: string };
+  messaging?: { mail: MailProvider; sms: SmsProvider; whatsapp?: WhatsAppProvider; platformDomain: string };
   /** The channel manager (Channex or the fake). */
   channelManager?: ChannelManager;
   /** Where the channel manager announces booking revisions (registered for each connected property). */
@@ -124,6 +124,8 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
 
   await boss.work(QUEUES.maintenance, async () => {
     const pruned = await pruneNotifications(pool, 30);
+    // guests' messages in stored webhook events (email replies, WhatsApp) go after a week, whatever became of the event
+    await prunePersonalEvents(pool, ["mail-inbound", "whatsapp"]).catch((err) => console.error("[maintenance] personal webhook events", err));
     if (pruned) console.log(`[maintenance] pruned ${pruned} old notifications`);
     // a demo trial is deleted 30 days after it ended (ticket 87)
     const demos = await deleteExpiredDemoTenants(pool);
@@ -159,6 +161,8 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
       // Conversations past their months after the stay, unless kept for a dispute (ticket 43); their files go just below
       const conv = await deleteExpiredConversations(pool, t.schema_name, today).catch((err) => (console.error(`[maintenance] conversations of ${t.slug}`, err), 0));
       if (conv) console.log(`[maintenance] ${t.slug}: deleted ${conv} conversation(s) past retention`);
+      // WhatsApp messages nobody linked go after a month (ticket 44)
+      await deleteOldUnassignedWhatsApp(pool, t.schema_name).catch((err) => console.error(`[maintenance] unassigned WhatsApp of ${t.slug}`, err));
       // stored files past their retention day (ticket 36)
       const f = await deleteExpiredFiles(pool, t.schema_name, fileStore(), today).catch((err) => (console.error(`[maintenance] files of ${t.slug}`, err), 0));
       if (f) console.log(`[maintenance] ${t.slug}: deleted ${f} file(s) past retention`);

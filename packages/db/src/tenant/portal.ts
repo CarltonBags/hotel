@@ -6,6 +6,7 @@ import { loadGuest, updateGuestIn, type Guest } from "./guests";
 import { fileIn, setFileRetention } from "./files";
 import { queueGuestMessageIn, type PortalLinks } from "./messages";
 import { amountDueIn, cardGuaranteeIn } from "./payments";
+import { setConsentIn, whatsAppConnectionIn, whatsAppConsentIn } from "./whatsapp";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -40,6 +41,8 @@ export interface PortalProperty {
   documentImages: boolean;
   /** The property's own landscape, if it set one. */
   photoFileId: string | null;
+  /** The property is on WhatsApp (ticket 44): guests may opt in. */
+  whatsapp: boolean;
 }
 
 export interface PortalStay {
@@ -61,6 +64,7 @@ export interface PortalStay {
   extras: { id: string; name: string; price: number }[];
   added: { description: string; quantity: number; amount: number }[];
   emailConsent: boolean | null;
+  whatsAppConsent: boolean | null;
   /** What is due now: ahead of arrival by the Payment Policy, in house the open folio balance. */
   amountDue: number;
   /** The card securing the stay (brand and last digits only). */
@@ -96,6 +100,7 @@ async function propertyOf(tx: PoolClient, propertyId: string): Promise<PortalPro
     info: p.portal_info ?? {},
     documentImages: p.portal_document_images && isRegistrationCountry(p.country),
     photoFileId: p.portal_photo_file_id,
+    whatsapp: !!(await whatsAppConnectionIn(tx, propertyId)),
   };
 }
 
@@ -171,6 +176,7 @@ async function stayOf(tx: PoolClient, reservationId: string): Promise<PortalStay
     extras: extras.map((e) => ({ id: e.id, name: e.name, price: Number(e.default_price) })),
     added: added.map((a) => ({ description: a.description, quantity: Number(a.quantity), amount: Number(a.amount) })),
     emailConsent: consent[0]?.granted ?? null,
+    whatsAppConsent: await whatsAppConsentIn(tx, r.primary_guest_id),
   };
 }
 
@@ -219,6 +225,8 @@ export interface PrecheckinInput {
   companions: Companion[];
   /** Messaging Consent for email, with the wording shown (the server's own text, not the form's). */
   emailConsent: { granted: boolean; wording: string } | null;
+  /** The same for WhatsApp, where the property offers it (ticket 44). */
+  whatsAppConsent?: { granted: boolean; wording: string } | null;
 }
 
 export const MAX_COMPANIONS = 10;
@@ -267,6 +275,9 @@ export async function savePrecheckin(pool: Pool, schema: string, key: string, in
       if (last?.granted !== input.emailConsent.granted) {
         await tx.query("insert into messaging_consents (guest_id, transport, granted, source, wording) values ($1, 'email', $2, 'guest portal', $3)", [r.primary_guest_id, input.emailConsent.granted, input.emailConsent.wording.slice(0, 1000)]);
       }
+    }
+    if (input.whatsAppConsent && (await whatsAppConnectionIn(tx, r.property_id))) {
+      await setConsentIn(tx, r.primary_guest_id, { granted: input.whatsAppConsent.granted, source: "guest portal", wording: input.whatsAppConsent.wording });
     }
     await tx.query("update reservations set arrival_time = $2, precheckin_at = now() where id = $1", [r.id, input.arrivalTime || null]);
   });

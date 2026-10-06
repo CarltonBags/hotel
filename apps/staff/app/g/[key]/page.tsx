@@ -120,6 +120,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
               arrivalTime: s.arrivalTime,
               companions: s.companions,
               consent: s.emailConsent ?? false,
+              whatsAppConsent: view.property.whatsapp ? (s.whatsAppConsent ?? false) : null,
             }}
           />
         </Glass>

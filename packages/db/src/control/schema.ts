@@ -407,8 +407,9 @@ export const usageEvents = control.table(
     quantity: integer("quantity").notNull(),
     cost: numeric("cost", { precision: 12, scale: 4 }).notNull(),
     at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    propertyId: uuid("property_id"),
   },
-  (t) => [check("usage_events_quantity_check", sql`${t.quantity} > 0`), check("usage_events_cost_check", sql`${t.cost} >= 0`), index("usage_events_tenant_idx").on(t.tenantId, t.at)],
+  (t) => [check("usage_events_quantity_check", sql`${t.quantity} > 0`), check("usage_events_cost_check", sql`${t.cost} >= 0`), index("usage_events_tenant_idx").on(t.tenantId, t.at), index("usage_events_property_idx").on(t.tenantId, t.propertyId, t.kind, t.at)],
 );
 
 export const roomCounts = control.table(

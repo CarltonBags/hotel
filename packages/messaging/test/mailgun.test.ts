@@ -73,3 +73,31 @@ describe("incoming mail (ticket 43)", () => {
     expect(mg.parseInbound(fields)).toMatchObject({ id: "<abc@mail.example>", text: "Thanks!", headers: { "auto-submitted": "no" }, attachments: [{ name: "a.png", type: "image/png" }] });
   });
 });
+
+describe("WhatsApp webhooks (ticket 44)", () => {
+  it("reads Meta's messages, statuses and template reviews, and checks the app signature", async () => {
+    const { MetaCloudProvider, parseMetaWebhook } = await import("../src/whatsapp");
+    const body = {
+      entry: [
+        {
+          id: "waba1",
+          changes: [
+            { field: "messages", value: { metadata: { phone_number_id: "pn1" }, contacts: [{ wa_id: "491701234567", profile: { name: "Mira" } }], messages: [{ id: "wamid.1", from: "491701234567", timestamp: "1790000000", type: "text", text: { body: "Hi" } }], statuses: [{ id: "wamid.out", status: "delivered", pricing: { billable: true } }] } },
+            { field: "message_template_status_update", value: { event: "APPROVED", message_template_id: "t1", reason: "NONE" } },
+          ],
+        },
+      ],
+    };
+    expect(parseMetaWebhook(body)).toEqual([
+      { kind: "message", phoneNumberId: "pn1", id: "wamid.1", from: "491701234567", at: new Date(1790000000 * 1000), name: "Mira", text: "Hi", media: null },
+      { kind: "status", phoneNumberId: "pn1", id: "wamid.out", status: "delivered", error: null, billable: true },
+      { kind: "template", wabaId: "waba1", templateId: "t1", status: "approved", reason: null },
+    ]);
+    const meta = new MetaCloudProvider({ appId: "a", appSecret: "secret", systemToken: "t", verifyToken: "v" });
+    const raw = JSON.stringify(body);
+    const sig = createHmac("sha256", "secret").update(raw).digest("hex");
+    expect(meta.verifyWebhook({ "x-hub-signature-256": `sha256=${sig}` }, raw)).toBe(true);
+    expect(meta.verifyWebhook({ "x-hub-signature-256": "sha256=00" }, raw)).toBe(false);
+    expect(meta.verifyChallenge(new URLSearchParams({ "hub.mode": "subscribe", "hub.verify_token": "v", "hub.challenge": "42" }))).toBe("42");
+  });
+});

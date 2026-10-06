@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
-import { DATA_KINDS, fillQuickReply, isConversationFile, type QuickReplyValues } from "@hoteloftware/domain";
+import { DATA_KINDS, fillQuickReply, isConversationFile, sensitiveData, type QuickReplyValues } from "@hoteloftware/domain";
 import type { FormState } from "@/lib/form";
 import { DATA_EVENT } from "@/shell/LiveRefresh";
 import { useShell } from "@/shell/ShellProvider";
@@ -70,6 +70,7 @@ export function Composer({
   seenUpTo,
   quickReplies,
   values,
+  whatsapp,
 }: {
   propertyId: string;
   conversationId: string;
@@ -77,8 +78,12 @@ export function Composer({
   seenUpTo: string | null;
   quickReplies: { id: string; title: string; body: string }[];
   values: QuickReplyValues;
+  /** The guest can be reached on WhatsApp (ticket 44): free text (and files) only within the 24 hours; outside them a template is sent from its own form. */
+  whatsapp: { windowOpen: boolean } | null;
 }) {
   const { t } = useShell();
+  const [transport, setTransport] = useState<"email" | "whatsapp">(whatsapp?.windowOpen ? "whatsapp" : "email");
+  const [sensitive, setSensitive] = useState<string | null>(null);
   const [state, run, pending] = useActionState<FormState, FormData>(sendMessageAction, {});
   const form = useRef<HTMLFormElement>(null);
   const text = useRef<HTMLTextAreaElement>(null);
@@ -86,7 +91,9 @@ export function Composer({
   useEffect(() => {
     if (state.ok) form.current?.reset();
   }, [state]);
+  const byWhatsApp = transport === "whatsapp" && !!whatsapp?.windowOpen;
   const typing = () => {
+    if (text.current) setSensitive(sensitiveData(text.current.value));
     // now and then, not on every key
     if (Date.now() - lastTyping.current < 3000) return;
     lastTyping.current = Date.now();
@@ -97,6 +104,31 @@ export function Composer({
       <input type="hidden" name="propertyId" value={propertyId} />
       <input type="hidden" name="conversationId" value={conversationId} />
       <input type="hidden" name="seenUpTo" value={seenUpTo ?? ""} />
+      <input type="hidden" name="transport" value={byWhatsApp ? "whatsapp" : "email"} />
+      {whatsapp?.windowOpen ? (
+        <div className="grid gap-1 text-[12px]" data-transport>
+          <label className="flex items-center gap-2">
+            <span className="text-ink-60">{t("wa.transport")}</span>
+            <select value={transport} onChange={(e) => setTransport(e.target.value as "email" | "whatsapp")} className="h-8 rounded-lg bg-surface-2 px-2">
+              <option value="whatsapp">WhatsApp</option>
+              <option value="email">{t("wa.email")}</option>
+            </select>
+          </label>
+          {byWhatsApp ? (
+            <>
+              <span data-window="open" className="text-ink-60">
+                {t("wa.windowOpen")}
+              </span>
+              <span className="text-warning">{t("wa.sensitive")}</span>
+              {sensitive ? (
+                <span role="alert" className="text-danger" data-sensitive>
+                  {t("wa.sensitiveFound", { what: sensitive })}
+                </span>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
       {quickReplies.length ? (
         <select
           aria-label={t("inbox.quickReply")}

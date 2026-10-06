@@ -50,6 +50,8 @@ export async function precheckinAction(key: string, _prev: FormState, formData: 
       companions,
       // the wording is ours, in the language the guest saw it in, never the form's
       emailConsent: { granted: flag(formData, "consent"), wording: portalText(portalLanguage(field(formData, "lang"), null), "consent") },
+      // offered only where the property is on WhatsApp; recorded only there
+      whatsAppConsent: formData.getAll("whatsapp").length ? { granted: flag(formData, "whatsapp"), wording: portalText(portalLanguage(field(formData, "lang"), null), "whatsappConsent") } : null,
     });
     const image = formData.get("documentImage");
     const view = await portalView(pool(), t.schemaName, key);

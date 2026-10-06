@@ -48,6 +48,8 @@ export interface PrecheckinValues {
   arrivalTime: string | null;
   companions: { firstName: string; lastName: string; dateOfBirth: string | null; nationality: string | null }[];
   consent: boolean;
+  /** Offered where the property is on WhatsApp (ticket 44); null: not offered. */
+  whatsAppConsent: boolean | null;
 }
 
 /** Pre-check-in: one card, the guest's details, document, companions, arrival time, consent. */
@@ -110,6 +112,12 @@ export function PrecheckinForm({ action, language, values, persons, documentImag
         <input type="hidden" name="consent" value="off" />
         <input type="checkbox" name="consent" defaultChecked={values.consent} /> {t("consent")}
       </label>
+      {values.whatsAppConsent !== null ? (
+        <label className="flex items-center gap-2 text-sm" data-whatsapp-consent>
+          <input type="hidden" name="whatsapp" value="off" />
+          <input type="checkbox" name="whatsapp" defaultChecked={values.whatsAppConsent} /> {t("whatsappConsent")}
+        </label>
+      ) : null}
       <input type="hidden" name="lang" value={language} />
       <Note state={state} language={language} />
       <button type="submit" disabled={pending} className={guestButton}>
