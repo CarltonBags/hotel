@@ -1,6 +1,6 @@
 import { receiptsOfPaymentToSign, signReceipt, type FiscalDeps } from "@hoteloftware/db";
-import { notifyFiscalOutage } from "@hoteloftware/events";
-import { fiscalProvider, fiscalSecret } from "@hoteloftware/fiscal";
+import { notifyFiscalOutage, notifyReceiptRefused } from "@hoteloftware/events";
+import { atFiscalProvider, fiscalProvider, fiscalSecret } from "@hoteloftware/fiscal";
 import { pool } from "./db";
 
 /** The fiscal provider, with the platform's fiscal secret when it is set (ticket 51). Server only. */
@@ -11,7 +11,7 @@ export function fiscalDeps(): FiscalDeps {
   } catch {
     // signing needs no secret; setting up a TSE and registering clients do, and say so
   }
-  return { provider: fiscalProvider(), secret };
+  return { provider: fiscalProvider(), at: atFiscalProvider(), secret };
 }
 
 /**
@@ -26,5 +26,6 @@ export async function signPaymentReceipts(tenant: { id: string; schemaName: stri
   for (const id of await receiptsOfPaymentToSign(pool(), tenant.schemaName, paymentId).catch(() => [])) {
     const r = await signReceipt(pool(), tenant.schemaName, deps, id).catch((err) => (console.error("[fiscal] sign", err), null));
     if (r?.state === "failed" && r.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: r.propertyId, error: r.error }).catch(() => undefined);
+    if (r?.state === "refused" && r.newly) await notifyReceiptRefused(pool(), tenant, { propertyId: r.propertyId, error: r.error ?? "" }).catch(() => undefined);
   }
 }

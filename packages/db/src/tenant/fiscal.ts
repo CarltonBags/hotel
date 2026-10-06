@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { FiscalUnavailable, adminPinFor, seal, type FiscalProvider, type SignedTx } from "@hoteloftware/fiscal";
+import { FiscalUnavailable, adminPinFor, seal, type AtFiscalProvider, type FiscalProvider, type SignedTx } from "@hoteloftware/fiscal";
 import { tenantKey, type FileStore } from "@hoteloftware/storage";
 import {
+  AT_NOT_SIGNED_NOTICE,
+  AT_OUTAGE_NOTICE,
   FISCAL_OUTAGE_NOTICE,
   FISCAL_SCOPES,
   dsfinvkClosing,
@@ -21,6 +23,7 @@ import {
 import { isUuid } from "./catalogue-common";
 import { inTestMode } from "./go-live";
 import { stayComposition } from "./invoices";
+import { signAtReceipt } from "./fiscal-at";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -37,6 +40,8 @@ import { withTenant } from "./with-tenant";
 
 export interface FiscalDeps {
   provider: FiscalProvider;
+  /** Austria's provider (ticket 52); absent where only Germany is signed. */
+  at?: AtFiscalProvider;
   /** The platform's secret for the admin PIN and the sealed PUK: needed to set up a TSE and register clients, not to sign. */
   secret: string | null;
 }
@@ -94,7 +99,7 @@ export interface FiscalStatus {
   archives: FiscalArchiveView[];
 }
 
-async function unitIn(tx: PoolClient, propertyId: string): Promise<(FiscalUnitView & { tssId: string }) | null> {
+export async function unitIn(tx: PoolClient, propertyId: string): Promise<(FiscalUnitView & { tssId: string }) | null> {
   const u = (await tx.query<{ provider: string; tss_id: string; tss_serial: string; public_key: string; signature_algorithm: string; timestamp_format: string; scope: FiscalScope; in_use_since: Date }>(
     "select provider, tss_id, tss_serial, public_key, signature_algorithm, timestamp_format, scope, in_use_since from fiscal_units where property_id = $1",
     [propertyId],
@@ -173,7 +178,7 @@ export async function setFiscalScope(pool: Pool, schema: string, propertyId: str
 }
 
 /** The client of a Cash Register, or the desk's client for Receipts without one; made with its serial on first use. */
-async function clientIn(tx: PoolClient, propertyId: string, registerId: string | null): Promise<{ id: string; serial: string; registeredAt: Date | null; dsfinvkRegisteredAt: Date | null }> {
+export async function clientIn(tx: PoolClient, propertyId: string, registerId: string | null): Promise<{ id: string; serial: string; registeredAt: Date | null; dsfinvkRegisteredAt: Date | null }> {
   const find = () =>
     tx.query<{ id: string; serial: string; registered_at: Date | null; dsfinvk_registered_at: Date | null }>(
       `select id, serial, registered_at, dsfinvk_registered_at from fiscal_clients where property_id = $1 and ${registerId ? "register_id = $2" : "register_id is null"}`,
@@ -202,9 +207,10 @@ export async function recordFiscalIn(tx: PoolClient, receiptId: string): Promise
      where rc.id = $1`,
     [receiptId],
   )).rows[0];
-  if (!r || r.country !== "DE" || r.test || (await inTestMode(tx))) return;
-  const unit = await unitIn(tx, r.property_id);
-  if (!unit || !fiscalScopeCovers(unit.scope, r.tender)) return;
+  if (!r || (r.country !== "DE" && r.country !== "AT") || r.test || (await inTestMode(tx))) return;
+  // Austria signs every on-site payment, cards included, also one taken before its signature unit is set up (signed once it is);
+  // Germany as its scope says, once its TSE is in use
+  if (r.country === "DE" && !((u) => !!u && fiscalScopeCovers(u.scope, r.tender))(await unitIn(tx, r.property_id))) return;
   const amount = Number(r.amount);
   let amounts: VatAmount[];
   let businessCase: FiscalBusinessCase;
@@ -222,9 +228,10 @@ export async function recordFiscalIn(tx: PoolClient, receiptId: string): Promise
   }
   const client = await clientIn(tx, r.property_id, r.register_id);
   await tx.query(
-    `insert into fiscal_transactions (receipt_id, property_id, client_id, business_date, business_case, tender, currency, amount, amounts)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict (receipt_id) do nothing`,
-    [receiptId, r.property_id, client.id, r.business_date, businessCase, r.tender, r.currency, amount, JSON.stringify(amounts)],
+    `insert into fiscal_transactions (receipt_id, property_id, client_id, business_date, business_case, tender, currency, amount, amounts, receipt_type)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (receipt_id) do nothing`,
+    // Austria: corrections only by cancellation receipts, so a refund is one
+    [receiptId, r.property_id, client.id, r.business_date, businessCase, r.tender, r.currency, amount, JSON.stringify(amounts), r.country === "AT" && r.refund_of ? "cancellation" : "normal"],
   );
 }
 
@@ -232,7 +239,9 @@ export type FiscalSignResult =
   | { state: "none" }
   | { state: "signing" }
   | { state: "signed"; propertyId: string }
-  | { state: "failed"; propertyId: string; error: string; outageStarted: boolean };
+  | { state: "failed"; propertyId: string; error: string; outageStarted: boolean }
+  /** Austria: the provider will not sign it; the desk is told when it happens (`newly`) and corrects it. */
+  | { state: "refused"; propertyId: string; newly: boolean; error?: string };
 
 /**
  * Sign one Receipt right after its payment (the desk's action, the worker
@@ -243,6 +252,9 @@ export type FiscalSignResult =
  */
 export async function signReceipt(pool: Pool, schema: string, deps: FiscalDeps, receiptId: string): Promise<FiscalSignResult> {
   if (!isUuid(receiptId)) return { state: "none" };
+  const country = await withTenant(pool, schema, async (tx) => (await tx.query<{ country: string }>("select p.country from fiscal_transactions f join properties p on p.id = f.property_id where f.receipt_id = $1", [receiptId])).rows[0]?.country);
+  if (!country) return { state: "none" };
+  if (country === "AT") return signAtReceipt(pool, schema, deps, receiptId);
   const claim = randomUUID();
   const held = await withTenant(pool, schema, async (tx) => {
     const f = (await tx.query<{ state: string; stale: boolean; attempts: number; property_id: string; client_id: string; amounts: VatAmount[]; tender: string; currency: string; amount: string }>(
@@ -312,8 +324,10 @@ export async function receiptsToSign(pool: Pool, schema: string, limit = 50): Pr
   return withTenant(pool, schema, async (tx) =>
     (await tx.query<{ id: string }>(
       `select receipt_id as id from fiscal_transactions
-       where state = 'open' or (state = 'signing' and claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}))
-       order by created_at limit $1`,
+       -- one tried before waits a minute per attempt (at most half an hour), so receipts that keep failing never crowd out new ones
+       where (state = 'open' and (attempts = 0 or claimed_at < now() - least(attempts, 30) * interval '1 minute'))
+          or (state = 'signing' and claimed_at < now() - make_interval(secs => ${STALE_CLAIM_SECONDS}))
+       order by attempts, created_at limit $1`,
       [limit],
     )).rows.map((r) => r.id),
   );
@@ -326,16 +340,25 @@ export async function fiscalProperties(pool: Pool, schema: string): Promise<stri
 
 /** What a Receipt prints of its signature: the TSE's data with the QR code, or the outage notice. */
 export type ReceiptFiscal =
+  | { state: "at_signed"; receiptNumber: string; timeSignature: Date; registerSerial: string; qrCodeData: string; unitFailed: boolean; cancellation: boolean; amounts: VatAmount[] }
+  | { state: "at_unsigned"; notice: string; registerSerial: string | null; cancellation: boolean; amounts: VatAmount[] }
   | { state: "signed"; number: number; timeStart: Date; timeEnd: Date; signature: string; signatureCounter: number; algorithm: string; publicKey: string; tssSerial: string; clientSerial: string; timestampFormat: string; qrCodeData: string; amounts: VatAmount[]; businessCase: FiscalBusinessCase }
   | { state: "failed"; notice: string; clientSerial: string; amounts: VatAmount[]; businessCase: FiscalBusinessCase }
   | { state: "signing"; amounts: VatAmount[]; businessCase: FiscalBusinessCase };
 
 export async function receiptFiscalIn(tx: PoolClient, receiptId: string): Promise<ReceiptFiscal | null> {
-  const f = (await tx.query<{ state: string; number: string | null; time_start: Date | null; time_end: Date | null; signature: string | null; signature_counter: string | null; algorithm: string | null; public_key: string | null; tss_serial: string | null; client_serial: string | null; serial: string; timestamp_format: string | null; qr_code_data: string | null; amounts: VatAmount[]; business_case: FiscalBusinessCase }>(
-    "select f.*, c.serial from fiscal_transactions f join fiscal_clients c on c.id = f.client_id where f.receipt_id = $1",
+  const f = (await tx.query<{ state: string; number: string | null; time_start: Date | null; time_end: Date | null; signature: string | null; signature_counter: string | null; algorithm: string | null; public_key: string | null; tss_serial: string | null; client_serial: string | null; serial: string; timestamp_format: string | null; qr_code_data: string | null; amounts: VatAmount[]; business_case: FiscalBusinessCase; country: string; receipt_number: string | null; unit_failed: boolean; receipt_type: string; provider_serial: string | null; attempts: number }>(
+    "select f.*, c.serial, c.provider_serial, p.country from fiscal_transactions f join fiscal_clients c on c.id = f.client_id join properties p on p.id = f.property_id where f.receipt_id = $1",
     [receiptId],
   )).rows[0];
   if (!f) return null;
+  if (f.country === "AT") {
+    if (f.state === "signed") return { state: "at_signed", receiptNumber: f.receipt_number!, timeSignature: f.time_start!, registerSerial: f.client_serial ?? f.provider_serial ?? "", qrCodeData: f.qr_code_data!, unitFailed: f.unit_failed, cancellation: f.receipt_type === "cancellation", amounts: f.amounts };
+    // refused by the provider: the desk corrects it; tried and not reached: the guest's Receipt says so and is signed once the provider answers
+    if (f.state === "failed") return { state: "at_unsigned", notice: AT_NOT_SIGNED_NOTICE, registerSerial: f.provider_serial, cancellation: f.receipt_type === "cancellation", amounts: f.amounts };
+    if (f.attempts > 0 && f.state === "open") return { state: "at_unsigned", notice: AT_OUTAGE_NOTICE, registerSerial: f.provider_serial, cancellation: f.receipt_type === "cancellation", amounts: f.amounts };
+    return { state: "signing", amounts: f.amounts, businessCase: f.business_case };
+  }
   if (f.state === "open" || f.state === "signing") return { state: "signing", amounts: f.amounts, businessCase: f.business_case };
   if (f.state === "failed") return { state: "failed", notice: FISCAL_OUTAGE_NOTICE, clientSerial: f.serial, amounts: f.amounts, businessCase: f.business_case };
   return {
@@ -433,7 +456,7 @@ export async function fiscalDaysToClose(pool: Pool, schema: string): Promise<{ p
   return withTenant(pool, schema, async (tx) =>
     (await tx.query<{ property_id: string; d: string }>(
       `select distinct f.property_id, to_char(f.business_date, 'YYYY-MM-DD') as d from fiscal_transactions f join properties p on p.id = f.property_id
-       where f.state in ('signed', 'failed') and f.business_date < coalesce(p.business_date, (now() at time zone p.time_zone)::date)
+       where p.country = 'DE' and f.state in ('signed', 'failed') and f.business_date < coalesce(p.business_date, (now() at time zone p.time_zone)::date)
          and not exists (select 1 from fiscal_transactions o where o.client_id = f.client_id and o.business_date = f.business_date and o.state in ('open', 'signing'))
          -- done, or refused within the hour (asked again later, not every minute)
          and not exists (select 1 from fiscal_closings z where z.client_id = f.client_id and z.business_date = f.business_date

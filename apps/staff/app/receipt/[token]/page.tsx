@@ -24,14 +24,14 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
   const { token } = await params;
   let r = await receiptByToken(pool(), tenant.schemaName, token);
   if (!r) notFound();
-  if (r.fiscal?.state === "signing") {
+  if (r.fiscal?.state === "signing" || r.fiscal?.state === "at_unsigned") {
     // normally signed with the payment; one still open is tried once more here (the worker signs any left)
     const signed = await signReceipt(pool(), tenant.schemaName, fiscalDeps(), r.id).catch((err) => (console.error("[fiscal] sign", err), null));
     if (signed?.state === "failed" && signed.outageStarted) await notifyFiscalOutage(pool(), tenant, { propertyId: signed.propertyId, error: signed.error }).catch(() => undefined);
     if (signed && signed.state !== "none") r = (await receiptByToken(pool(), tenant.schemaName, token)) ?? r;
   }
   const f = r.fiscal;
-  const tse = f?.state === "signed" ? await QRCode.toString(f.qrCodeData, { type: "svg", margin: 1, errorCorrectionLevel: "L" }) : null;
+  const tse = f?.state === "signed" || f?.state === "at_signed" ? await QRCode.toString(f.qrCodeData, { type: "svg", margin: 1, errorCorrectionLevel: "L" }) : null;
   const unix = (d: Date) => Math.floor(d.getTime() / 1000);
   const day = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}.`;
   const scheme = env.authUrl.startsWith("https") ? "https" : "http";
@@ -63,7 +63,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
         {/* the service paid for (KassenSichV: type and quantity) */}
         <dt>Leistung / Service</dt>
         <dd className="text-right" data-receipt-service>
-          1 × {f?.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} {day(r.stay.arrival)}–{day(r.stay.departure)}
+          1 × {f && "businessCase" in f && f.businessCase === "Anzahlungseinstellung" ? "Anzahlung Übernachtung / Deposit, stay" : "Übernachtung / Hotel stay"} {day(r.stay.arrival)}–{day(r.stay.departure)}
         </dd>
         <dt>Zahlungsart / Tender</dt>
         <dd className="text-right">{tender}</dd>
@@ -125,6 +125,29 @@ export default async function ReceiptPage({ params }: { params: Promise<{ token:
           </dl>
           {/* the TSE's own QR code, printed as the provider gives it (made on our server from the signed data) */}
           <div className="mx-auto w-40" data-tse-qr dangerouslySetInnerHTML={{ __html: tse! }} />
+        </section>
+      ) : f?.state === "at_signed" ? (
+        <section className="grid gap-1 text-[11px]" data-rksv>
+          <hr className="border-dashed border-black" />
+          {f.cancellation ? <p className="font-bold">Stornobuchung</p> : null}
+          {f.unitFailed ? <p className="font-bold">Sicherheitseinrichtung ausgefallen</p> : null}
+          <dl className="grid grid-cols-[auto_1fr] gap-x-2 break-all">
+            <dt>Kassen-ID</dt>
+            <dd>{f.registerSerial}</dd>
+            <dt>RKSV-Beleg</dt>
+            <dd>{f.receiptNumber}</dd>
+            <dt>RKSV-Datum</dt>
+            <dd>{new Intl.DateTimeFormat("de-AT", { dateStyle: "short", timeStyle: "medium", timeZone: r.timeZone }).format(f.timeSignature)}</dd>
+          </dl>
+          {/* the RKSV's machine-readable code, as the provider gives it (made on our server from the signed data) */}
+          <div className="mx-auto w-40" data-rksv-qr dangerouslySetInnerHTML={{ __html: tse! }} />
+        </section>
+      ) : f?.state === "at_unsigned" ? (
+        <section className="grid gap-1 text-[11px]" data-rksv-outage>
+          <hr className="border-dashed border-black" />
+          {f.cancellation ? <p className="font-bold">Stornobuchung</p> : null}
+          <p className="font-bold">{f.notice}</p>
+          {f.registerSerial ? <p>Kassen-ID {f.registerSerial}</p> : null}
         </section>
       ) : f?.state === "failed" ? (
         <section className="grid gap-1 text-[11px]" data-tse-outage>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { refundVatAmounts, dsfinvkClosing, fiscalScopeCovers, fiscalSerial, fiscalVat, receiptVatAmounts } from "../src";
+import { atOutageReport, atVatKey, yearlyReceiptCheckBy, refundVatAmounts, dsfinvkClosing, fiscalScopeCovers, fiscalSerial, fiscalVat, receiptVatAmounts } from "../src";
 
 describe("fiscal module Germany", () => {
   it("a payment is shared over the VAT rates of what it pays for, to the cent", () => {
@@ -48,5 +48,14 @@ describe("fiscal module Germany", () => {
     ]);
     expect(c.cash_statement.payment).toEqual({ full_amount: 226, cash_amount: 107, cash_amounts_by_currency: [{ currency_code: "EUR", amount: 107 }], payment_types: [{ type: "Bar", currency_code: "EUR", amount: 107 }, { type: "Unbar", currency_code: "EUR", amount: 119 }] });
     expect(c.transactions.map((t: any) => t.security)).toEqual([{ tss_tx_id: "tx-a" }, { error_message: "TSS not available" }]);
+  });
+
+  it("Austria: rate keys, the 48-hour outage report due within a week, the yearly receipt checked by 15 February", () => {
+    expect([20, 10, 13, 19, 0].map(atVatKey)).toEqual(["STANDARD", "REDUCED_1", "REDUCED_2", "SPECIAL", "ZERO"]);
+    expect(() => atVatKey(null)).toThrow();
+    const start = new Date("2026-10-01T08:00:00Z");
+    expect(atOutageReport({ startedAt: start, endedAt: new Date("2026-10-03T07:00:00Z") }, new Date("2026-10-05T00:00:00Z"))).toEqual({ due: false, reportBy: null });
+    expect(atOutageReport({ startedAt: start, endedAt: null }, new Date("2026-10-03T09:00:00Z"))).toEqual({ due: true, reportBy: new Date("2026-10-10T08:00:00Z") });
+    expect(yearlyReceiptCheckBy(new Date("2026-12-31T23:59:00Z"))).toBe("2027-02-15");
   });
 });

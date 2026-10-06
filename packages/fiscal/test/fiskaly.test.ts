@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FiscalUnavailable, FiskalyProvider, adminPinFor, seal, unseal } from "../src";
+import { FiscalRefused, FiscalUnavailable, FiskalyAtProvider, FiskalyProvider, adminPinFor, seal, unseal } from "../src";
 
 /** Seams: the requests fiskaly receives for a Receipt, and what comes back from it; the admin secrets. */
 describe("fiskaly SIGN DE", () => {
@@ -70,5 +70,23 @@ describe("fiskaly SIGN DE", () => {
     expect(sealed).not.toContain("PUK");
     expect(unseal(secret, sealed)).toBe("PUK123456");
     expect(() => unseal("another-secret-entirely", sealed)).toThrow();
+  });
+});
+
+describe("fiskaly SIGN AT", () => {
+  const input = { registerId: "r1", receiptId: "x1", type: "NORMAL" as const, amountsPerVatRate: [{ vatRate: "REDUCED_1" as const, amount: "10.00" }], amountsPerPaymentType: [], lineItems: [{ quantity: "1", text: "Zahlung", pricePerUnit: "10.00" }] };
+  const account = { apiKey: "k", apiSecret: "s" };
+  const signed = { receipt_number: "7", time_signature: 1759650000, cash_register_serial_number: "K1", qr_code_data: "_R1-AT1_K1_7", signed: true, hints: [] };
+  const provider = (answer: (method: string) => Response) =>
+    new FiskalyAtProvider((async (url: string, init: RequestInit) => (url.endsWith("/auth") ? Response.json({ access_token: "t", access_token_expires_in: 86400 }) : answer(String(init.method)))) as unknown as typeof fetch);
+
+  it("a receipt signed already under its id is taken as it is", async () => {
+    const p = provider((m) => (m === "PUT" ? new Response(JSON.stringify({ code: "E_CONFLICT" }), { status: 409 }) : Response.json(signed)));
+    await expect(p.sign(account, input)).resolves.toMatchObject({ receiptNumber: "7", signed: true });
+  });
+
+  it("a request it will not sign is refused for good; no answer is an outage", async () => {
+    await expect(provider(() => new Response(JSON.stringify({ code: "E_BAD_REQUEST" }), { status: 400 })).sign(account, input)).rejects.toBeInstanceOf(FiscalRefused);
+    await expect(provider(() => new Response("{}", { status: 503 })).sign(account, input)).rejects.toBeInstanceOf(FiscalUnavailable);
   });
 });

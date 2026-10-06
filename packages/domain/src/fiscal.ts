@@ -155,3 +155,41 @@ export function dsfinvkClosing(input: { clientId: string; exportNumber: number; 
     })),
   };
 }
+
+/** Austria (ticket 52): the RKSV's rate keys. */
+const AT_VAT: { rate: number; key: "STANDARD" | "REDUCED_1" | "REDUCED_2" | "SPECIAL" | "ZERO" }[] = [
+  { rate: 20, key: "STANDARD" },
+  { rate: 10, key: "REDUCED_1" },
+  { rate: 13, key: "REDUCED_2" },
+  { rate: 19, key: "SPECIAL" },
+  { rate: 0, key: "ZERO" },
+];
+
+export function atVatKey(rate: number | null): (typeof AT_VAT)[number]["key"] {
+  // the RKSV has no key for "not determinable": such a payment is refused rather than signed at a guessed rate
+  const v = AT_VAT.find((x) => x.rate === rate);
+  if (!v) throw new Error(`No Austrian VAT rate key for ${rate} %`);
+  return v.key;
+}
+
+/** Printed on an Austrian Receipt the signature unit did not sign (RKSV). */
+export const AT_OUTAGE_NOTICE = "Sicherheitseinrichtung ausgefallen";
+
+/** Printed on an Austrian Receipt the provider refused to sign: the desk corrects it. */
+export const AT_NOT_SIGNED_NOTICE = "Beleg nicht signiert: wird von der Rezeption berichtigt";
+
+/** An outage longer than 48 hours is reported to FinanzOnline within a week (RKSV § 17). */
+export const AT_OUTAGE_REPORT_HOURS = 48;
+export const AT_OUTAGE_REPORT_DAYS = 7;
+
+export function atOutageReport(o: { startedAt: Date; endedAt: Date | null }, now: Date): { due: boolean; reportBy: Date | null } {
+  const reportable = new Date(o.startedAt.getTime() + AT_OUTAGE_REPORT_HOURS * 3_600_000);
+  const due = (o.endedAt ?? now) > reportable;
+  return { due, reportBy: due ? new Date(reportable.getTime() + AT_OUTAGE_REPORT_DAYS * 86_400_000) : null };
+}
+
+/** The yearly receipt is printed and checked by 15 February of the next year. */
+export function yearlyReceiptCheckBy(signedAt: Date): string {
+  const y = signedAt.getUTCMonth() === 11 ? signedAt.getUTCFullYear() + 1 : signedAt.getUTCFullYear();
+  return `${y}-02-15`;
+}
