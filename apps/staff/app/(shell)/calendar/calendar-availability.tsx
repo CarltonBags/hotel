@@ -89,6 +89,14 @@ export function AvailabilityMatrix(props: {
                       <span className="text-[16px] font-semibold">{x.free}</span>
                       {x.lowestPrice !== null ? <span className="text-[10px] text-ink-60">{money(x.lowestPrice)}</span> : null}
                       {restrictionMarks(x) ? <span className="text-[9px] font-semibold text-ink-80">{restrictionMarks(x)}</span> : null}
+                      {/* groups: Held Rooms out of sale; Tentative demand, warned of when above what is free (ticket 58) */}
+                      {x.held || x.tentative ? (
+                        <span className={`text-[9px] font-semibold ${x.groupWarning ? "text-danger" : "text-ink-60"}`} data-group-warning={x.groupWarning ? "" : undefined}>
+                          {x.held ? `G${x.held}` : ""}
+                          {x.held && x.tentative ? " " : ""}
+                          {x.tentative ? `T${x.tentative}${x.groupWarning ? "!" : ""}` : ""}
+                        </span>
+                      ) : null}
                     </>
                   );
                   const cls = `flex h-14 w-full flex-col items-center justify-center leading-tight ${tone(x)} ${on ? "outline outline-2 -outline-offset-2 outline-ink" : ""}`;
@@ -140,6 +148,8 @@ export function AvailabilityMatrix(props: {
                 {day.outOfOrder ? ` · ${fill(m["cal.outOfOrderN"], { n: String(day.outOfOrder) })}` : ""}
                 {day.lowestPrice !== null ? ` · ${money(day.lowestPrice)}` : ""}
               </p>
+              {day.held ? <p className="text-[13px] text-ink-60">{fill(m["cal.groupHeld"], { n: String(day.held) })}</p> : null}
+              {day.tentative ? <p className={`text-[13px] ${day.groupWarning ? "font-medium text-danger" : "text-ink-60"}`}>{fill(m[day.groupWarning ? "cal.groupWarning" : "cal.groupTentative"], { n: String(day.tentative) })}</p> : null}
               <ul className="mt-3 space-y-2" data-testid="cell-reservations">
                 {cell.staying.length + cell.leaving.length === 0 ? <li className="text-[13px] text-ink-40">{m["cal.noStays"]}</li> : null}
                 {[...cell.staying, ...cell.leaving].map((r) => {

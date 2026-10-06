@@ -366,8 +366,10 @@ export const ratePlans = pgTable(
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    groupId: uuid("group_id").references((): AnyPgColumn => groups.id, { onDelete: "set null" }),
   },
   (t) => [
+    index("rate_plans_group_idx").on(t.groupId).where(sql`${t.groupId} is not null`),
     unique("rate_plans_property_id_code_key").on(t.propertyId, t.code),
     index("rate_plans_property_idx").on(t.propertyId, t.sortOrder),
     index("rate_plans_base_idx").on(t.basePlanId).where(sql`${t.basePlanId} is not null`),
@@ -668,6 +670,7 @@ export const reservations = pgTable(
     arrivalTime: text("arrival_time"),
     precheckinAt: timestamp("precheckin_at", { withTimezone: true }),
     expressCheckoutAt: timestamp("express_checkout_at", { withTimezone: true }),
+    groupHoldingId: uuid("group_holding_id").references((): AnyPgColumn => groupHoldings.id),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -2478,6 +2481,59 @@ export const vouchers = pgTable(
   ],
 );
 
+export const groups = pgTable(
+  "groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    name: text("name").notNull(),
+    organiserCompanyId: uuid("organiser_company_id").references(() => companies.id),
+    organiserGuestId: uuid("organiser_guest_id").references(() => guests.id),
+    contact: text("contact").notNull().default(""),
+    status: text("status").notNull().default("tentative"),
+    optionDate: date("option_date"),
+    terms: text("terms").notNull().default(""),
+    reductionRules: text("reduction_rules").notNull().default(""),
+    series: boolean("series").notNull().default(false),
+    releaseDays: integer("release_days").notNull().default(14),
+    ratePlanId: uuid("rate_plan_id").unique().references(() => ratePlans.id),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [
+    check("groups_name_check", sql`length(trim(${t.name})) between 1 and 120`),
+    check("groups_status_check", sql`${t.status} in ('tentative', 'definite', 'lapsed', 'cancelled')`),
+    check("groups_release_days_check", sql`${t.releaseDays} between 0 and 365`),
+    check("groups_organiser_check", sql`${t.organiserCompanyId} is null or ${t.organiserGuestId} is null`),
+    index("groups_property_idx").on(t.propertyId, t.status),
+  ],
+);
+
+export const groupHoldings = pgTable(
+  "group_holdings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    groupId: uuid("group_id").notNull().references(() => groups.id, { onDelete: "cascade" }),
+    arrival: date("arrival").notNull(),
+    departure: date("departure").notNull(),
+    releaseDate: date("release_date").notNull(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    warnedAt: timestamp("warned_at", { withTimezone: true }),
+  },
+  (t) => [check("group_holdings_dates_check", sql`${t.departure} > ${t.arrival} and ${t.releaseDate} <= ${t.arrival}`), index("group_holdings_group_idx").on(t.groupId, t.arrival)],
+);
+
+export const groupHeldRooms = pgTable(
+  "group_held_rooms",
+  {
+    holdingId: uuid("holding_id").notNull().references(() => groupHoldings.id, { onDelete: "cascade" }),
+    roomTypeId: uuid("room_type_id").notNull().references(() => roomTypes.id),
+    date: date("date").notNull(),
+    rooms: integer("rooms").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.holdingId, t.roomTypeId, t.date] }), check("group_held_rooms_rooms_check", sql`${t.rooms} between 0 and 999`), index("group_held_rooms_type_idx").on(t.roomTypeId, t.date)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -2597,4 +2653,7 @@ export const tenantSchema = {
   fiscalAtUnits,
   fiscalSystemReceipts,
   vouchers,
+  groups,
+  groupHoldings,
+  groupHeldRooms,
 };

@@ -88,6 +88,7 @@ export const REPORT_TEXT = {
   cashIn: { en: "Cash in", de: "Einnahmen" },
   cashOut: { en: "Cash out", de: "Ausgaben" },
   paidOuts: { en: "Paid-outs", de: "Auszahlungen" },
+  groupHeld: { en: "Held for groups", de: "Für Gruppen geblockt" },
   vouchersSold: { en: "Vouchers sold (liability)", de: "Gutscheinverkauf (Verbindlichkeit)" },
   voucherLiability: { en: "Vouchers sold (every tender), liability account", de: "Verkaufte Gutscheine (alle Zahlungsarten), Verbindlichkeitskonto" },
   vouchersOpen: { en: "Vouchers outstanding at the period's end (company)", de: "Offene Gutscheine am Periodenende (Firma)" },

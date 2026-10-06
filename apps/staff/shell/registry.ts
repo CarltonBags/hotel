@@ -83,6 +83,7 @@ export const MODULES: ModuleDef[] = [
   { id: "rates", group: "rates", label: "module.rates", icon: "Tag", hue: "#e0457b", href: "/rates", requiresProperty: "manage_rates" },
   soon("availability", "rates", "module.availability", "Grid3x3", "#0aa5a5", 24),
   { ...soon("channel_sync", "rates", "module.channel_sync", "RefreshCw", "#6b7280", 37), requiresModule: "channel" },
+  { id: "groups", group: "front_desk", label: "module.groups", icon: "Users", hue: "#7c5cff", href: "/groups", requiresProperty: "view_groups", requiresModule: "groups" },
   { id: "guests", group: "guests", label: "module.guests", icon: "User", hue: "#7c5cff", href: "/guests", requiresProperty: "view_guests" },
   { id: "companies", group: "guests", label: "module.companies", icon: "Building", hue: "#6b7280", href: "/companies", requiresProperty: "view_companies" },
   { id: "guest_inbox", group: "guests", label: "module.guest_inbox", icon: "MessageCircle", hue: "#0aa5a5", href: "/inbox", requiresProperty: "use_guest_inbox", requiresModule: "guest_portal" },

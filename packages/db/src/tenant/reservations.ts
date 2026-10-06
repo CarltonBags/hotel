@@ -68,6 +68,8 @@ export interface StayQuotes {
 
 export interface PlanRow {
   id: string;
+  /** A group's own plan (ticket 58): booked only from the group. */
+  group_id: string | null;
   code: string;
   name: string;
   kind: "base" | "derived";
@@ -85,8 +87,8 @@ export interface PlanRow {
 }
 
 /** Everything a quote needs, read in one transaction: rooms and their Availability, plans, rates, restrictions and Age Bands. */
-/** `excludeReservationId`: a reservation being edited does not take its own room. */
-export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival: string, departure: string, excludeReservationId: string | null = null) {
+/** `excludeReservationId`: a reservation being edited does not take its own room; `forHoldings`: a group booking into its own Held Rooms (ticket 58). */
+export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival: string, departure: string, excludeReservationId: string | null = null, forHoldings: string[] = []) {
   const lastNight = addDays(departure, -1);
   // one connection runs one query at a time: read in sequence
   const types = await tx.query<{ id: string; code: string; name: string; max_adults: number; max_occupancy: number; rooms: number }>(
@@ -103,8 +105,10 @@ export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival:
     );
   // Out of Order rooms are not for sale on their nights (ticket 33)
   const outOfOrder = await outOfOrderByNight(tx, propertyId, arrival, departure);
+  // Held Rooms of Definite groups not yet booked are out of sale until their Release Date (ticket 58)
+  const held = await heldByNight(tx, propertyId, arrival, departure, forHoldings);
   const plans = await tx.query<PlanRow>(
-      `select p.id, p.code, p.name, p.kind, p.base_plan_id, p.base_occupancy, p.meal_plan, p.public, p.rate_code, p.company_id, c.name as company_name, p.date_change_allowed,
+      `select p.id, p.code, p.name, p.kind, p.base_plan_id, p.base_occupancy, p.meal_plan, p.public, p.rate_code, p.company_id, c.name as company_name, p.date_change_allowed, p.group_id,
          coalesce((select array_agg(rt.room_type_id) from rate_plan_room_types rt where rt.rate_plan_id = p.id), '{}') as room_type_ids,
          coalesce((select json_agg(json_build_object('kind', s.kind, 'age_band_id', s.age_band_id, 'amount', s.amount)) from rate_plan_supplements s where s.rate_plan_id = p.id), '[]'::json) as supplements,
          coalesce((select json_agg(json_build_object('service_id', ps.service_id, 'component_price', ps.component_price)) from rate_plan_services ps where ps.rate_plan_id = p.id), '[]'::json) as included_services
@@ -138,7 +142,9 @@ export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival:
     plans: plans.rows,
     ageBands: bands.rows.map((b) => ({ id: b.id, minAge: b.min_age, maxAge: b.max_age })),
     /** Rooms of the type not for sale on a night: taken by reservations, or Out of Order. */
-    roomsTaken: (roomTypeId: string, date: string) => (occ.get(`${roomTypeId}|${date}`) ?? 0) + (outOfOrder.get(`${roomTypeId}|${date}`) ?? 0),
+    roomsTaken: (roomTypeId: string, date: string) => (occ.get(`${roomTypeId}|${date}`) ?? 0) + (outOfOrder.get(`${roomTypeId}|${date}`) ?? 0) + (held.get(`${roomTypeId}|${date}`) ?? 0),
+    /** Rooms of the type held for Definite groups and not yet booked on a night. */
+    held: (roomTypeId: string, date: string) => held.get(`${roomTypeId}|${date}`) ?? 0,
     /** Rooms of the type Out of Order on a night. */
     outOfOrder: (roomTypeId: string, date: string) => outOfOrder.get(`${roomTypeId}|${date}`) ?? 0,
     price: (planId: string, roomTypeId: string, date: string) => price.get(`${planId}|${roomTypeId}|${date}`) ?? null,
@@ -147,6 +153,24 @@ export async function loadQuoteData(tx: PoolClient, propertyId: string, arrival:
 }
 
 export type QuoteData = Awaited<ReturnType<typeof loadQuoteData>>;
+
+/**
+ * Held Rooms of Definite groups not yet booked by their reservations, per
+ * room type and night (released holdings hold nothing); `forHoldings` are a
+ * booking's own groups, whose Held Rooms it may take.
+ */
+export async function heldByNight(tx: PoolClient, propertyId: string, from: string, to: string, forHoldings: string[] = [], status: "definite" | "tentative" = "definite"): Promise<Map<string, number>> {
+  const { rows } = await tx.query<{ room_type_id: string; date: string; n: number }>(
+    `select h.room_type_id, to_char(h.date, 'YYYY-MM-DD') as date,
+            sum(greatest(h.rooms - (select count(*) from reservations r where r.group_holding_id = gh.id and r.room_type_id = h.room_type_id
+                                     and r.status = any($4::text[]) and r.arrival <= h.date and r.departure > h.date), 0))::int as n
+     from group_held_rooms h join group_holdings gh on gh.id = h.holding_id join groups g on g.id = gh.group_id
+     where g.property_id = $1 and g.status = $6 and gh.released_at is null and h.date >= $2::date and h.date < $3::date and not (gh.id = any($5::uuid[]))
+     group by h.room_type_id, h.date`,
+    [propertyId, from, to, OCCUPYING_STATUSES, forHoldings, status],
+  );
+  return new Map(rows.filter((r) => r.n > 0).map((r) => [`${r.room_type_id}|${r.date}`, r.n]));
+}
 
 /** `takenByThisBooking` counts rooms earlier reservations of the same booking already take. */
 export function quoteFor(data: QuoteData, plan: PlanRow, type: QuoteData["types"][number], stay: StayRequest, takenByThisBooking: (date: string) => number): StayQuote {
@@ -184,10 +208,10 @@ export async function quoteStays(pool: Pool, schema: string, propertyId: string,
   checkStayRequest(stay);
   return withTenant(pool, schema, async (tx) => {
     const data = await loadQuoteData(tx, propertyId, stay.arrival, stay.departure);
-    const coded = data.plans.find((p) => !p.public && sameCode(p.rate_code, stay.rateCode));
+    const coded = data.plans.find((p) => !p.public && !p.group_id && sameCode(p.rate_code, stay.rateCode));
     const roomTypes = data.types.map((t) => {
       const plans = data.plans
-        .filter((p) => p.room_type_ids.includes(t.id) && (p.public || sameCode(p.rate_code, stay.rateCode)))
+        .filter((p) => p.room_type_ids.includes(t.id) && !p.group_id && (p.public || sameCode(p.rate_code, stay.rateCode)))
         .map((p) => ({ ratePlanId: p.id, code: p.code, name: p.name, mealPlan: p.meal_plan, hidden: !p.public, quote: quoteFor(data, p, t, stay, () => 0) }));
       const available = Math.min(...nightsOf(stay.arrival, stay.departure).map((d) => t.rooms - data.roomsTaken(t.id, d)));
       return { roomTypeId: t.id, code: t.code, name: t.name, maxAdults: t.max_adults, maxOccupancy: t.max_occupancy, rooms: t.rooms, available, plans };
@@ -204,6 +228,8 @@ export interface NewReservation extends Omit<StayRequest, "rateCode"> {
   expectedTotal?: number | undefined;
   /** Book past Availability after the user's explicit confirmation (Front Desk, Property Manager); flagged as overbooked. */
   force?: boolean | undefined;
+  /** Booked for a group: into its holding's Held Rooms, at its prices (ticket 58). */
+  groupHoldingId?: string | undefined;
 }
 
 /** A quote that fails only for lack of free rooms may still be booked when the user forced it. */
@@ -253,7 +279,13 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
     if (input.walkIn && input.reservations.some((r) => r.arrival !== today)) throw new Error("A walk-in arrives today");
     const from = input.reservations.map((r) => r.arrival).sort()[0]!;
     const to = input.reservations.map((r) => r.departure).sort().at(-1)!;
-    const data = await loadQuoteData(tx, propertyId, from, to);
+    const holdingIds = [...new Set(input.reservations.map((r) => r.groupHoldingId).filter((h): h is string => !!h))];
+    if (holdingIds.some((h) => !isUuid(h))) throw new Error("Group not found");
+    const holdingGroups = new Map(
+      (await tx.query<{ id: string; group_id: string }>("select h.id, h.group_id from group_holdings h join groups g on g.id = h.group_id where h.id = any($1::uuid[]) and g.property_id = $2 and g.status in ('tentative', 'definite')", [holdingIds, propertyId])).rows.map((h) => [h.id, h.group_id]),
+    );
+    if (holdingGroups.size !== holdingIds.length) throw new Error("The group is not open for bookings");
+    const data = await loadQuoteData(tx, propertyId, from, to, null, holdingIds);
 
     const guestIds = [...new Set(input.reservations.map((r) => r.primaryGuestId).concat("guestId" in input.booker ? [input.booker.guestId] : []))];
     const guests = await tx.query("select id from guests where id = any($1::uuid[])", [guestIds]);
@@ -263,14 +295,17 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
       if (!c.rowCount) throw new Error("Company not found");
     }
 
-    const codedPlan = data.plans.find((p) => !p.public && sameCode(p.rate_code, input.rateCode));
+    const codedPlan = data.plans.find((p) => !p.public && !p.group_id && sameCode(p.rate_code, input.rateCode));
     const taken = new Map<string, number>(); // room type and night → rooms this booking already takes
     const quotes = input.reservations.map((r, i) => {
       const type = data.types.find((t) => t.id === r.roomTypeId);
       if (!type) throw new Error("Room type not found at this property");
       const plan = data.plans.find((p) => p.id === r.ratePlanId);
       if (!plan || !plan.room_type_ids.includes(type.id)) throw new Error(`Rate Plan not sold for ${type.code}`);
-      if (!plan.public && !sameCode(plan.rate_code, input.rateCode)) throw new Error(`${plan.code} needs its Rate Code`);
+      // a group's own plan is booked only into its Held Rooms
+      const groupPlan = !!r.groupHoldingId && holdingGroups.get(r.groupHoldingId) === plan.group_id && !!plan.group_id;
+      if (plan.group_id && !groupPlan) throw new Error(`${plan.code} is a group's price; book it from the group`);
+      if (!plan.public && !groupPlan && !sameCode(plan.rate_code, input.rateCode)) throw new Error(`${plan.code} needs its Rate Code`);
       const quote = quoteFor(data, plan, type, r, (d) => taken.get(`${type.id}|${d}`) ?? 0);
       const blocking = blockingReasons(quote, r.force === true);
       if (blocking.length) throw new Error(`Room ${i + 1} (${type.code}, ${plan.code}): ${blocking.map((x) => REASON_TEXT[x]).join(", ")}`);
@@ -297,9 +332,9 @@ export async function createBooking(pool: Pool, schema: string, propertyId: stri
     const created: { id: string }[] = [];
     for (const [i, r] of input.reservations.entries()) {
       const res = await tx.query<{ id: string }>(
-        `insert into reservations (booking_id, property_id, room_type_id, rate_plan_id, arrival, departure, adults, child_ages, primary_guest_id, created_by, overbooked)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning id`,
-        [bookingId, propertyId, r.roomTypeId, r.ratePlanId, r.arrival, r.departure, r.adults, r.childAges, r.primaryGuestId, userId, quotes[i]!.reasons.includes("sold_out")],
+        `insert into reservations (booking_id, property_id, room_type_id, rate_plan_id, arrival, departure, adults, child_ages, primary_guest_id, created_by, overbooked, group_holding_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id`,
+        [bookingId, propertyId, r.roomTypeId, r.ratePlanId, r.arrival, r.departure, r.adults, r.childAges, r.primaryGuestId, userId, quotes[i]!.reasons.includes("sold_out"), r.groupHoldingId ?? null],
       );
       const id = res.rows[0]!.id;
       await writeNights(tx, id, quotes[i]!.nights);
