@@ -23,11 +23,13 @@ export class FiasTillSimulator {
     this.socket!.on("data", (chunk: string) => {
       this.buffer += chunk;
       for (let end = this.buffer.indexOf(ETX); end >= 0; end = this.buffer.indexOf(ETX)) {
-        const text = this.buffer.slice(this.buffer.indexOf(STX) + 1, end);
+        const start = this.buffer.lastIndexOf(STX, end);
+        const text = this.buffer.slice(start + 1, end);
         this.buffer = this.buffer.slice(end + 1);
+        if (start < 0) continue;
         const [type, ...rest] = text.split("|");
         const rec = { type: type!, fields: rest.filter((f) => f.length >= 2).map((f) => [f.slice(0, 2), f.slice(2)] as [string, string]) };
-        if (rec.type === "LS" || rec.type === "LA") continue;
+        if (["LS", "LA", "LD", "LR"].includes(rec.type)) continue;
         this.waiting.shift()?.(rec);
       }
     });
@@ -35,7 +37,7 @@ export class FiasTillSimulator {
   }
 
   private send(type: string, fields: [string, string][]): void {
-    this.socket!.write(`${STX}${type}|${fields.map(([k, v]) => `${k}${v}`).join("|")}|${ETX}`);
+    this.socket!.write(`${STX}${type}|${fields.map(([k, v]) => `${k}${v}`).join("|")}|${ETX}`, "latin1");
   }
 
   private ask(type: string, fields: [string, string][]): Promise<{ type: string; fields: [string, string][] }> {
@@ -64,7 +66,7 @@ export class FiasTillSimulator {
   /** A check posted to a room: totals per subtotal (minor units), tip apart; a negative total takes the check back. */
   async post(p: { room: string; reservation: string; check: string; workstation?: string; subtotals: Record<number, number>; tip?: number }): Promise<{ ok: boolean; text: string }> {
     const total = Object.values(p.subtotals).reduce((s, v) => s + v, 0) + (p.tip ?? 0);
-    const fields: [string, string][] = [["RN", p.room], ["G#", p.reservation], ["CK", p.check], ["WS", p.workstation ?? "1"], ["TA", String(total)]];
+    const fields: [string, string][] = [["RN", p.room], ["G#", p.reservation], ["CK", p.check], ["WS", p.workstation ?? "1"], ["DA", "261006"], ["TA", String(total)]];
     for (const [k, v] of Object.entries(p.subtotals)) fields.push([`S${k}`, String(v)]);
     if (p.tip) fields.push(["TP", String(p.tip)]);
     const r = await this.ask("PS", fields);

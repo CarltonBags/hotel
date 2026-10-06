@@ -18,11 +18,14 @@ import { withTenant } from "./with-tenant";
  * tills do not send a failed posting again.
  */
 
+/** How a till connects: our interface, Lightspeed's contract, or a FIAS till through the Site Bridge's plugin (which calls our interface). */
+export const TILL_KINDS = ["api", "lightspeed", "fias"] as const;
+export type TillKind = (typeof TILL_KINDS)[number];
+
 export interface TillConnection {
   id: string;
   propertyId: string;
-  /** "fias": a FIAS till, served by the Site Bridge's FIAS plugin, which calls our interface. */
-  kind: "api" | "lightspeed" | "fias";
+  kind: TillKind;
   name: string;
   keyHint: string;
   businessReference: string;
@@ -79,7 +82,7 @@ function needManage(viewer: Viewer, propertyId: string): void {
 // ── setup ──
 
 export interface TillConnectionInput {
-  kind: "api" | "lightspeed" | "fias";
+  kind: TillKind;
   name: string;
   businessReference: string;
   revenueAccount: string;
@@ -110,7 +113,7 @@ async function checkedInput(tx: PoolClient, propertyId: string, input: Omit<Till
 export async function createTillConnection(pool: Pool, schema: string, propertyId: string, input: TillConnectionInput, viewer: Viewer): Promise<{ id: string; key: string }> {
   if (!isUuid(propertyId)) throw new Error("Property not found");
   needManage(viewer, propertyId);
-  if (input.kind !== "api" && input.kind !== "lightspeed" && input.kind !== "fias") throw new Error("Choose how the till connects");
+  if (!(TILL_KINDS as readonly string[]).includes(input.kind)) throw new Error("Choose how the till connects");
   if (input.kind === "lightspeed" && !input.businessReference.trim()) throw new Error("Enter Lightspeed's business reference of the venue");
   const key = newKey();
   return withTenant(pool, schema, async (tx) => {

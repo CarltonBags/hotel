@@ -49,9 +49,15 @@ export class BridgeRuntime {
     // a file URL per version: a new version is a new module, the old one is left behind
     const module = asPluginModule(await import(pathToFileURL(file).href));
     if (module.name !== expect.name || module.version !== expect.version) throw new Error(`${file} is ${module.name} ${module.version}, not ${expect.name} ${expect.version}`);
-    // the version it replaces lets go first (a till plugin frees its port)
-    await this.active.get(module.name)?.plugin.stop?.().catch(() => undefined);
-    this.active.set(module.name, { module, plugin: module.create(this.opts.config[module.name] ?? {}) });
+    // the version it replaces lets go first (a till plugin frees its port); if the new one cannot start, the old one starts again
+    const before = this.active.get(module.name);
+    await before?.plugin.stop?.().catch(() => undefined);
+    try {
+      this.active.set(module.name, { module, plugin: module.create(this.opts.config[module.name] ?? {}) });
+    } catch (err) {
+      if (before) this.active.set(module.name, { module: before.module, plugin: before.module.create(this.opts.config[module.name] ?? {}) });
+      throw err;
+    }
     return module;
   }
 

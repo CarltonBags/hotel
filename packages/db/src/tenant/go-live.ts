@@ -45,7 +45,7 @@ async function factsIn(tx: PoolClient, tenantId: string): Promise<GoLiveFacts> {
   );
   const props = await tx.query<{ name: string; rooms: number; priced_through: string | null; city_tax: boolean; today: string; country: string; printer: boolean; unit: boolean; bridge: "online" | "offline" | null }>(
     `select p.name,
-       -- locks on the hotel's network: a Site Bridge called within two minutes (ticket 68)
+       -- locks or a FIAS till on the hotel's network: a Site Bridge called within two minutes (tickets 68, 66)
        case when exists (select 1 from property_locks l where l.property_id = p.id and l.system = 'bridge')
               or exists (select 1 from till_connections t where t.property_id = p.id and t.kind = 'fias' and t.active)
          then case when exists (select 1 from site_bridges b where b.property_id = p.id and b.revoked_at is null and b.last_seen_at > now() - make_interval(secs => $1)) then 'online' else 'offline' end end as bridge, p.country, p.receipt_printer <> '' as printer, exists (select 1 from fiscal_at_units u where u.legal_entity_id = p.legal_entity_id) as unit, (select count(*)::int from rooms r where r.property_id = p.id) as rooms,

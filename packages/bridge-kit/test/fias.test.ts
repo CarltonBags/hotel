@@ -42,9 +42,13 @@ describe("FIAS till plugin", () => {
     await till.connect(port);
     expect(await till.inquire("101")).toEqual([{ room: "101", reservation: "res-1", name: "Tanaka, Aiko" }]);
     expect(await till.post({ room: "101", reservation: "res-1", check: "4711", subtotals: { 1: 1200, 2: 3150 }, tip: 200 })).toEqual({ ok: true, text: "" });
-    expect(calls.find((c) => c.method === "POST")).toEqual({ method: "POST", url: "/bills", body: { id: "fias-1-4711", reservationId: "res-1", receiptNumber: "4711", fiscalId: "", totals: [{ taxRate: 19, amount: 12 }, { taxRate: 7, amount: 31.5 }], tip: 2 } });
+    expect(calls.find((c) => c.method === "POST")).toEqual({ method: "POST", url: "/bills", body: { id: "fias-1-261006-4711-2", reservationId: "res-1", receiptNumber: "4711", fiscalId: "", totals: [{ taxRate: 19, amount: 12 }, { taxRate: 7, amount: 31.5 }], tip: 2 } });
+    // part of a check cannot be taken back here; the whole one can
+    expect(await till.post({ room: "101", reservation: "res-1", check: "4711", subtotals: { 1: -1200 } })).toMatchObject({ ok: false, text: expect.stringMatching(/whole/) });
     expect(await till.post({ room: "101", reservation: "res-1", check: "4711", subtotals: { 1: -1200, 2: -3150 }, tip: -200 })).toMatchObject({ ok: true });
-    expect(calls.filter((c) => c.method === "POST").at(-1)).toMatchObject({ url: "/bills/fias-1-4711/correction" });
+    expect(calls.filter((c) => c.method === "POST").at(-1)).toMatchObject({ url: "/bills/fias-1-261006-4711-2/correction" });
+    // a guest never looked up is not posted to
+    expect(await till.post({ room: "102", reservation: "res-9", check: "4712", subtotals: { 1: 500 } })).toMatchObject({ ok: false, text: expect.stringMatching(/Look the guest up/) });
     expect(await plugin.health()).toMatchObject({ ok: true, detail: expect.stringMatching(/till connected \(1\).*interface reachable/) });
     till.close();
   });
