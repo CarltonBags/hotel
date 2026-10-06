@@ -234,7 +234,7 @@ export function BillScreen({ bill, menu, tables, companies, currency, rights, re
             </div>
           ) : null}
           {(open || bill.status === "paying") && rights.cash ? (
-            <PayPanel outletId={outletId} billId={bill.id} due={bill.due} pendingPaymentId={bill.pendingPaymentId} readers={readers} companies={companies} testMode={testMode} rights={{ serve: rights.serve }} money={money} m={m} />
+            <PayPanel outletId={outletId} billId={bill.id} due={bill.due} pendingPaymentId={bill.pendingPaymentId} suggested={bill.suggestedGuest} readers={readers} companies={companies} testMode={testMode} rights={{ serve: rights.serve }} money={money} m={m} />
           ) : null}
           {bill.status === "paid" && rights.cash ? <RefundPanel outletId={outletId} billId={bill.id} payments={bill.payments} money={money} m={m} /> : null}
           {bill.status === "charged" && bill.roomCharge ? (

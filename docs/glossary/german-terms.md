@@ -127,6 +127,10 @@ Proposed by the agent from hotel trade usage, 2026-09-30. Status: confirmed by t
 | Series | Serie |  |
 | Rooming List | Rooming-Liste |  |
 | Master Folio | Gruppen-Folio |  |
+| Offline Sale | Offline-Verkauf |  |
+| Treatment | Anwendung |  |
+| Appointment | Termin |  |
+| Released Slot | Freigegebener Termin |  |
 | Downtime Reports | Notfalllisten |  |
 | Room Rack | Zimmerspiegel |  |
 | Catch-up Entry | Nacherfassung |  |

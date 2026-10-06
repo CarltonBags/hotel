@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { can, formatDate } from "@hoteloftware/domain";
-import { listRooms, reservationHistory } from "@hoteloftware/db";
+import { appointmentsOfReservation, listRooms, reservationHistory } from "@hoteloftware/db";
 import { RecordTab } from "@/shell/RecordTab";
 import { pool } from "@/lib/db";
 import { paymentProps, reservationView } from "@/lib/reservation-view";
@@ -35,6 +35,8 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
   const v = await reservationView(id);
   if (!v) notFound();
   const { r, property, m, language, rights, today, names, fmt, money, guestName } = v;
+  // the guest's spa appointments (ticket 63)
+  const spa = await appointmentsOfReservation(pool(), tenant.schemaName, r.id, { userId: session.user.id, actor });
   // calendar dates: format at noon UTC so no zone shifts the day
   const date = (d: string) => formatDate(new Date(`${d}T12:00:00Z`), language, property.country, "UTC");
   const guestLinks = rights.guests;
@@ -240,6 +242,19 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         </ul>
       </section>
 
+      {spa.length ? (
+        <section aria-label={m["spa.appointments"]} className="grid gap-2 rounded-2xl bg-surface-2 p-5 text-sm" data-spa-appointments>
+          <h2 className="font-medium">{m["spa.appointments"]}</h2>
+          <ul className="grid gap-1">
+            {spa.map((a) => (
+              <li key={a.id} data-spa-appointment={a.treatment}>
+                {new Intl.DateTimeFormat(language === "de" ? "de-DE" : "en-GB", { dateStyle: "short", timeStyle: "short", timeZone: property.timeZone }).format(new Date(a.startsAt))} · {a.treatment}
+                {a.room ? ` · ${a.room}` : ""} · {m[`spa.status.${a.status}`]}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {folio ? (
         <FolioPanel {...v.folioProps} m={m} />
       ) : null}

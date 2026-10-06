@@ -40,13 +40,18 @@ import { authorizeOutlet } from "@/lib/outlets";
 /** The user at the outlet, as the db layer checks them, with the name printed on tickets. */
 type Viewer = DbViewer & { name: string };
 
-/** The outlet app (ticket 60): every action checked at the outlet's property with the Point of Sale Module on (the db layer checks again). */
+/**
+ * The outlet app (ticket 60): every action checked at the outlet's property
+ * with the Point of Sale Module on. Taking orders is checked per outlet by the
+ * db layer (Service at a restaurant, Spa Staff at a spa); here only that the
+ * user works an outlet till at all.
+ */
 const refresh = (outletId: string) => revalidatePath(`/outlet/${outletId}`, "layout");
 
 export async function openBillAction(outletId: string, tableId: string | null, label: string): Promise<FormState & { billId?: string }> {
   let billId: string | undefined;
   const r = await formAction(async () => {
-    const { tenant, viewer } = await authorizeOutlet("serve_outlet", { outletId });
+    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { outletId });
     billId = await openOutletBill(pool(), tenant.schemaName, outletId, { tableId, label }, viewer);
     refresh(outletId);
   });
@@ -55,7 +60,7 @@ export async function openBillAction(outletId: string, tableId: string | null, l
 
 export async function addItemAction(outletId: string, billId: string, input: { menuItemId: string; quantity: number; modifiers: string[]; note: string }): Promise<FormState> {
   return formAction(async () => {
-    const { tenant, viewer } = await authorizeOutlet("serve_outlet", { billId });
+    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { billId });
     await addBillItem(pool(), tenant.schemaName, billId, input, viewer);
     refresh(outletId);
   });
@@ -63,7 +68,7 @@ export async function addItemAction(outletId: string, billId: string, input: { m
 
 export async function removeLineAction(outletId: string, billId: string, lineId: string): Promise<FormState> {
   return formAction(async () => {
-    const { tenant, viewer } = await authorizeOutlet("serve_outlet", { billId });
+    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { billId });
     await removeBillLine(pool(), tenant.schemaName, billId, lineId, viewer);
     refresh(outletId);
   });
@@ -71,7 +76,7 @@ export async function removeLineAction(outletId: string, billId: string, lineId:
 
 export async function sendRoundAction(outletId: string, billId: string): Promise<FormState> {
   return formAction(async () => {
-    const { tenant, viewer } = await authorizeOutlet("serve_outlet", { billId });
+    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { billId });
     const r = await sendOrderRound(pool(), tenant.schemaName, billId, viewer);
     // Germany: the round's order signed now, well inside its 45 seconds (the worker signs any left)
     await signOutletOrders(pool(), tenant.schemaName, fiscalDeps(), { billId }).catch((err) => console.error("[fiscal] orders", err));
@@ -83,7 +88,7 @@ export async function sendRoundAction(outletId: string, billId: string): Promise
 export async function splitAction(outletId: string, billId: string, lineIds: string[]): Promise<FormState & { billId?: string }> {
   let newId: string | undefined;
   const r = await formAction(async () => {
-    const { tenant, viewer } = await authorizeOutlet("serve_outlet", { billId });
+    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { billId });
     newId = await splitOutletBill(pool(), tenant.schemaName, billId, lineIds, viewer);
     refresh(outletId);
   });
@@ -92,7 +97,7 @@ export async function splitAction(outletId: string, billId: string, lineIds: str
 
 export async function moveAction(outletId: string, billId: string, tableId: string | null): Promise<FormState> {
   return formAction(async () => {
-    const { tenant, viewer } = await authorizeOutlet("serve_outlet", { billId });
+    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { billId });
     await moveOutletBill(pool(), tenant.schemaName, billId, tableId, viewer);
     refresh(outletId);
     return { ok: true, message: "Moved." };
@@ -114,7 +119,7 @@ export async function payCashAction(outletId: string, billId: string, customerNa
 
 export async function invoiceBillAction(outletId: string, billId: string, companyId: string): Promise<FormState> {
   return formAction(async () => {
-    const { tenant, viewer } = await authorizeOutlet("serve_outlet", { billId });
+    const { tenant, viewer } = await authorizeOutlet("outlet_cash", { billId });
     const inv = await invoiceOutletBill(pool(), tenant.schemaName, billId, { companyId }, viewer);
     refresh(outletId);
     return { ok: true, message: `Invoice ${inv.number} issued.` };

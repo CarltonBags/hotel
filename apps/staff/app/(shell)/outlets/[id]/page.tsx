@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { listServices, outletSetup } from "@hoteloftware/db";
+import { listServices, outletSetup, spaSetup } from "@hoteloftware/db";
 import { PRINTER_KINDS } from "@hoteloftware/domain";
 import { ActionForm, Field, Select } from "@/components/form-fields";
 import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { outletsModuleOn } from "@/lib/outlets";
 import { loadShell } from "@/lib/shell";
-import { saveMenuItemAction, savePrinterAction, saveTableAction } from "../../settings/outlets/actions";
+import { saveMenuItemAction, savePrinterAction, saveSpaRoomAction, saveTableAction, saveTherapistAction, saveTreatmentAction } from "../../settings/outlets/actions";
 
 /** An outlet's menu, printers and tables (ticket 60): the Property Manager, or the outlet's own Outlet Manager. */
 export default async function OutletSetupPage({ params }: { params: Promise<{ id: string }> }) {
@@ -20,6 +20,8 @@ export default async function OutletSetupPage({ params }: { params: Promise<{ id
   await requireAllowed("manage_own_outlets", o.propertyId);
   if (!setup.canManage || !(await outletsModuleOn(tenant.schemaName, o.propertyId))) redirect("/not-allowed");
   const services = await listServices(pool(), tenant.schemaName, o.propertyId);
+  // a spa keeps therapists, treatment rooms and treatments too (ticket 63)
+  const spa = o.kind === "spa" ? await spaSetup(pool(), tenant.schemaName, o.id, { userId: session.user.id, actor }) : null;
   const svc = services.map((x) => ({ value: x.id, label: `${x.code} · ${x.name} (${x.taxCodeCode})` }));
   const printers = [{ value: "", label: m["outlet.none"] }, ...setup.printers.map((p) => ({ value: p.id, label: p.name }))];
   const kinds = PRINTER_KINDS.map((k) => ({ value: k, label: m[`outlet.printerKind.${k}`] }));
@@ -68,6 +70,51 @@ export default async function OutletSetupPage({ params }: { params: Promise<{ id
           </ActionForm>
         ))}
       </section>
+      {spa ? (
+        <>
+          <section className={section} data-therapists>
+            <h2 className="font-medium">{m["spa.therapists"]}</h2>
+            {[...spa.therapists, null].map((t) => (
+              <ActionForm key={t?.id ?? "new"} action={saveTherapistAction} submitLabel={t ? m["action.save"] : m["outlet.add"]} className={row}>
+                {hidden}
+                <input type="hidden" name="id" value={t?.id ?? ""} />
+                <Field label={m["outlet.name"]} name="name" defaultValue={t?.name ?? ""} />
+                {active(t?.active ?? true)}
+              </ActionForm>
+            ))}
+          </section>
+          <section className={section} data-spa-rooms>
+            <h2 className="font-medium">{m["spa.rooms"]}</h2>
+            {[...spa.rooms, null].map((r) => (
+              <ActionForm key={r?.id ?? "new"} action={saveSpaRoomAction} submitLabel={r ? m["action.save"] : m["outlet.add"]} className={row}>
+                {hidden}
+                <input type="hidden" name="id" value={r?.id ?? ""} />
+                <Field label={m["outlet.name"]} name="name" defaultValue={r?.name ?? ""} />
+                {active(r?.active ?? true)}
+              </ActionForm>
+            ))}
+          </section>
+          <section className={section} data-treatments>
+            <h2 className="font-medium">{m["spa.treatments"]}</h2>
+            {setup.menu.map((i) => {
+              const t = spa.treatments.find((x) => x.menuItemId === i.id);
+              return (
+                <ActionForm key={i.id} action={saveTreatmentAction} submitLabel={m["action.save"]} className={row}>
+                  {hidden}
+                  <input type="hidden" name="menuItemId" value={i.id} />
+                  <span className="h-10 min-w-40 content-center">{i.name}</span>
+                  <Field label={m["spa.minutes"]} name="minutes" type="number" defaultValue={String(t?.minutes ?? 60)} />
+                  <label className="flex h-10 items-center gap-2">
+                    <input type="checkbox" name="needsRoom" value="on" defaultChecked={t?.needsRoom ?? true} />
+                    {m["spa.needsRoom"]}
+                  </label>
+                  {active(t?.active ?? false)}
+                </ActionForm>
+              );
+            })}
+          </section>
+        </>
+      ) : null}
       <section className={section} data-menu>
         <h2 className="font-medium">{m["outlet.menu"]}</h2>
         {[...setup.menu, null].map((i) => (

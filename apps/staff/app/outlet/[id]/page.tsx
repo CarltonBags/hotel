@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { failedPrintJobs, findProperty, outletFloor } from "@hoteloftware/db";
+import { failedPrintJobs, findProperty, outletFloor, servesAt } from "@hoteloftware/db";
 import { can, formatCurrency, mayManageOutlet } from "@hoteloftware/domain";
 import { pool } from "@/lib/db";
 import { deviceMessages } from "@/lib/device";
@@ -18,8 +18,8 @@ export default async function OutletFloorPage({ params }: { params: Promise<{ id
   const floor = await outletFloor(pool(), ctx.tenant.schemaName, (await params).id, { userId: ctx.session.user.id, actor: ctx.actor }).catch(() => null);
   if (!floor || !ctx.propertyIds.includes(floor.outlet.propertyId)) notFound();
   if (!(await outletsModuleOn(ctx.tenant.schemaName, floor.outlet.propertyId))) redirect("/not-allowed");
-  const serve = can(ctx.actor, "serve_outlet", floor.outlet.propertyId);
   const viewer = { userId: ctx.session.user.id, actor: ctx.actor };
+  const serve = servesAt(viewer, floor.outlet);
   const [property, failed] = await Promise.all([findProperty(pool(), ctx.tenant.schemaName, floor.outlet.propertyId), failedPrintJobs(pool(), ctx.tenant.schemaName, floor.outlet.id, viewer)]);
   const money = (n: number) => formatCurrency(n, property?.currency ?? "EUR", "de", property?.country ?? "DE");
   const bill = (b: (typeof floor.loose)[number]) => (
@@ -41,6 +41,11 @@ export default async function OutletFloorPage({ params }: { params: Promise<{ id
           {mayManageOutlet(ctx.actor, ctx.session.user.id, floor.outlet) ? (
             <Link href={`/outlets/${floor.outlet.id}`} className="text-accent underline">
               {m["outlet.setup"]}
+            </Link>
+          ) : null}
+          {floor.outlet.kind === "spa" ? (
+            <Link href={`/outlet/${floor.outlet.id}/spa`} className="text-accent underline" data-spa-link>
+              {m["spa.book"]}
             </Link>
           ) : null}
           <Link href={`/outlet/${floor.outlet.id}/offline-sales`} className="text-accent underline" data-offline-link>
