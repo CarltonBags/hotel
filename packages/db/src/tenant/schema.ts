@@ -521,6 +521,8 @@ export const guests = pgTable(
     email: text("email"),
     phone: text("phone"),
     emailNormalised: text("email_normalised"),
+    emailBounced: text("email_bounced"),
+    emailComplained: text("email_complained"),
     phoneNormalised: text("phone_normalised"),
     language: text("language"),
     preferences: text("preferences").notNull().default(""),
@@ -1552,6 +1554,11 @@ export const mailOutbox = pgTable(
     attachment: bytea("attachment"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    error: text("error"),
+    html: text("html"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    propertyId: uuid("property_id").references(() => properties.id),
   },
   (t) => [check("mail_outbox_attachment_check", sql`(${t.attachment} is null) = (${t.attachmentName} is null)`), index("mail_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
 );
@@ -1703,6 +1710,106 @@ export const propertyModules = pgTable(
   ],
 );
 
+export const propertyMessaging = pgTable(
+  "property_messaging",
+  {
+    propertyId: uuid("property_id").primaryKey().references(() => properties.id),
+    sendingFrom: time("sending_from").notNull().default("08:00"),
+    sendingTo: time("sending_to").notNull().default("20:00"),
+    fallbackLanguage: text("fallback_language").notNull().default("de"),
+    useGuestLanguage: boolean("use_guest_language").notNull().default(true),
+    switched: jsonb("switched").notNull().default(sql`'{}'`),
+    senderDomain: text("sender_domain"),
+    senderLocal: text("sender_local").notNull().default("reservations"),
+    senderVerified: boolean("sender_verified").notNull().default(false),
+    replyTo: text("reply_to"),
+    preArrivalDays: integer("pre_arrival_days").notNull().default(3),
+    checkoutTime: time("checkout_time").notNull().default("11:00"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text("updated_by"),
+  },
+  (t) => [
+    check("property_messaging_hours_check", sql`${t.sendingFrom} < ${t.sendingTo}`),
+    check("property_messaging_language_check", sql`${t.fallbackLanguage} in ('de', 'en')`),
+    check("property_messaging_local_check", sql`${t.senderLocal} ~ '^[a-z0-9._-]{1,40}$'`),
+    check("property_messaging_pre_arrival_check", sql`${t.preArrivalDays} between 1 and 30`),
+  ],
+);
+
+export const messageTemplates = pgTable(
+  "message_templates",
+  {
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    type: text("type").notNull(),
+    language: text("language").notNull(),
+    subject: text("subject").notNull(),
+    blocks: jsonb("blocks").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text("updated_by").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.propertyId, t.type, t.language] }), check("message_templates_subject_check", sql`length(trim(${t.subject})) > 0`)],
+);
+
+export const guestMessages = pgTable(
+  "guest_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    type: text("type").notNull(),
+    triggerKey: text("trigger_key").notNull().default(""),
+    language: text("language").notNull(),
+    toEmail: text("to_email"),
+    subject: text("subject").notNull(),
+    html: text("html").notNull(),
+    bodyText: text("body_text").notNull(),
+    invoiceId: uuid("invoice_id").references(() => invoices.id),
+    status: text("status").notNull().default("queued"),
+    reason: text("reason"),
+    sendAfter: timestamp("send_after", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    providerId: text("provider_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    createdBy: text("created_by"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("guest_messages_status_check", sql`${t.status} in ('queued', 'sending', 'sent', 'delivered', 'failed', 'suppressed')`),
+    uniqueIndex("guest_messages_once_key").on(t.reservationId, t.type, t.triggerKey),
+    index("guest_messages_due_idx").on(t.sendAfter).where(sql`${t.status} = 'queued'`),
+    index("guest_messages_provider_idx").on(t.providerId).where(sql`${t.providerId} is not null`),
+  ],
+);
+
+export const messageEvents = pgTable("message_events", {
+  id: text("id").primaryKey(),
+  messageId: uuid("message_id").references(() => guestMessages.id),
+  kind: text("kind").notNull(),
+  detail: text("detail").notNull().default(""),
+  at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const smsOutbox = pgTable(
+  "sms_outbox",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    toUserId: text("to_user_id").notNull(),
+    toPhone: text("to_phone").notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    error: text("error"),
+    providerId: text("provider_id"),
+  },
+  (t) => [index("sms_outbox_unsent_idx").on(t.createdAt).where(sql`${t.sentAt} is null`)],
+);
+
 export const tenantSchema = {
   tenantSettings,
   legalEntities,
@@ -1785,4 +1892,9 @@ export const tenantSchema = {
   budgetMonths,
   savedReports,
   propertyModules,
+  propertyMessaging,
+  messageTemplates,
+  guestMessages,
+  messageEvents,
+  smsOutbox,
 };

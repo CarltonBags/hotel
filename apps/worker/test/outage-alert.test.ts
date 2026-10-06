@@ -34,7 +34,7 @@ describe("outage alerts", () => {
     expect(await alertMajorIncidents(pool, opts)).toBe(1);
     expect(await alertMajorIncidents(pool, opts)).toBe(0);
     const mails = (await pool.query(`select to_email, subject from ${alpha.schemaName}.mail_outbox`)).rows;
-    expect(mails).toEqual([{ to_email: "pia@alpha.example", subject: "Hoteloftware outage: Database down" }]);
+    expect(mails).toEqual([{ to_email: "pia@alpha.example", subject: "Service outage: Database down" }]);
     const notes = (await pool.query("select user_id, title from control.notifications where kind = 'service.outage'")).rows;
     expect(notes).toEqual([{ user_id: "u_pm", title: "Service outage: Database down" }]);
   });

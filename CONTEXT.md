@@ -172,7 +172,7 @@ Signing in on an enrolled device by choosing one's own name and entering a perso
 _Avoid_: Quick login, shared login, badge login
 
 **Message**:
-One entry in a conversation, sent by a guest, a staff member or automatically.
+One entry in a conversation, sent by a guest, a staff member or automatically (the automatic emails on a booking, such as the confirmation, the Invoice or the pre-arrival invitation, are Messages too).
 _Avoid_: Chat, mail, notification
 
 **Transport**:
@@ -184,7 +184,7 @@ A guest's recorded agreement to receive messages on a given transport, with time
 _Avoid_: Opt-in flag, permission, subscription
 
 **Notification**:
-A short alert the system shows a staff user inside the app (as a toast and, later, in a list), for example an Approval request or a worker check; never sent to guests. Distinct from a Message, which belongs to a Conversation with a guest.
+A short notice to a staff user, for example an Approval request, a Night Audit overdue or a bounced guest email: always shown inside the app, also sent by email where the user wants it, and the urgent kinds by SMS to Property Managers who gave a phone; never sent to guests. Distinct from a Message, which belongs to a Conversation with a guest.
 _Avoid_: Push, alert, system message
 
 **Internal Note**:
