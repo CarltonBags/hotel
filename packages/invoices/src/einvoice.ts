@@ -60,7 +60,7 @@ export function toEn16931(doc: InvoiceDocument): Invoice {
     "cac:InvoicePeriod": { "cbc:StartDate": l.periodStart, "cbc:EndDate": l.periodEnd },
     "cac:Item": {
       "cbc:Name": l.description,
-      "cac:ClassifiedTaxCategory": { "cbc:ID": (l.rate > 0 ? "S" : "Z") as "S", "cbc:Percent": String(l.rate), "cac:TaxScheme": { "cbc:ID": "VAT" as const } },
+      "cac:ClassifiedTaxCategory": { "cbc:ID": category(doc, l.rate) as "S", ...(category(doc, l.rate) === "O" ? {} : { "cbc:Percent": String(l.rate) }), "cac:TaxScheme": { "cbc:ID": "VAT" as const } },
     },
     // the net unit price follows from the line's net share; four decimals keep quantity × price close to the line
     "cac:Price": { "cbc:PriceAmount": (l.net / l.quantity).toFixed(4), "cbc:PriceAmount@currencyID": cur },
@@ -112,7 +112,12 @@ export function toEn16931(doc: InvoiceDocument): Invoice {
             "cbc:TaxableAmount@currencyID": cur,
             "cbc:TaxAmount": amount(x.vat),
             "cbc:TaxAmount@currencyID": cur,
-            "cac:TaxCategory": { "cbc:ID": (x.rate > 0 ? "S" : "Z") as "S", "cbc:Percent": String(x.rate), "cac:TaxScheme": { "cbc:ID": "VAT" as const } },
+            "cac:TaxCategory": {
+              "cbc:ID": category(doc, x.rate) as "S",
+              ...(category(doc, x.rate) === "O" ? {} : { "cbc:Percent": String(x.rate) }),
+              ...(x.rate === 0 && doc.zeroCategory ? { "cbc:TaxExemptionReason": doc.zeroCategory.reason } : {}),
+              "cac:TaxScheme": { "cbc:ID": "VAT" as const },
+            },
           })),
         },
       ],
@@ -131,6 +136,11 @@ export function toEn16931(doc: InvoiceDocument): Invoice {
       "cac:InvoiceLine": lines as never,
     },
   } as Invoice;
+}
+
+/** The VAT category of a rate: standard, zero, or the document's reason for zero (reverse charge, outside scope). */
+function category(doc: InvoiceDocument, rate: number): string {
+  return rate > 0 ? "S" : (doc.zeroCategory?.code ?? "Z");
 }
 
 /** EN16931 groups VAT by category and rate: Tax Codes with the same rate share one breakdown. */

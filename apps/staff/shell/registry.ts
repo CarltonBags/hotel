@@ -4,7 +4,7 @@
  * placeholder and name the ticket that builds them. Tickets add their modules
  * here; nothing else in the shell knows them.
  */
-import { REPORT_ACCESS, REPORT_KINDS, type Action, type PropertyAction, type ReportKind } from "@hoteloftware/domain";
+import { REPORT_ACCESS, REPORT_KINDS, type Action, type Module, type PropertyAction, type ReportKind } from "@hoteloftware/domain";
 import type { MessageKey } from "@/i18n/messages";
 
 const REPORT_ICONS: Record<ReportKind, string> = {
@@ -36,6 +36,8 @@ export interface ModuleDef {
   requiresProperty?: PropertyAction;
   /** Only the platform's support staff (ticket 93). */
   requiresSupportStaff?: boolean;
+  /** Only where this Module is on (or off but readable) at a property in view (ticket 88). */
+  requiresModule?: Module;
 }
 
 export const GROUPS: { id: GroupId; label: MessageKey; icon: string }[] = [
@@ -79,10 +81,10 @@ export const MODULES: ModuleDef[] = [
   { id: "approvals", group: "cash_billing", label: "module.approvals", icon: "ClipboardCheck", hue: "#e0900b", href: "/approvals", requiresProperty: "approve_requests" },
   { id: "rates", group: "rates", label: "module.rates", icon: "Tag", hue: "#e0457b", href: "/rates", requiresProperty: "manage_rates" },
   soon("availability", "rates", "module.availability", "Grid3x3", "#0aa5a5", 24),
-  soon("channel_sync", "rates", "module.channel_sync", "RefreshCw", "#6b7280", 37),
+  { ...soon("channel_sync", "rates", "module.channel_sync", "RefreshCw", "#6b7280", 37), requiresModule: "channel" },
   { id: "guests", group: "guests", label: "module.guests", icon: "User", hue: "#7c5cff", href: "/guests", requiresProperty: "view_guests" },
   { id: "companies", group: "guests", label: "module.companies", icon: "Building", hue: "#6b7280", href: "/companies", requiresProperty: "view_companies" },
-  soon("guest_inbox", "guests", "module.guest_inbox", "MessageCircle", "#0aa5a5", 42),
+  { ...soon("guest_inbox", "guests", "module.guest_inbox", "MessageCircle", "#0aa5a5", 42), requiresModule: "guest_portal" },
   { id: "housekeeping", group: "housekeeping", label: "module.housekeeping", icon: "Sparkles", hue: "#e0900b", href: "/rooms", requiresProperty: "view_rooms" },
   { id: "housekeeping_tasks", group: "housekeeping", label: "module.housekeeping_tasks", icon: "ClipboardCheck", hue: "#e0900b", href: "/housekeeping", requiresProperty: "assign_housekeeping" },
   soon("maintenance", "housekeeping", "module.maintenance", "Wrench", "#6b7280", 36),
@@ -95,7 +97,9 @@ export const MODULES: ModuleDef[] = [
   { id: "tourism_statistics", group: "reports", label: "module.tourism_statistics", icon: "ChartColumn", hue: "#0aa5a5", href: "/statistics", requiresProperty: "tourism_statistics" },
   { id: "audit_log", group: "reports", label: "module.audit_log", icon: "List", hue: "#4f5bd5", href: "/audit-log", requiresProperty: "view_audit_log" },
   { id: "city_tax_report", group: "reports", label: "module.city_tax_report", icon: "Landmark", hue: "#6b7280", href: "/city-tax-report", requiresProperty: "view_financial_reports" },
-  soon("outlets", "front_desk", "module.outlets", "UtensilsCrossed", "#e2552b", 60),
+  { ...soon("outlets", "front_desk", "module.outlets", "UtensilsCrossed", "#e2552b", 60), requiresModule: "point_of_sale" },
+  { id: "settings_modules", group: "settings", label: "module.settings_modules", icon: "LayoutGrid", hue: "#7c5cff", href: "/settings/modules", requires: "manage_modules" },
+  { id: "settings_subscription", group: "settings", label: "module.settings_subscription", icon: "CreditCard", hue: "#1a9d5a", href: "/settings/subscription", requires: "manage_subscription" },
   { id: "settings_tenant", group: "settings", label: "module.settings_tenant", icon: "Palette", hue: "#0071e3", href: "/settings/tenant", requires: "manage_tenant_settings" },
   { id: "settings_legal_entities", group: "settings", label: "module.settings_legal_entities", icon: "Landmark", hue: "#4f5bd5", href: "/settings/legal-entities", requires: "manage_legal_entities" },
   { id: "settings_properties", group: "settings", label: "module.settings_properties", icon: "Building2", hue: "#1fa971", href: "/settings/properties", requires: "manage_properties" },

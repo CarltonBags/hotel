@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigserial, boolean, check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { bigserial, boolean, customType, date, numeric, check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 /** Control schema (ADR 0006). Mirrors migrations/control/*.sql; the SQL is the source of truth. */
 export const control = pgSchema("control");
@@ -339,6 +339,100 @@ export const maintenanceWindows = control.table(
   (t) => [check("maintenance_windows_dates_check", sql`${t.endsAt} > ${t.startsAt}`)],
 );
 
+const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
+
+export const priceList = control.table(
+  "price_list",
+  {
+    key: text("key").notNull(),
+    validFrom: date("valid_from").notNull(),
+    unit: text("unit").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    setBy: text("set_by"),
+  },
+  (t) => [primaryKey({ columns: [t.key, t.validFrom] }), check("price_list_unit_check", sql`${t.unit} in ('room', 'property', 'percent')`), check("price_list_amount_check", sql`${t.amount} >= 0`)],
+);
+
+export const platformSeller = control.table(
+  "platform_seller",
+  {
+    id: boolean("id").primaryKey().default(true),
+    name: text("name").notNull(),
+    addressLine1: text("address_line1").notNull(),
+    postalCode: text("postal_code").notNull(),
+    city: text("city").notNull(),
+    country: text("country").notNull(),
+    vatId: text("vat_id"),
+    taxNumber: text("tax_number"),
+    iban: text("iban"),
+    bic: text("bic"),
+    email: text("email").notNull(),
+    phone: text("phone").notNull(),
+  },
+  (t) => [check("platform_seller_one", sql`${t.id}`)],
+);
+
+export const subscriptions = control.table(
+  "subscriptions",
+  {
+    tenantId: uuid("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
+    yearlyFrom: date("yearly_from"),
+    paymentMethod: text("payment_method").notNull().default("sepa"),
+    accountHolder: text("account_holder"),
+    mandateReference: text("mandate_reference"),
+    cardToken: text("card_token"),
+    accountLast4: text("account_last4"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: text("updated_by"),
+  },
+  (t) => [check("subscriptions_method_check", sql`${t.paymentMethod} in ('sepa', 'card', 'transfer')`)],
+);
+
+export const usageEvents = control.table(
+  "usage_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    quantity: integer("quantity").notNull(),
+    cost: numeric("cost", { precision: 12, scale: 4 }).notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check("usage_events_quantity_check", sql`${t.quantity} > 0`), check("usage_events_cost_check", sql`${t.cost} >= 0`), index("usage_events_tenant_idx").on(t.tenantId, t.at)],
+);
+
+export const roomCounts = control.table(
+  "room_counts",
+  {
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id").notNull(),
+    month: date("month").notNull(),
+    rooms: integer("rooms").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.tenantId, t.propertyId, t.month] })],
+);
+
+export const subscriptionInvoices = control.table(
+  "subscription_invoices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    legalEntityId: uuid("legal_entity_id").notNull(),
+    month: date("month").notNull(),
+    number: text("number").notNull().unique(),
+    document: jsonb("document").notNull(),
+    pdf: bytea("pdf"),
+    xml: text("xml"),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("subscription_invoices_once").on(t.tenantId, t.legalEntityId, t.month)],
+);
+
+export const counters = control.table("counters", {
+  key: text("key").primaryKey(),
+  last: integer("last").notNull().default(0),
+});
+
 export const controlSchema = {
   supportStaff,
   supportAccesses,
@@ -363,5 +457,12 @@ export const controlSchema = {
   notifications,
   webhookEvents,
   externalIds,
+  priceList,
+  platformSeller,
+  subscriptions,
+  usageEvents,
+  roomCounts,
+  subscriptionInvoices,
+  counters,
 };
 

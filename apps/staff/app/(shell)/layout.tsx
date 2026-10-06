@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { dueTourismReports, findProperty, getDowntimeOptions, tenantLifecycle } from "@hoteloftware/db";
+import { dueTourismReports, findProperty, getDowntimeOptions, modulePeriods, tenantLifecycle } from "@hoteloftware/db";
 import { OfflineDesk } from "@/shell/offline-desk";
 import { downtimeText } from "@/lib/downtime-text";
 import { isSupportConsoleUser } from "@/lib/support";
 import { endSupportAccessAction } from "./support/actions";
-import { PROPERTY_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, todayIn, trialDaysLeft, type PropertyAction } from "@hoteloftware/domain";
+import { MODULES, PROPERTY_ACTIONS, TENANT_ACTIONS, auditOverdue, can, daysBehind, deviceIdleMinutes, moduleState, moduleVisible, todayIn, trialDaysLeft, type PropertyAction, type TenantAction } from "@hoteloftware/domain";
 import { IdleLock } from "@/app/device/idle-lock";
 import { pool } from "@/lib/db";
 import { fill } from "@/i18n/messages";
@@ -68,6 +68,10 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       </form>
     </div>
   ) : null;
+  // Module screens show where the Module is on, or off but readable, at a property in view (ticket 88)
+  const inView = shell.properties.filter((p) => shell.scope === "all" || !shell.scope || p.id === shell.scope);
+  const periods = await modulePeriods(pool(), tenant.schemaName, inView.map((p) => p.id));
+  const activeModules = MODULES.filter((mod) => inView.some((p) => moduleVisible(moduleState(periods.get(p.id) ?? [], mod, todayIn(p.timeZone)))));
   // the desk keeps the property's lists for an outage (ticket 86): one property in scope, a desk role there
   const scoped = shell.properties.find((p) => p.id === shell.scope);
   const deskProperty = scoped && can(actor, "use_downtime", scoped.id) ? scoped : null;
@@ -107,9 +111,10 @@ export default async function ShellLayout({ children }: { children: React.ReactN
       language={shell.language}
       theme={shell.theme}
       accent={shell.accent}
-      canManageTenant={can(actor, "manage_tenant_settings")}
       propertyActions={propertyActions}
       supportStaff={(await isSupportConsoleUser()) !== null}
+      tenantActions={(Object.keys(TENANT_ACTIONS) as TenantAction[]).filter((a) => can(actor, a))}
+      activeModules={activeModules}
     >
       {idleMinutes ? <IdleLock minutes={idleMinutes} /> : null}
       {deskProperty ? (

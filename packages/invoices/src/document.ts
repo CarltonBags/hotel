@@ -43,6 +43,8 @@ export interface InvoiceDocument {
   notes: string[];
   /** Issued in Test Mode: a test number, not an invoice (ticket 87). */
   test?: boolean;
+  /** Zero-rated by place of supply (ticket 88): reverse charge within the EU (AE) or outside its scope (O); otherwise 0 % is "Z". */
+  zeroCategory?: { code: "AE" | "O"; reason: string };
 }
 
 /** A reminder letter about overdue invoices of one Bill-to, frozen when issued. */
