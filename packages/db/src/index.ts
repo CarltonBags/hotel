@@ -634,6 +634,7 @@ export { applyOutletOps, outletSnapshot, type OpResult, type OutletOp, type Outl
 export { addSpaHours, appointmentsOfReservation, billAppointment, bookAppointment, bookAppointmentIn, cancelAppointment, changeSpaHours, markNoShow, saveSpaRoom, saveTherapist, saveTreatment, setSpaCancelHours, spaDay, spaGuests, spaSetup, type AppointmentInput, type SpaAppointment, type SpaDay } from "./tenant/spa";
 export { PortalSpaRefusal, bookPortalAppointment, cancelPortalAppointment, portalSpa, type PortalSpa, type PortalSpaRefusalCode } from "./tenant/portal-spa";
 export {
+  TILL_KINDS,
   TillRefusal,
   createTillConnection,
   postTillCharge,
@@ -648,6 +649,7 @@ export {
   type TillConnection,
   type TillConnectionInput,
   type TillGuest,
+  type TillKind,
   type TillPosted,
   type TillPostingInput,
   type TillPostingRow,

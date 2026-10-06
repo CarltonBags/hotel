@@ -1,6 +1,15 @@
 import type { LockCapabilities } from "@hoteloftware/domain";
 import type { LockPlugin } from "@hoteloftware/locks";
 
+/** A till plugin's instance (FIAS): it serves the till on the hotel's network by itself; the Bridge only asks its health and stops it for a new version. */
+export interface TillPluginInstance {
+  name: string;
+  health(): Promise<{ ok: boolean; detail: string }>;
+  stop?(): Promise<void>;
+}
+
+export type BridgePluginInstance = (LockPlugin & { stop?(): Promise<void> }) | TillPluginInstance;
+
 /**
  * A Site Bridge plugin (ADR 0014, ticket 68): one ES module per vendor,
  * versioned and pushed to the Bridge from our side, loaded without a
@@ -13,7 +22,7 @@ export interface BridgePluginModule {
   kind: "lock" | "till";
   /** For a lock plugin: what it can do (the desk offers only these). */
   capabilities?: LockCapabilities;
-  create(config: Record<string, string>): LockPlugin;
+  create(config: Record<string, string>): BridgePluginInstance;
 }
 
 /** A module's default export, checked before the Bridge uses it. */

@@ -15,3 +15,7 @@ The product talks to every door lock system through one internal lock interface,
 ## Amendment 2026-09-30
 
 The Bridge also carries a plugin for FIAS-based restaurant tills and is renamed Site Bridge. See "Restaurant and bar charges to the room".
+
+## Amendment 2026-10-06
+
+The FIAS till plugin (ticket 66) listens on the hotel's own network, because FIAS tills expect a local interface server. It is reachable only from the till's address (allowFrom) and never from the internet; the Bridge's connection to us stays outbound only.

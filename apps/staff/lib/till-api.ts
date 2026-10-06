@@ -14,10 +14,10 @@ export function json(body: unknown, status = 200): Response {
 }
 
 /** The till of a key on this tenant's host, or the answer to send instead. */
-export async function tillOf(key: string | null, kind: TillConnection["kind"]): Promise<{ tenant: Tenant; till: TillConnection } | Response> {
+export async function tillOf(key: string | null, kinds: TillConnection["kind"][]): Promise<{ tenant: Tenant; till: TillConnection } | Response> {
   const tenant = await currentTenant();
   const till = tenant && key ? await tillByKey(pool(), tenant.schemaName, key) : null;
-  if (!tenant || !till || till.kind !== kind) return json({ error: "unauthorized", message: "Unknown or revoked key" }, 401);
+  if (!tenant || !till || !kinds.includes(till.kind)) return json({ error: "unauthorized", message: "Unknown or revoked key" }, 401);
   return { tenant, till };
 }
 

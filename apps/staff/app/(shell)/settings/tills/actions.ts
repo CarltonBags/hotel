@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createTillConnection, rotateTillKey, updateTillConnection } from "@hoteloftware/db";
+import { TILL_KINDS, createTillConnection, rotateTillKey, updateTillConnection, type TillKind } from "@hoteloftware/db";
 import { authorize } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { field, flag, formAction, type FormState } from "@/lib/form";
@@ -21,7 +21,8 @@ export async function createTillAction(_prev: FormState, formData: FormData): Pr
   return formAction(async () => {
     const propertyId = field(formData, "propertyId");
     const p = await authorize("manage_outlets", propertyId);
-    const kind = field(formData, "kind") === "lightspeed" ? "lightspeed" : "api";
+    const asked = field(formData, "kind");
+    const kind: TillKind = (TILL_KINDS as readonly string[]).includes(asked) ? (asked as TillKind) : "api";
     const { key } = await createTillConnection(
       pool(),
       p.tenant.schemaName,

@@ -66,4 +66,5 @@ while (!stopping) {
     wait = Math.min(wait * 2, 60_000);
   }
 }
+await runtime.stop();
 console.log("[bridge] stopped");

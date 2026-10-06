@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const auth = await tillOf(url.searchParams.get("apiKey"), "lightspeed");
+  const auth = await tillOf(url.searchParams.get("apiKey"), ["lightspeed"]);
   if (auth instanceof Response) return auth;
   if (url.searchParams.get("businessExternalReference") !== auth.till.businessReference) return json({ customerErrorMessage: "Unknown venue" }, 403);
   const guests = await tillGuests(pool(), auth.tenant.schemaName, auth.till, url.searchParams.get("term") ?? "");
