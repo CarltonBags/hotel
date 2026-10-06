@@ -20,6 +20,7 @@
   "dependencies": {
     "@hoteloftware/domain": "workspace:*",
     "@hoteloftware/invoices": "workspace:*",
+    "@hoteloftware/channels": "workspace:*",
     "@hoteloftware/messaging": "workspace:*",
     "@hoteloftware/storage": "workspace:*",
     "@hoteloftware/payments": "workspace:*",

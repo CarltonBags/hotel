@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@hoteloftware/auth": "workspace:*",
+    "@hoteloftware/channels": "workspace:*",
     "@hoteloftware/db": "workspace:*",
     "@hoteloftware/domain": "workspace:*",
     "@hoteloftware/events": "workspace:*",

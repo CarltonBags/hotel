@@ -9,6 +9,7 @@
     ]
   },
   "include": [
+    "scripts/**/*.ts",
     "src",
     "test",
     "vitest.config.ts"

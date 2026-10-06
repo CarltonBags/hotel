@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { createPool } from "@hoteloftware/db";
 import { paymentProvider } from "@hoteloftware/payments";
 import { mailProvider, smsProvider } from "@hoteloftware/messaging";
+import { channelManager } from "@hoteloftware/channels";
 import { mailProcessor, mailWebhookSource, MAIL_SOURCE } from "./messaging";
 import { paymentProcessor, paymentWebhookSource } from "./payments";
 import { queueHealthy, startQueue } from "./queue";
@@ -37,6 +38,8 @@ const boss = await startQueue(pool, directUrl, {
   providerProcessors: { [provider.name]: paymentProcessor(provider), [MAIL_SOURCE]: mailProcessor(mail) },
   paymentProvider: provider,
   messaging: { mail, sms, platformDomain },
+  // Channex with CHANNEX_API_KEY (staging unless CHANNEX_URL says otherwise), else the in-memory fake
+  channelManager: channelManager(),
 });
 const queue = Object.assign(boss, { healthy: () => queueHealthy(boss) });
 const allowOrigin = process.env.WORKER_ALLOW_ORIGIN ?? (process.env.NODE_ENV === "production" ? undefined : "*");

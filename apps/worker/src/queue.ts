@@ -4,7 +4,7 @@ import type { Pool } from "pg";
 import { pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
-import { claimDueReminders, deleteEndedTenants, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
+import { connectedProperties, enqueueFullPushes, pruneChannelOutbox, claimDueReminders, deleteEndedTenants, deleteExpiredFiles, deleteFilesOfDeletedTenants, releaseReminder, deleteExpiredDemoTenants, deleteExpiredRegistrations, findTenantById, issueSubscriptionInvoices, listTenantUsers, queueMail } from "@hoteloftware/db";
 import { checkHolds, type ProviderProcessor } from "./payments";
 import { alertOverdueAudits } from "./night-audit";
 import { sendScheduledReports } from "./reports";
@@ -13,6 +13,8 @@ import { WEBHOOK_QUEUE, markWebhook, type WebhookJobData } from "./webhooks";
 import { runMessaging } from "./messaging";
 import type { MailProvider, SmsProvider } from "@hoteloftware/messaging";
 import { fileStore } from "@hoteloftware/storage";
+import type { ChannelManager } from "@hoteloftware/channels";
+import { pushTenantChannels } from "./channels";
 
 export const QUEUES = {
   webhook: WEBHOOK_QUEUE,
@@ -38,6 +40,11 @@ export const QUEUES = {
   /** Every minute: guest messages derived and sent, staff mail and SMS sent, one job per tenant (ticket 39). */
   messagingAll: "messaging.all",
   messaging: "messaging",
+  /** Every minute: changes to rates and availability pushed to the channel manager, one job per tenant (ticket 37). */
+  channelsAll: "channels.push.all",
+  channels: "channels.push",
+  /** Nightly: everything pushed once more over the whole horizon. */
+  channelsFull: "channels.full",
 } as const;
 
 /**
@@ -54,6 +61,8 @@ export interface QueueOptions {
   paymentProvider?: PaymentProvider;
   /** Mail and SMS providers, and the platform's sending domain, for messages and alerts. */
   messaging?: { mail: MailProvider; sms: SmsProvider; platformDomain: string };
+  /** The channel manager (Channex or the fake). */
+  channelManager?: ChannelManager;
 }
 
 export async function startQueue(pool: Pool, connectionString: string, options: QueueOptions = {}): Promise<PgBoss> {
@@ -141,6 +150,7 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     for (const t of all) {
       const n = await deleteExpiredRegistrations(pool, t.schema_name, today).catch((err) => (console.error(`[maintenance] registrations of ${t.slug}`, err), 0));
       if (n) console.log(`[maintenance] ${t.slug}: deleted ${n} registration record(s)`);
+      await pruneChannelOutbox(pool, t.schema_name).catch((err) => console.error(`[maintenance] channel outbox of ${t.slug}`, err));
       // stored files past their retention day (ticket 36)
       const f = await deleteExpiredFiles(pool, t.schema_name, fileStore(), today).catch((err) => (console.error(`[maintenance] files of ${t.slug}`, err), 0));
       if (f) console.log(`[maintenance] ${t.slug}: deleted ${f} file(s) past retention`);
@@ -212,6 +222,35 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
       for (const t of rows) await boss.send(QUEUES.messaging, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `messaging:${t.id}`, singletonSeconds: 50 });
     });
     await boss.schedule(QUEUES.messagingAll, "* * * * *", {}, { tz: "Europe/Berlin" });
+  }
+
+  const manager = options.channelManager;
+  if (manager) {
+    await boss.work<TenantJobData>(QUEUES.channels, async (jobs) => {
+      for (const job of jobs) {
+        const tenant = await findTenantById(pool, job.data.tenantId);
+        if (!tenant) continue;
+        const r = await pushTenantChannels(pool, tenant, manager);
+        if (r.sent || r.failed) console.log(`[channels] ${tenant.slug}: sent ${r.sent} change(s), ${r.failed} propert(y/ies) failing`);
+      }
+    });
+    await boss.work(QUEUES.channelsAll, async () => {
+      // only tenants with a connected property
+      const { rows } = await pool.query<{ id: string; schema_name: string }>("select id, schema_name from control.tenants order by slug");
+      for (const t of rows) {
+        const connected = await connectedProperties(pool, t.schema_name).catch((err) => (console.error(`[channels] ${t.id}`, err), [] as string[]));
+        if (connected.length) await boss.send(QUEUES.channels, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `channels.push:${t.id}`, singletonSeconds: 50 });
+      }
+    });
+    await boss.schedule(QUEUES.channelsAll, "* * * * *", {}, { tz: "Europe/Berlin" });
+    await boss.work(QUEUES.channelsFull, async () => {
+      const { rows } = await pool.query<{ slug: string; schema_name: string }>("select slug, schema_name from control.tenants");
+      for (const t of rows) {
+        const n = await enqueueFullPushes(pool, t.schema_name).catch((err) => (console.error(`[channels] full push of ${t.slug}`, err), 0));
+        if (n) console.log(`[channels] ${t.slug}: full push queued for ${n} propert(y/ies)`);
+      }
+    });
+    await boss.schedule(QUEUES.channelsFull, "30 2 * * *", {}, { tz: "Europe/Berlin" });
   }
 
   await boss.work(QUEUES.subscriptionBilling, async () => {

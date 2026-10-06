@@ -7,9 +7,11 @@
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "channex:staging": "tsx scripts/channex-staging.ts"
   },
   "dependencies": {
+    "@hoteloftware/channels": "workspace:*",
     "@hoteloftware/db": "workspace:*",
     "@hoteloftware/domain": "workspace:*",
     "@hoteloftware/events": "workspace:*",
