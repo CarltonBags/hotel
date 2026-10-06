@@ -656,14 +656,12 @@ export {
 export { issueCardKey, lockSetup, readKeyCard, reservationKeys, revokeRoomKey, saveLockSettings, setDeskEncoder, setLateCheckout, setLockDoor, syncLockKeys, type LockDeps, type LockSettingsInput, type LockSetup, type ReservationKeys } from "./tenant/locks";
 export {
   awaitBridgeCommand,
-  bridgeByToken,
   bridgeCheckIn,
+  bridgeHasWork,
   bridgeLockPlugin,
   bridgePluginCode,
-  bridgePluginVersions,
   enrollSiteBridge,
   lostSiteBridges,
-  publishBridgePlugin,
   pushBridgePlugin,
   revokeSiteBridge,
   sendBridgeCommand,
@@ -672,3 +670,4 @@ export {
   type BridgePluginReport,
   type SiteBridgeView,
 } from "./tenant/site-bridge";
+export { bridgeByToken, bridgePluginVersions, publishBridgePlugin } from "./control/site-bridge";

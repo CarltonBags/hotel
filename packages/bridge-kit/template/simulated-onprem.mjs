@@ -2,7 +2,12 @@
 // replace the calls to the simulated lock server with the vendor's own interface, run the harness.
 // The Bridge loads this file as an ES module; its default export describes the plugin.
 
+// the lock server is away: tried again later
 class LockUnavailable extends Error {}
+// the lock server refused (a door or encoder it does not know): trying again will not help
+class LockRefused extends Error {
+  name = "LockRefused";
+}
 
 export default {
   name: "simulated-onprem",
@@ -20,6 +25,7 @@ export default {
         throw new LockUnavailable(`Lock server did not answer: ${err.message}`);
       }
       if (res.status === 404 && method === "GET") return null;
+      if (res.status >= 400 && res.status < 500) throw new LockRefused(`Lock server refused: ${res.status}`);
       if (!res.ok) throw new LockUnavailable(`Lock server answered ${res.status}`);
       const text = await res.text();
       return text ? JSON.parse(text) : null;
@@ -28,7 +34,7 @@ export default {
       name: "simulated-onprem",
       capabilities: this.capabilities,
       async issueKey(r) {
-        if (r.kind !== "card" || !r.encoderId) throw new Error("This lock system writes key cards on an encoder");
+        if (r.kind !== "card" || !r.encoderId) throw new LockRefused("This lock system writes key cards on an encoder");
         const made = await call("POST", "/keys", { door: r.lockRef, encoder: r.encoderId, validUntil: r.validUntil.toISOString(), name: `hs-${r.keyId}` });
         return { externalId: made.id };
       },
@@ -38,8 +44,9 @@ export default {
       async revokeKey(externalId) {
         await call("POST", `/keys/${encodeURIComponent(externalId)}/block`);
       },
-      async revokeByKeyId() {
-        // the simulated server cannot find a key by our name: nothing to do
+      async revokeByKeyId(keyId) {
+        // a key whose id we never learnt: found by the name we gave it
+        await call("POST", `/keys/by-name/${encodeURIComponent(`hs-${keyId}`)}/block`);
       },
       async readCard(encoderId) {
         const card = await call("GET", `/encoders/${encodeURIComponent(encoderId)}/card`);

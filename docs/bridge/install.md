@@ -21,7 +21,7 @@ The Site Bridge is a small program on the PC that already runs the hotel's lock 
    ```
 
    The plugin settings (the lock server's address, its user and so on) stay on this PC. They never reach our service.
-5. **Run it as a Windows service** that starts with the PC. For example with NSSM: `nssm install HoteloftwareBridge "C:\Program Files\nodejs\node.exe" "--import tsx C:\Hoteloftware\Bridge\src\main.ts"`, with the working directory `C:\Hoteloftware\Bridge`.
+5. **Run it as a Windows service** that starts with the PC. For example with NSSM: `nssm install HoteloftwareBridge "C:\Program Files\nodejs\node.exe" "--import tsx src\main.ts"` (tsx comes with the program's dependencies: run `pnpm install --prod` in its folder first), with the working directory `C:\Hoteloftware\Bridge`.
 6. **Check it is connected.** Within a minute, Settings → Site Bridge shows it as connected, with its version.
 7. **Send the lock system's plugin.** On the same page, send the plugin version for the hotel's lock system. The Bridge installs it on its next call, and the page shows the plugin and its health.
 8. **Choose the lock system.** Under Settings → Door locks, choose "On the hotel's network (Site Bridge)", the plugin's name, and each room's door.

@@ -30,6 +30,7 @@ export async function runLockHarness(module: BridgePluginModule, config: Record<
   const plugin = module.create(config);
   let externalId = "";
   let encoder = "";
+  const kind = caps?.card ? "card" : caps?.pin ? "pin" : "phone";
   const until = new Date(Date.now() + 2 * 86_400_000);
   const ok =
     (await step("describes itself", async () => {
@@ -49,7 +50,6 @@ export async function runLockHarness(module: BridgePluginModule, config: Record<
       return `${list.length} encoder(s)`;
     })) &&
     (await step("issues a key", async () => {
-      const kind = caps!.card ? "card" : caps!.pin ? "pin" : "phone";
       const made = await plugin.issueKey({ keyId: "harness-1", lockRef: door, kind, validFrom: new Date(), validUntil: until, guestName: "Harness", pin: kind === "pin" ? "345678" : undefined, encoderId: encoder || undefined });
       must(!!made.externalId, "no id for the key");
       externalId = made.externalId;
@@ -64,13 +64,26 @@ export async function runLockHarness(module: BridgePluginModule, config: Record<
     })) &&
     (await step("changes validity", async () => {
       const later = new Date(until.getTime() + 86_400_000);
-      await plugin.updateKey(externalId, { keyId: "harness-1", lockRef: door, kind: caps!.card ? "card" : "pin", validFrom: new Date(), validUntil: later, guestName: "Harness", encoderId: encoder || undefined });
+      await plugin.updateKey(externalId, { keyId: "harness-1", lockRef: door, kind, validFrom: new Date(), validUntil: later, guestName: "Harness", encoderId: encoder || undefined });
       if (caps!.readCard) must((await plugin.readCard(encoder))?.validUntil.getTime() === later.getTime(), "the new validity does not read back");
       return later.toISOString();
     })) &&
     (await step("revokes", async () => {
       await plugin.revokeKey(externalId, door);
       return caps!.remoteRevoke ? "revoked at the door" : "blocked at the lock server; the card runs to its expiry";
+    })) &&
+    (await step("revokes a key by our name", async () => {
+      await plugin.revokeByKeyId("harness-1", door);
+      return "done";
+    })) &&
+    (await step("refuses what it cannot do, as a refusal", async () => {
+      try {
+        await plugin.issueKey({ keyId: "harness-2", lockRef: "", kind, validFrom: new Date(), validUntil: until, guestName: "Harness", pin: kind === "pin" ? "345678" : undefined, encoderId: "NO-SUCH-ENCODER" });
+      } catch (err) {
+        must(err instanceof Error && err.name === "LockRefused", `refused with ${err instanceof Error ? err.name : "something"}, not LockRefused (it would be tried again forever)`);
+        return (err as Error).message;
+      }
+      throw new Error("a key for no door was made");
     }));
   return { passed: ok && steps.every((s) => s.ok), steps };
 }

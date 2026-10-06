@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Pool } from "pg";
 import { asPluginModule } from "@hoteloftware/bridge-kit";
-import { publishBridgePlugin } from "../tenant/site-bridge";
+import { publishBridgePlugin } from "../control/site-bridge";
 import { directDatabaseUrl } from "./env";
 
 /**

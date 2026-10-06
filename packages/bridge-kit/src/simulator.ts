@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
  */
 interface SimKey {
   id: string;
+  name: string;
   door: string;
   encoder: string | null;
   validUntil: string;
@@ -37,10 +38,15 @@ export class OnPremLockSimulator {
         if (req.method === "POST" && a === "keys" && !b) {
           if (!input.door || !input.validUntil) return send(400, { error: "door and validUntil" });
           if (input.encoder && !this.encoders.includes(input.encoder)) return send(404, { error: "no such encoder" });
-          const key: SimKey = { id: randomUUID(), door: input.door, encoder: input.encoder ?? null, validUntil: input.validUntil, blocked: false };
+          const key: SimKey = { id: randomUUID(), name: input.name ?? "", door: input.door, encoder: input.encoder ?? null, validUntil: input.validUntil, blocked: false };
           this.keys.set(key.id, key);
           if (key.encoder) this.onEncoder.set(key.encoder, key.id);
           return send(201, { id: key.id });
+        }
+        if (req.method === "POST" && a === "keys" && b === "by-name" && c) {
+          // url: /keys/by-name/<name>/block
+          for (const k of this.keys.values()) if (k.name === decodeURIComponent(c)) k.blocked = true;
+          return send(204);
         }
         if (a === "keys" && b) {
           const key = this.keys.get(b);

@@ -22,7 +22,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BridgeRuntime, OnPremLockSimulator, type BridgeResult } from "@hoteloftware/bridge-kit";
 import { issueCardKey, readKeyCard, revokeRoomKey, saveLockSettings, setLockDoor } from "../src/tenant/locks";
-import { bridgeByToken, bridgeCheckIn, bridgePluginCode, enrollSiteBridge, lostSiteBridges, publishBridgePlugin, pushBridgePlugin, siteBridges } from "../src/tenant/site-bridge";
+import { bridgeCheckIn, bridgePluginCode, enrollSiteBridge, lostSiteBridges, pushBridgePlugin, siteBridges } from "../src/tenant/site-bridge";
+import { bridgeByToken, publishBridgePlugin } from "../src/control/site-bridge";
 import { resetTestDatabase, testPool } from "./helpers";
 
 /**

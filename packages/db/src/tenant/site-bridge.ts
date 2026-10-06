@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { Pool } from "pg";
 import { bridgeAlertDue, bridgeOnline, can, type LockCapabilities } from "@hoteloftware/domain";
 import { LockRefused, LockUnavailable, type CardRead, type IssuedKey, type KeyRequest, type LockPlugin } from "@hoteloftware/locks";
@@ -13,7 +13,7 @@ import { withTenant } from "./with-tenant";
  * Its token names the tenant. Plugins are versioned and pushed from our side.
  */
 
-const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+import { bridgeTokenHash } from "../control/site-bridge";
 
 export interface BridgePluginReport {
   name: string;
@@ -40,8 +40,12 @@ export async function enrollSiteBridge(pool: Pool, schema: string, tenantId: str
   const label = name.trim();
   if (!label || label.length > 60) throw new Error("Name the Bridge (the PC it runs on)");
   const token = `hsb_${randomBytes(32).toString("hex")}`;
-  const id = await withTenant(pool, schema, async (tx) => (await tx.query<{ id: string }>("insert into site_bridges (property_id, name, enrolled_by) values ($1, $2, $3) returning id", [propertyId, label, viewer.userId])).rows[0]!.id);
-  await pool.query("insert into control.bridge_tokens (token_hash, tenant_id, bridge_id) values ($1, $2, $3)", [hash(token), tenantId, id]);
+  // the Bridge and its token in one transaction: never one without the other
+  const id = await withTenant(pool, schema, async (tx) => {
+    const bridge = (await tx.query<{ id: string }>("insert into site_bridges (property_id, name, enrolled_by) values ($1, $2, $3) returning id", [propertyId, label, viewer.userId])).rows[0]!.id;
+    await tx.query("insert into control.bridge_tokens (token_hash, tenant_id, bridge_id) values ($1, $2, $3)", [bridgeTokenHash(token), tenantId, bridge]);
+    return bridge;
+  });
   return { id, token };
 }
 
@@ -53,15 +57,8 @@ export async function revokeSiteBridge(pool: Pool, schema: string, bridgeId: str
     if (!b) throw new Error("Bridge not found");
     needSettings(viewer, b.property_id);
     await tx.query("update site_bridges set revoked_at = clock_timestamp() where id = $1 and revoked_at is null", [bridgeId]);
+    await tx.query("delete from control.bridge_tokens where bridge_id = $1", [bridgeId]);
   });
-  await pool.query("delete from control.bridge_tokens where bridge_id = $1", [bridgeId]);
-}
-
-/** Whose Bridge a token is: tenant schema and Bridge; null for a wrong or revoked token. */
-export async function bridgeByToken(pool: Pool, token: string): Promise<{ tenantId: string; schema: string; bridgeId: string } | null> {
-  if (!/^hsb_[0-9a-f]{64}$/.test(token)) return null;
-  const r = (await pool.query<{ tenant_id: string; schema_name: string; bridge_id: string }>("select b.tenant_id, t.schema_name, b.bridge_id from control.bridge_tokens b join control.tenants t on t.id = b.tenant_id where b.token_hash = $1", [hash(token)])).rows[0];
-  return r ? { tenantId: r.tenant_id, schema: r.schema_name, bridgeId: r.bridge_id } : null;
 }
 
 /**
@@ -85,7 +82,8 @@ export async function bridgeCheckIn(
     await tx.query("update site_bridges set last_seen_at = clock_timestamp(), version = $2, plugins = $3, alerted_at = null where id = $1", [bridgeId, String(report.version).slice(0, 20), JSON.stringify(plugins)]);
     for (const r of report.results.slice(0, 100)) {
       if (!isUuid(r.id)) continue;
-      await tx.query("update bridge_commands set state = $3, result = $4, error = $5, done_at = clock_timestamp() where id = $1 and bridge_id = $2 and state in ('queued', 'sent')", [
+      // an answer after we stopped waiting is kept beside the timeout, for the record
+      await tx.query("update bridge_commands set state = case when state = 'failed' then state else $3 end, result = $4, error = case when state = 'failed' then error || '; answered late: ' || coalesce($5, 'ok') else $5 end, done_at = clock_timestamp() where id = $1 and bridge_id = $2 and (state in ('queued', 'sent') or error = 'no answer in time')", [
         r.id,
         bridgeId,
         r.ok ? "done" : "failed",
@@ -101,6 +99,11 @@ export async function bridgeCheckIn(
     )).rows;
     return { commands, wasAlerted, propertyId: b.property_id, name: b.name };
   });
+}
+
+/** Whether something waits for a Bridge (a held call looks often and cheaply). */
+export async function bridgeHasWork(pool: Pool, schema: string, bridgeId: string): Promise<boolean> {
+  return withTenant(pool, schema, async (tx) => (await tx.query("select 1 from bridge_commands where bridge_id = $1 and state = 'queued' limit 1", [bridgeId])).rows.length > 0);
 }
 
 /** Something asked of a Bridge; the answer comes with one of its next calls. */
@@ -127,7 +130,8 @@ const date = (v: unknown) => new Date(String(v));
 
 /** A Lock Plugin on the Bridge, used from here like any other: each call a command it carries out and answers. */
 export function bridgeLockPlugin(pool: Pool, schema: string, bridgeId: string, plugin: string, capabilities: LockCapabilities, timeoutMs = 30_000): LockPlugin {
-  const run = async (op: string, args: unknown[]) => awaitBridgeCommand(pool, schema, await sendBridgeCommand(pool, schema, bridgeId, "lock", { plugin, op, args }), timeoutMs);
+  // the Bridge drops a command that reaches it after we stopped waiting
+  const run = async (op: string, args: unknown[]) => awaitBridgeCommand(pool, schema, await sendBridgeCommand(pool, schema, bridgeId, "lock", { plugin, op, args, expiresAt: new Date(Date.now() + timeoutMs).toISOString() }), timeoutMs);
   return {
     name: `bridge:${plugin}`,
     capabilities,
@@ -174,17 +178,6 @@ export async function siteBridges(pool: Pool, schema: string, propertyId: string
 
 // ── plugins ──
 
-/** A plugin version published for Bridges (our side; checked by the CLI before it gets here). */
-export async function publishBridgePlugin(pool: Pool, p: { name: string; version: string; kind: "lock" | "till"; code: string }): Promise<string> {
-  const sha256 = createHash("sha256").update(p.code).digest("hex");
-  await pool.query("insert into control.bridge_plugin_versions (name, version, kind, code, sha256) values ($1, $2, $3, $4, $5)", [p.name, p.version, p.kind, p.code, sha256]);
-  return sha256;
-}
-
-export async function bridgePluginVersions(pool: Pool): Promise<{ name: string; version: string; kind: string; publishedAt: string }[]> {
-  return (await pool.query<{ name: string; version: string; kind: string; published_at: Date }>("select name, version, kind, published_at from control.bridge_plugin_versions order by name, published_at")).rows.map((r) => ({ name: r.name, version: r.version, kind: r.kind, publishedAt: r.published_at.toISOString() }));
-}
-
 /** The code of a plugin version, for a Bridge that was told to install it. */
 export async function bridgePluginCode(pool: Pool, schema: string, bridgeId: string, name: string, version: string): Promise<{ code: string; sha256: string } | null> {
   const wanted = await withTenant(pool, schema, async (tx) => (await tx.query<{ wanted: Record<string, string> }>("select wanted from site_bridges where id = $1 and revoked_at is null", [bridgeId])).rows[0]?.wanted);
@@ -214,6 +207,8 @@ export async function lostSiteBridges(pool: Pool, schema: string, now = new Date
     const rows = (await tx.query<{ id: string; property_id: string; name: string; last_seen_at: Date | null; alerted_at: Date | null }>("select id, property_id, name, last_seen_at, alerted_at from site_bridges where revoked_at is null and last_seen_at is not null for update skip locked")).rows;
     const due = rows.filter((b) => bridgeAlertDue(b.last_seen_at, b.alerted_at, now));
     for (const b of due) await tx.query("update site_bridges set alerted_at = $2 where id = $1", [b.id, now]);
+    // answered commands are kept a week (page views ask for encoders too)
+    await tx.query("delete from bridge_commands where state in ('done', 'failed') and created_at < $1::timestamptz - interval '7 days'", [now]);
     return due.map((b) => ({ id: b.id, propertyId: b.property_id, name: b.name, lastSeenAt: b.last_seen_at!.toISOString() }));
   });
 }

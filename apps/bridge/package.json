@@ -8,11 +8,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@hoteloftware/bridge-kit": "workspace:*"
+    "@hoteloftware/bridge-kit": "workspace:*",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "tsx": "^4.23.15",
     "typescript": "5.9.3"
   }
 }

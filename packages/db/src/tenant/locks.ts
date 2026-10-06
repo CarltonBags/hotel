@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { KEY_HANDOVERS, automaticKeyKind, can, doorPin, handoverSupported, keyActions, keyPlan, keyValidUntil, type KeyHandover, type KeyKind, type LockCapabilities, type PlannedKey, type RevokeReason } from "@hoteloftware/domain";
+import { KEY_HANDOVERS, automaticKeyKind, bridgeOnline, can, doorPin, handoverSupported, keyActions, keyPlan, keyValidUntil, type KeyHandover, type KeyKind, type LockCapabilities, type PlannedKey, type RevokeReason } from "@hoteloftware/domain";
 import { LOCK_CAPABILITIES, LOCK_SYSTEMS, LockUnavailable, hasPlugin, lockPlugin, sealLockSecret, unsealLockSecret, type LockPlugin, type LockSystem } from "@hoteloftware/locks";
 import { isUuid } from "./catalogue-common";
 import type { Viewer } from "./room-state";
@@ -44,27 +44,40 @@ interface Settings {
   secretSealed: string | null;
   /** A lock system on the hotel's network: the Site Bridge's plugin for it, the Bridge carrying it and what the plugin reports it can do. */
   bridgePlugin: string;
-  bridge: { id: string; capabilities: LockCapabilities | null } | null;
+  bridge: { id: string; online: boolean; capabilities: LockCapabilities | null } | null;
 }
+
+/** A page waits this long at most for a Site Bridge. */
+const PAGE_BRIDGE_TIMEOUT_MS = 4000;
 
 async function settingsIn(tx: PoolClient, propertyId: string): Promise<Settings> {
   const r = (await tx.query<{ system: LockSystem; other_name: string; handover: KeyHandover; grace_minutes: number; secret_sealed: string | null; bridge_plugin: string }>("select system, other_name, handover, grace_minutes, secret_sealed, bridge_plugin from property_locks where property_id = $1", [propertyId])).rows[0];
   if (!r) return { system: "none", otherName: "", handover: "reception", graceMinutes: 60, secretSealed: null, bridgePlugin: "", bridge: null };
   let bridge: Settings["bridge"] = null;
   if (r.system === "bridge" && r.bridge_plugin) {
-    const b = (await tx.query<{ id: string; plugins: { name: string; capabilities: LockCapabilities | null }[] }>("select id, plugins from site_bridges where property_id = $1 and revoked_at is null order by last_seen_at desc nulls last", [propertyId])).rows.find((x) => x.plugins.some((p) => p.name === r.bridge_plugin));
-    if (b) bridge = { id: b.id, capabilities: b.plugins.find((p) => p.name === r.bridge_plugin)!.capabilities };
+    const b = (await tx.query<{ id: string; last_seen_at: Date | null; plugins: { name: string; capabilities: LockCapabilities | null }[] }>("select id, last_seen_at, plugins from site_bridges where property_id = $1 and revoked_at is null order by last_seen_at desc nulls last", [propertyId])).rows.find((x) => x.plugins.some((p) => p.name === r.bridge_plugin));
+    if (b) bridge = { id: b.id, online: bridgeOnline(b.last_seen_at, new Date()), capabilities: b.plugins.find((p) => p.name === r.bridge_plugin)!.capabilities };
   }
   return { system: r.system, otherName: r.other_name, handover: r.handover, graceMinutes: r.grace_minutes, secretSealed: r.secret_sealed, bridgePlugin: r.bridge_plugin, bridge };
 }
 
 const capabilitiesOf = (s: Settings): LockCapabilities | null => (hasPlugin(s.system) ? LOCK_CAPABILITIES[s.system] : s.system === "bridge" ? (s.bridge?.capabilities ?? null) : null);
 
+function offlineBridge(name: string, capabilities: LockCapabilities): LockPlugin {
+  const away = async (): Promise<never> => {
+    throw new LockUnavailable("The Site Bridge is not reachable");
+  };
+  return { name: `bridge:${name}`, capabilities, issueKey: away, updateKey: away, revokeKey: away, revokeByKeyId: away, readCard: away, listEncoders: away, health: async () => ({ ok: false, detail: "Site Bridge not reachable" }) };
+}
+
 /** The plugin of the property's lock system: in this process, or on the Site Bridge (each call a command it answers). */
 function pluginOf(s: Settings, deps: LockDeps, pool: Pool, schema: string): LockPlugin | null {
   if (s.system === "bridge") {
     const caps = capabilitiesOf(s);
-    return s.bridge && caps ? bridgeLockPlugin(pool, schema, s.bridge.id, s.bridgePlugin, caps, deps.bridgeTimeoutMs) : null;
+    if (!s.bridge || !caps) return null;
+    // a Bridge not calling in: every call fails at once instead of waiting for it (the sync tries again later)
+    if (!s.bridge.online) return offlineBridge(s.bridgePlugin, caps);
+    return bridgeLockPlugin(pool, schema, s.bridge.id, s.bridgePlugin, caps, deps.bridgeTimeoutMs);
   }
   const secret = s.secretSealed ? unseal(deps, s.secretSealed) : null;
   return (deps.pluginFor ?? lockPlugin)(s.system, secret);
@@ -101,7 +114,12 @@ export async function saveLockSettings(pool: Pool, schema: string, propertyId: s
   if (input.system === "other" && !otherName) throw new Error("Name the lock system");
   const bridgePlugin = input.system === "bridge" ? (input.bridgePlugin ?? "").trim() : "";
   if (input.system === "bridge" && !/^[a-z0-9-]{2,40}$/.test(bridgePlugin)) throw new Error("Choose the Site Bridge's plugin for the lock system");
-  const caps = hasPlugin(input.system) ? LOCK_CAPABILITIES[input.system] : null;
+  // a Bridge plugin: what it reported it can do (unknown until it ran once: checked again then)
+  const caps = hasPlugin(input.system)
+    ? LOCK_CAPABILITIES[input.system]
+    : input.system === "bridge"
+      ? await withTenant(pool, schema, async (tx) => (await tx.query<{ c: LockCapabilities | null }>("select (p->'capabilities') as c from site_bridges b, jsonb_array_elements(b.plugins) p where b.property_id = $1 and b.revoked_at is null and p->>'name' = $2 limit 1", [propertyId, bridgePlugin])).rows[0]?.c ?? null)
+      : null;
   if (caps && !handoverSupported(input.handover as KeyHandover, caps)) throw new Error("This lock system cannot hand keys over that way");
   const secret = input.secret?.trim() ? seal(deps, input.secret.trim()) : null;
   await withTenant(pool, schema, async (tx) => {
@@ -163,7 +181,7 @@ export async function lockSetup(pool: Pool, schema: string, propertyId: string, 
     doors: (await tx.query<{ room_id: string; number: string; lock_ref: string | null }>("select r.id as room_id, r.number, d.lock_ref from rooms r left join lock_doors d on d.room_id = r.id where r.property_id = $1 order by r.number", [propertyId])).rows,
     deskEncoders: Object.fromEntries((await tx.query<{ device_id: string; encoder_id: string }>("select device_id, encoder_id from lock_encoders where property_id = $1", [propertyId])).rows.map((r) => [r.device_id, r.encoder_id])),
   }));
-  const plugin = pluginOf(s, { ...deps, bridgeTimeoutMs: 4000 }, pool, schema);
+  const plugin = pluginOf(s, { ...deps, bridgeTimeoutMs: PAGE_BRIDGE_TIMEOUT_MS }, pool, schema);
   return {
     system: s.system,
     bridgePlugin: s.bridgePlugin,
@@ -486,6 +504,6 @@ export async function reservationKeys(pool: Pool, schema: string, reservationId:
   if (!view) return null;
   const { settings, ...rest } = view;
   // a page waits a few seconds at most for a Site Bridge
-  const plugin = rest.actions.issueCard || rest.actions.readCard ? pluginOf(settings, { ...deps, bridgeTimeoutMs: 4000 }, pool, schema) : null;
+  const plugin = rest.actions.issueCard || rest.actions.readCard ? pluginOf(settings, { ...deps, bridgeTimeoutMs: PAGE_BRIDGE_TIMEOUT_MS }, pool, schema) : null;
   return { ...rest, encoders: plugin ? await plugin.listEncoders().catch(() => []) : [] };
 }

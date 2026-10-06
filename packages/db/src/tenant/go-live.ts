@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { goLiveBlockers, goLiveChecklist, type ChecklistItem, type GoLiveFacts, type TrialKind } from "@hoteloftware/domain";
+import { BRIDGE_ONLINE_SECONDS, goLiveBlockers, goLiveChecklist, type ChecklistItem, type GoLiveFacts, type TrialKind } from "@hoteloftware/domain";
 import { withTenant } from "./with-tenant";
 
 /**
@@ -47,11 +47,12 @@ async function factsIn(tx: PoolClient, tenantId: string): Promise<GoLiveFacts> {
     `select p.name,
        -- locks on the hotel's network: a Site Bridge called within two minutes (ticket 68)
        case when exists (select 1 from property_locks l where l.property_id = p.id and l.system = 'bridge')
-         then case when exists (select 1 from site_bridges b where b.property_id = p.id and b.revoked_at is null and b.last_seen_at > now() - interval '2 minutes') then 'online' else 'offline' end end as bridge, p.country, p.receipt_printer <> '' as printer, exists (select 1 from fiscal_at_units u where u.legal_entity_id = p.legal_entity_id) as unit, (select count(*)::int from rooms r where r.property_id = p.id) as rooms,
+         then case when exists (select 1 from site_bridges b where b.property_id = p.id and b.revoked_at is null and b.last_seen_at > now() - make_interval(secs => $1)) then 'online' else 'offline' end end as bridge, p.country, p.receipt_printer <> '' as printer, exists (select 1 from fiscal_at_units u where u.legal_entity_id = p.legal_entity_id) as unit, (select count(*)::int from rooms r where r.property_id = p.id) as rooms,
        (select to_char(max(x.date), 'YYYY-MM-DD') from rates x join rate_plans rp on rp.id = x.rate_plan_id where rp.property_id = p.id and rp.group_id is null) as priced_through,
        exists (select 1 from city_tax_rules c where c.property_id = p.id) as city_tax,
        to_char((now() at time zone p.time_zone)::date, 'YYYY-MM-DD') as today
      from properties p order by p.name`,
+    [BRIDGE_ONLINE_SECONDS],
   );
   const users = await tx.query<{ n: number }>(
     `select count(*)::int as n from control."user" u where u.tenant_id = $1 and not exists (select 1 from control.invitations i where i.user_id = u.id)`,

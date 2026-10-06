@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
-import { bridgeByToken, bridgeCheckIn, bridgePluginCode, listTenantUsers, lostSiteBridges, type BridgePluginReport, type Tenant } from "@hoteloftware/db";
+import { bridgeByToken, bridgeCheckIn, bridgeHasWork, bridgePluginCode, listTenantUsers, lostSiteBridges, type BridgePluginReport, type Tenant } from "@hoteloftware/db";
 import { rolesAt } from "@hoteloftware/domain";
 import { publishNotification } from "@hoteloftware/events";
 
@@ -22,7 +22,7 @@ const json = (res: ServerResponse, status: number, body: unknown): void => void 
 /** Tell the property's Property Managers about their Bridge (lost, or back). */
 async function tellManagers(pool: Pool, tenantId: string, propertyId: string, title: string, body: string): Promise<void> {
   for (const u of await listTenantUsers(pool, tenantId)) {
-    if (rolesAt({ propertyRoles: u.propertyRoles }, propertyId).includes("property_manager") || u.tenantRole === "owner") {
+    if (rolesAt({ propertyRoles: u.propertyRoles }, propertyId).includes("property_manager")) {
       await publishNotification(pool, { tenantId, userId: u.id, kind: "bridge.health", title, body, href: "/settings/site-bridge" });
     }
   }
@@ -40,14 +40,16 @@ export async function bridgePoll(pool: Pool, req: IncomingMessage, res: ServerRe
   const report = { version: String(body.version ?? ""), plugins: (Array.isArray(body.plugins) ? body.plugins : []) as BridgePluginReport[], results: (Array.isArray(body.results) ? body.results : []) as { id: string; ok: boolean; result?: unknown; error?: string }[] };
   let r = await bridgeCheckIn(pool, auth.schema, auth.bridgeId, report);
   if (r.wasAlerted) await tellManagers(pool, auth.tenantId, r.propertyId, `Site Bridge "${r.name}" is back`, "Locks and tills on the hotel's network work again.");
-  // nothing to do yet: hold the call a while, so a command reaches the Bridge as soon as there is one
+  // nothing to do yet: hold the call a while (a cheap look every half second), so a command reaches the Bridge as soon as there is one
   const end = Date.now() + HOLD_MS;
   let open = true;
-  req.on("close", () => (open = false));
+  // the response closes when the Bridge goes away (the request has closed already once its body was read)
+  res.on("close", () => (open = false));
   while (!r.commands.length && open && Date.now() < end) {
     await new Promise((resolve) => setTimeout(resolve, 500));
-    r = await bridgeCheckIn(pool, auth.schema, auth.bridgeId, { ...report, results: [] });
+    if (open && (await bridgeHasWork(pool, auth.schema, auth.bridgeId))) r = await bridgeCheckIn(pool, auth.schema, auth.bridgeId, { ...report, results: [] });
   }
+  // a Bridge gone meanwhile: its commands stay with it and are handed over again after a minute
   if (open) json(res, 200, { commands: r.commands });
 }
 

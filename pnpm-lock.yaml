@@ -20,13 +20,13 @@ importers:
       '@hoteloftware/bridge-kit':
         specifier: workspace:*
         version: link:../../packages/bridge-kit
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
     devDependencies:
       '@types/node':
         specifier: ^20
         version: 20.19.43
-      tsx:
-        specifier: ^4.23.15
-        version: 4.23.15
       typescript:
         specifier: 5.9.3
         version: 5.9.3

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { KeyRequest, LockPlugin } from "@hoteloftware/locks";
@@ -21,6 +21,9 @@ export interface BridgeResult {
   error?: string;
 }
 
+/** What the service may ask of a lock plugin: the lock interface, nothing else. */
+const LOCK_OPS: (keyof LockPlugin)[] = ["issueKey", "updateKey", "revokeKey", "revokeByKeyId", "readCard", "listEncoders", "health"];
+
 const versionOrder = (v: string) => v.split(".").map((n) => n.padStart(6, "0")).join(".");
 
 /**
@@ -41,22 +44,33 @@ export class BridgeRuntime {
     },
   ) {}
 
-  private async activate(file: string): Promise<BridgePluginModule> {
+  /** A plugin file loaded and checked to be what was expected, then made the active one of its name. */
+  private async activate(file: string, expect: { name: string; version: string }): Promise<BridgePluginModule> {
     // a file URL per version: a new version is a new module, the old one is left behind
     const module = asPluginModule(await import(pathToFileURL(file).href));
+    if (module.name !== expect.name || module.version !== expect.version) throw new Error(`${file} is ${module.name} ${module.version}, not ${expect.name} ${expect.version}`);
     this.active.set(module.name, { module, plugin: module.create(this.opts.config[module.name] ?? {}) });
     return module;
   }
 
-  /** At start: the newest installed version of each plugin. */
+  private get activeFile() {
+    return join(this.opts.pluginsDir, "active.json");
+  }
+
+  /** At start: the version of each plugin last activated (an older one sent back stays back); else the newest on disk. */
   async loadInstalled(): Promise<void> {
     await mkdir(this.opts.pluginsDir, { recursive: true });
+    const files = await readdir(this.opts.pluginsDir);
+    const active = await readFile(this.activeFile, "utf8").then((t) => JSON.parse(t) as Record<string, string>, () => ({}) as Record<string, string>);
     const newest = new Map<string, string>();
-    for (const f of await readdir(this.opts.pluginsDir)) {
+    for (const f of files) {
       const m = /^([a-z0-9-]+)@(\d+\.\d+\.\d+)\.mjs$/.exec(f);
       if (m && (!newest.has(m[1]!) || versionOrder(m[2]!) > versionOrder(newest.get(m[1]!)!))) newest.set(m[1]!, m[2]!);
     }
-    for (const [name, version] of newest) await this.activate(join(this.opts.pluginsDir, `${name}@${version}.mjs`));
+    for (const [name, latest] of newest) {
+      const version = active[name] && files.includes(`${name}@${active[name]}.mjs`) ? active[name] : latest;
+      await this.activate(join(this.opts.pluginsDir, `${name}@${version}.mjs`), { name, version }).catch((err: unknown) => console.error(`[bridge] ${name} ${version} not loaded: ${String(err)}`));
+    }
   }
 
   /** A plugin version pushed from the service: fetched, its hash checked, kept and activated. */
@@ -66,8 +80,13 @@ export class BridgeRuntime {
     const file = join(this.opts.pluginsDir, `${name}@${version}.mjs`);
     await mkdir(this.opts.pluginsDir, { recursive: true });
     await writeFile(file, code, "utf8");
-    const m = await this.activate(file);
-    if (m.name !== name || m.version !== version) throw new Error("The plugin is not the version asked for");
+    // not what was asked for: not kept either
+    await this.activate(file, { name, version }).catch(async (err: unknown) => {
+      await unlink(file).catch(() => undefined);
+      throw err;
+    });
+    const active = await readFile(this.activeFile, "utf8").then((t) => JSON.parse(t) as Record<string, string>, () => ({}) as Record<string, string>);
+    await writeFile(this.activeFile, JSON.stringify({ ...active, [name]: version }), "utf8");
     return `${name} ${version} active`;
   }
 
@@ -84,15 +103,18 @@ export class BridgeRuntime {
   /** One command carried out; a plugin's refusal is told apart from the lock system being away. */
   async execute(c: BridgeCommandIn): Promise<BridgeResult> {
     try {
+      // the service stopped waiting for it: not done late (a key made after it gave up would be lost)
+      if (typeof c.payload.expiresAt === "string" && Date.parse(c.payload.expiresAt) < Date.now()) throw new Error("expired before it arrived");
       if (c.kind === "plugin_install") return { id: c.id, ok: true, result: await this.install(String(c.payload.name), String(c.payload.version), String(c.payload.sha256)) };
       const p = this.active.get(String(c.payload.plugin));
       if (!p) throw new Error(`No plugin ${String(c.payload.plugin)} on this Bridge`);
       const op = String(c.payload.op) as keyof LockPlugin;
+      if (!LOCK_OPS.includes(op)) throw new Error(`No operation ${op}`);
       const args = (c.payload.args as unknown[]) ?? [];
       // a key request crosses as JSON: its dates come back to life
       const revived = args.map((a) => (a && typeof a === "object" && "validUntil" in a ? { ...(a as KeyRequest), validFrom: new Date((a as KeyRequest).validFrom), validUntil: new Date((a as KeyRequest).validUntil) } : a));
       const fn = p.plugin[op] as unknown;
-      if (typeof fn !== "function" || op === "capabilities" || op === "name") throw new Error(`No operation ${op}`);
+      if (typeof fn !== "function") throw new Error(`No operation ${op}`);
       return { id: c.id, ok: true, result: (await (fn as (...a: unknown[]) => Promise<unknown>).apply(p.plugin, revived)) ?? null };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

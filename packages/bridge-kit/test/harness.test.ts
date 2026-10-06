@@ -28,6 +28,8 @@ describe("plugin kit harness", () => {
       ["reads the card back", true],
       ["changes validity", true],
       ["revokes", true],
+      ["revokes a key by our name", true],
+      ["refuses what it cannot do, as a refusal", true],
     ]);
     expect([...sim.keys.values()].some((k) => k.blocked)).toBe(true);
   });

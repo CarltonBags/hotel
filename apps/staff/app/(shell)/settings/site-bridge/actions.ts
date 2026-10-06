@@ -23,8 +23,10 @@ export async function enrollBridgeAction(_prev: FormState, formData: FormData): 
 export async function pushPluginAction(_prev: FormState, formData: FormData): Promise<FormState> {
   return formAction(async () => {
     const p = await authorize("manage_property_settings", field(formData, "propertyId"));
-    const [name, version] = field(formData, "plugin").split("@");
-    await pushBridgePlugin(pool(), p.tenant.schemaName, field(formData, "bridgeId"), name ?? "", version ?? "", viewerOf(p));
+    // the choice is "<name>@<version>"
+    const m = /^([a-z0-9-]{2,40})@(\d+\.\d+\.\d+)$/.exec(field(formData, "plugin"));
+    if (!m) throw new Error("Choose a plugin version");
+    await pushBridgePlugin(pool(), p.tenant.schemaName, field(formData, "bridgeId"), m[1]!, m[2]!, viewerOf(p));
     revalidatePath(PATH);
     return { ok: true, message: "Sent: the Bridge installs it on its next call." };
   });
