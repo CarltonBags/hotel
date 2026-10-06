@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { claimDeclineNotice, closeUnfinishedPortalPayments, listTenantUsers, refreshPaymentAccountById, renewExpiringHolds, retryOpenRefunds, syncByIntent, syncRefund, withTenant, type Tenant } from "@hoteloftware/db";
+import { claimDeclineNotice, closeUnfinishedPortalPayments, listTenantUsers, refreshPaymentAccountById, renewExpiringHolds, retryOpenRefunds, syncOfflinePayments, syncByIntent, syncRefund, withTenant, type Tenant } from "@hoteloftware/db";
 import { can } from "@hoteloftware/domain";
 import { notifyPortalDecline, notifyStaff, publishDataChange } from "@hoteloftware/events";
 import type { PaymentProvider } from "@hoteloftware/payments";
@@ -50,6 +50,8 @@ export async function checkHolds(pool: Pool, tenant: { id: string; schemaName: s
   const refunds = await retryOpenRefunds(pool, tenant.schemaName, provider);
   // online payments guests left unfinished for half an hour are closed (ticket 41)
   await closeUnfinishedPortalPayments(pool, tenant.schemaName, provider, { olderThanMinutes: 30 }).catch((err) => console.error("[payments] unfinished portal payments", err));
+  // cards readers took offline: asked until forwarded, a late decline flagged on the outlet bill (ticket 62)
+  await syncOfflinePayments(pool, tenant.schemaName, provider).catch((err) => console.error("[payments] offline payments", err));
   const changed = new Set([...warnings.filter((w) => w.renewed).map((w) => w.propertyId), ...refunds.propertyIds]);
   for (const propertyId of changed) await publishDataChange(pool, { tenantId: tenant.id, kind: "reservations", propertyId });
   for (const w of warnings) {

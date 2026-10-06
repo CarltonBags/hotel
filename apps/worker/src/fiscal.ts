@@ -13,6 +13,7 @@ import {
   receiptsToSign,
   registerAtClients,
   registerFiscalClients,
+  signOutletOrders,
   signReceipt,
   syncAtSystemReceipts,
   yearlyReceiptsToCheck,
@@ -52,6 +53,10 @@ export async function runFiscal(pool: Pool, tenant: Tenant, deps: FiscalDeps): P
     }
     if (r.state === "refused" && r.newly) await notifyReceiptRefused(pool, tenant, { propertyId: r.propertyId, error: r.error ?? "" }).catch((err) => console.error("[fiscal] refusal not told", err));
   }
+  // outlet orders (ticket 62) the device did not get signed: every minute
+  const orders = await signOutletOrders(pool, s, deps);
+  out.signed += orders.signed;
+  out.failed += orders.failed;
   // Austria: outages over 48 hours, reminded once a day until reported
   for (const o of await atOutagesToReport(pool, s)) await notifyAtOutageReport(pool, tenant, o).catch((err) => console.error("[fiscal] outage report reminder", err));
   for (const d of await fiscalDaysToClose(pool, s)) {

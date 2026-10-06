@@ -79,6 +79,17 @@ export function BillScreen({ bill, menu, tables, companies, currency, rights, re
           {note.text}
         </p>
       ) : null}
+      {/* sold offline and not taken when the device synced (ticket 62): for staff to settle */}
+      {bill.offlineProblem ? (
+        <p role="alert" className="rounded-xl bg-danger/10 p-3 text-danger" data-bill-offline-problem>
+          {bill.offlineProblem}
+        </p>
+      ) : null}
+      {bill.payments.some((p) => p.offlineRisk) ? (
+        <p className="rounded-xl bg-warning/15 p-3 text-sm" data-offline-risk>
+          {m["outlet.offlineRisk"]}
+        </p>
+      ) : null}
       <div className="grid gap-4 md:grid-cols-[3fr_2fr]">
         {open && rights.serve ? (
           <section className="grid content-start gap-3" aria-label={m["outlet.menu"]}>

@@ -939,6 +939,8 @@ export const payments = pgTable(
     declineNoticedAt: timestamp("decline_noticed_at", { withTimezone: true }),
     voucherId: uuid("voucher_id").references((): AnyPgColumn => vouchers.id),
     tip: numeric("tip", { precision: 12, scale: 2 }).notNull().default("0"),
+    collectedOffline: boolean("collected_offline").notNull().default(false),
+    forwardedAt: timestamp("forwarded_at", { withTimezone: true }),
   },
   (t) => [
     index("payments_folio_idx").on(t.folioId),
@@ -1548,6 +1550,7 @@ export const receipts = pgTable(
     issuedBy: text("issued_by").notNull(),
     emailedTo: text("emailed_to"),
     voucherId: uuid("voucher_id").unique().references((): AnyPgColumn => vouchers.id),
+    issuedOfflineAt: timestamp("issued_offline_at", { withTimezone: true }),
   },
   (t) => [unique("receipts_property_id_number_key").on(t.propertyId, t.number), check("receipts_subject_check", sql`(${t.paymentId} is null) <> (${t.voucherId} is null)`)],
 );
@@ -2697,6 +2700,7 @@ export const outletBills = pgTable(
     discountApprovedBy: text("discount_approved_by"),
     reservationId: uuid("reservation_id").references(() => reservations.id),
     signature: text("signature"),
+    offlineProblem: text("offline_problem"),
   },
   (t) => [
     check("outlet_bills_status_check", sql`${t.status} in ('open', 'paying', 'paid', 'invoiced', 'charged')`),
@@ -2715,6 +2719,7 @@ export const outletRounds = pgTable(
     number: integer("number").notNull(),
     sentBy: text("sent_by").notNull(),
     sentAt: timestamp("sent_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    orderedAt: timestamp("ordered_at", { withTimezone: true }),
   },
   (t) => [unique("outlet_rounds_bill_id_number_key").on(t.billId, t.number)],
 );
@@ -2768,6 +2773,50 @@ export const printJobs = pgTable(
     index("print_jobs_open_idx").on(t.outletId, t.createdAt).where(sql`${t.status} in ('pending', 'printing', 'failed')`),
   ],
 );
+
+export const fiscalOrders = pgTable(
+  "fiscal_orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    clientId: uuid("client_id").notNull().references(() => fiscalClients.id),
+    billId: uuid("bill_id").notNull().references(() => outletBills.id),
+    roundId: uuid("round_id").references(() => outletRounds.id),
+    voidedLineId: uuid("voided_line_id").references(() => outletBillLines.id),
+    lines: jsonb("lines").notNull(),
+    state: text("state").notNull().default("open"),
+    claim: uuid("claim"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    error: text("error"),
+    orderedAt: timestamp("ordered_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    number: bigint("number", { mode: "number" }),
+    timeStart: timestamp("time_start", { withTimezone: true }),
+    timeEnd: timestamp("time_end", { withTimezone: true }),
+    signature: text("signature"),
+    signatureCounter: bigint("signature_counter", { mode: "number" }),
+    signedAt: timestamp("signed_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("fiscal_orders_source_check", sql`(${t.roundId} is null) <> (${t.voidedLineId} is null)`),
+    check("fiscal_orders_state_check", sql`${t.state} in ('open', 'signing', 'signed', 'failed')`),
+    uniqueIndex("fiscal_orders_round_idx").on(t.roundId).where(sql`${t.roundId} is not null`),
+    uniqueIndex("fiscal_orders_void_idx").on(t.voidedLineId).where(sql`${t.voidedLineId} is not null`),
+    index("fiscal_orders_open_idx").on(t.createdAt).where(sql`${t.state} in ('open', 'signing', 'failed')`),
+    index("fiscal_orders_bill_idx").on(t.billId),
+  ],
+);
+
+export const outletSyncOps = pgTable("outlet_sync_ops", {
+  opId: uuid("op_id").primaryKey(),
+  outletId: uuid("outlet_id").notNull().references(() => outlets.id),
+  device: text("device").notNull().default(""),
+  kind: text("kind").notNull(),
+  result: jsonb("result").notNull(),
+  appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  appliedBy: text("applied_by").notNull(),
+});
 
 export const tenantSchema = {
   tenantSettings,
@@ -2903,4 +2952,6 @@ export const tenantSchema = {
   outletRounds,
   outletBillLines,
   printJobs,
+  fiscalOrders,
+  outletSyncOps,
 };

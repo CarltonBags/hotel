@@ -26,6 +26,14 @@ export interface SignInput {
   retry?: boolean;
   amountsPerVatRate: { vatRate: VatRate; amount: string }[];
   amountsPerPaymentType: { paymentType: PaymentType; amount: string; currency: string }[];
+  /**
+   * An order (Bestellung-V1, ticket 62) instead of a receipt: the items of an
+   * order round at a table, a void as negative quantities. The amounts above
+   * are empty then.
+   */
+  order?: { lineItems: { quantity: string; text: string; pricePerUnit: string }[] };
+  /** Kept with the transaction: the bill's table key, so order and bill belong together. */
+  metadata?: Record<string, string>;
 }
 
 export interface SignedTx {

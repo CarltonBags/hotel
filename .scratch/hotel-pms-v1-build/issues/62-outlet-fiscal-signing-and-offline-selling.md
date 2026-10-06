@@ -4,9 +4,25 @@
 
 **Blocked by:** 61 Outlet payments: room charge, readers, tap to pay, cash, vouchers, tips, discounts, voids, 51 Fiscal module Germany through fiskaly, 52 Fiscal module Austria through fiskaly
 
-**Status:** ready-for-agent
+**Status:** in review (PR stacked on ticket 61)
 
-- [ ] Order round signed within 45 seconds in the fiskaly test environment; bill references the table key
-- [ ] Airplane mode: two orders and a cash payment complete, then sign and sync after reconnect in order
-- [ ] Offline Room Charge for a guest not on the synced list is refused
-- [ ] Offline reader payment forwarded later appears on the connected account
+- [x] Order round signed within 45 seconds in the fiskaly test environment; bill references the table key
+- [x] Airplane mode: two orders and a cash payment complete, then sign and sync after reconnect in order
+- [x] Offline Room Charge for a guest not on the synced list is refused
+- [x] Offline reader payment forwarded later appears on the connected account
+
+## Comments
+
+**Built.** Germany: every order round at an outlet is signed by the TSE as an order (Bestellung-V1, its items with quantity and unit price) right after it is sent, by the worker otherwise (failed attempts again after 10 seconds per attempt), within 45 seconds; a voided item becomes a new order with negative quantity, signed after the order it cancels; orders and the bill's Receipt carry the bill as table key, and the Receipt prints the time of the first order. Austria signs only the payment, card included, as before. Offline Sales (the outlet's "Offline Sales" page, kept by a service worker): the device keeps the outlet's last snapshot (menu, tables, printers, open bills, the in-house list with what each stay had left tonight) and goes on selling without a connection: bills, items and order rounds (tickets printed straight to the outlet's network printers or shown), cash with a Receipt shown as issued offline, Room Charges only for guests on the list within what they had left. Each step is an operation with its own id and time; back online they are sent in order, one sync per outlet at a time, each applied once (a repeat is recognised from what exists), within the outlet only, times believed back to a week and kept in order; the orders and the Receipt are signed afterwards and the Receipt says it was issued offline (Austria: "Sicherheitseinrichtung ausgefallen"). What could not be taken (a Room Charge that no longer holds, cash with no Shift to book it to) stays on the bill for staff to settle, shown on the bill and the table plan. A card a reader took offline (chip and PIN; never a phone, never girocard) is at the hotel's risk, shown on the bill, not refunded until forwarded; the worker asks until the reader has forwarded it, and a decline then is flagged on the bill.
+
+**Verified.** db: 5 tests (an order round signed as an order within 45 seconds with its table key, a void as a negative order; two orders and a cash payment made offline applied once each in order, sent twice without effect, the Receipt issued offline with the first order's time, orders signed in the order taken, then the Receipt; an offline Room Charge for a guest no longer in house left for staff, the list then empty; a card taken offline at risk, refund refused until forwarded, then on the account; another outlet's bill refused, cash that could not be booked named on the bill). Walkthrough 9/9 in the browser: order signed within 45 seconds against the dev TSE; Offline Sales in airplane mode with two rounds and cash (6 operations waiting), a guest not on the list refused; back online sent, applied in order, orders and Receipt signed, the Receipt showing it was issued offline.
+
+**Review fixes.** Sync operations stay at their outlet; repeats are recognised from what exists, not from a database error; one sync per outlet at a time; unknown operations refused; device times kept within a week and in order; order signing follows the fiscal module's claim protocol and signs a void only after its order; failed offline cash is named on the bill; offline cards only by chip and PIN on a reader; the worker follows payments waiting to be forwarded and the webhook does too; the service worker never keeps a redirected page; glossary: "Offline Sale" added (no "till"), the Fiscal Outage rule for German desk Receipts kept apart.
+
+**Open points.**
+- Tax advisor (gate 03): Germany signs an Offline Sale's orders and Receipt when the device is back online (the owner's decision for outlets); a desk Receipt of a Fiscal Outage is never signed later. To be confirmed, as is the table key in fiskaly's metadata counting for DSFinV-K's references.
+- Tested against the fake TSE and fake payment provider only: the fiskaly test environment needs keys from the owner; a real reader's offline mode needs Stripe's Terminal SDK (the web staff app cannot use it), so offline card payments are modelled, not yet real.
+- The device shows its offline Receipt on screen; printing it on the outlet's receipt printer is not built (the desk's Receipt printer is configured, not the outlet's).
+- Offline operations are applied as the user who syncs (opened by, sent by, the Shift the cash goes to).
+- The page works offline once loaded online while the service worker is active; the very first offline open after an update may miss a chunk.
+- Not asked for: the shared offline store (the floor phone's moved to it), the Offline Sales page beside the outlet screen, printing offline rounds from the device.

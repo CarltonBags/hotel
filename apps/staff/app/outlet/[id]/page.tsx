@@ -27,6 +27,7 @@ export default async function OutletFloorPage({ params }: { params: Promise<{ id
       <span>
         #{b.number} {b.label}
         {b.unsent ? <span className="ml-1 text-danger">· {b.unsent} {m["outlet.unsent"]}</span> : null}
+        {b.offlineProblem ? <span className="ml-1 text-danger" data-offline-problem>· ⚠</span> : null}
       </span>
       <span className="font-medium">{money(b.total)}</span>
     </Link>
@@ -42,6 +43,9 @@ export default async function OutletFloorPage({ params }: { params: Promise<{ id
               {m["outlet.setup"]}
             </Link>
           ) : null}
+          <Link href={`/outlet/${floor.outlet.id}/offline-sales`} className="text-accent underline" data-offline-link>
+            {m["outlet.offlineSales"]}
+          </Link>
           <Link href="/cash" className="text-accent underline">
             {m["outlet.shift"]}
           </Link>
