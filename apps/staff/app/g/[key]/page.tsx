@@ -96,6 +96,8 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
       {open ? (
         <Glass data-section="precheckin">
           <h2 className="text-xl font-semibold">{s.precheckinAt ? t("precheckinDone") : t("precheckin")}</h2>
+          {/* a form signed by hand: the registration ends at reception (Germany; Swiss cantons asking it) */}
+          {view.property.registrationAtReception ? <p className="text-sm text-white/70" data-at-reception>{t("registrationAtReception")}</p> : null}
           <p className="text-sm text-white/70">{t("precheckinHelp")}</p>
           <PrecheckinForm
             action={precheckinAction.bind(null, key)}

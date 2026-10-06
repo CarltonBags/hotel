@@ -36,6 +36,7 @@ const T = {
   companion: { de: "Mitreisende Person {n}", en: "Companion {n}" },
   arrivalTime: { de: "Voraussichtliche Ankunft", en: "Expected arrival" },
   consent: { de: "Nachrichten zu meinem Aufenthalt per E-Mail erhalten", en: "Receive messages about my stay by email" },
+  registrationAtReception: { de: "Ihren Meldeschein unterschreiben Sie bei der Ankunft an der Rezeption; Ihre Angaben hier füllen ihn vor.", en: "You sign your registration form at reception when you arrive; your details here fill it in for you." },
   whatsappConsent: { de: "Servicenachrichten zu meinem Aufenthalt per WhatsApp an meine Telefonnummer erhalten (jederzeit mit STOP abbestellbar)", en: "Receive service messages about my stay by WhatsApp at my phone number (reply STOP at any time to end them)" },
   save: { de: "Speichern", en: "Save" },
   saved: { de: "Gespeichert. Danke!", en: "Saved. Thank you!" },

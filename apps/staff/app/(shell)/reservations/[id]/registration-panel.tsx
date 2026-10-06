@@ -32,7 +32,10 @@ export async function RegistrationPanel({ reservationId, propertyId, propertyCou
     <section aria-label={m["reg.title"]} className={box} data-registration>
       <AutoRefresh active={reg.deviceId !== null} />
       <h2 className="font-medium">{m["reg.title"]}</h2>
-      <p className="rounded-xl bg-accent/10 px-3 py-2">{m[`reg.rule.${reg.country}`]}</p>
+      <p className="rounded-xl bg-accent/10 px-3 py-2">
+        {m[`reg.rule.${reg.country}`]}
+        {reg.profile ? ` ${m[`canton.signature.${reg.profile.signature}`]}` : ""}
+      </p>
       <ul className="grid gap-2">
         {reg.persons.map((p) => (
           <li key={p.id} className="grid gap-2 rounded-xl bg-surface p-3" data-person={p.firstName} data-need={p.need} data-step={p.step}>
@@ -80,7 +83,7 @@ export async function RegistrationPanel({ reservationId, propertyId, propertyCou
                 ) : (
                   <p className="text-xs">✓ {m["reg.idChecked"]}{p.idCheckNote ? ` · ${p.idCheckNote}` : ""}</p>
                 )}
-                {reg.country === "DE" && !p.confirmation ? (
+                {reg.signature === "handwritten" && !p.confirmation ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <a href={`/registration/${p.id}`} target="_blank" className="rounded-full bg-surface-2 px-3 py-2 font-medium" data-print-form>
                       {m["reg.printForm"]}
@@ -91,7 +94,7 @@ export async function RegistrationPanel({ reservationId, propertyId, propertyCou
                     </ActionForm>
                   </div>
                 ) : null}
-                {p.idChecked && p.confirmation ? (
+                {p.idChecked && (p.confirmation || reg.signature === "id_check") ? (
                   <ActionForm action={completeAction} submitLabel={m["reg.complete"]}>
                     {hidden}
                     <input type="hidden" name="personId" value={p.id} />
@@ -144,6 +147,8 @@ export async function RegistrationPanel({ reservationId, propertyId, propertyCou
               <input name="lastName" required placeholder={m["reg.lastName"]} className={input} />
               <input name="dateOfBirth" type="date" className={input} />
               <input name="nationality" required placeholder="DE" className={`${input} w-16`} />
+              {/* Switzerland: date of birth and Country of Residence of every guest */}
+              {reg.country === "CH" ? <input name="countryOfResidence" required placeholder={m["reg.residence"]} className={`${input} w-24`} /> : null}
             </ActionForm>
           </details>
         </>

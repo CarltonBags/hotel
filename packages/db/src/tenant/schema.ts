@@ -42,6 +42,7 @@ export const properties = pgTable(
     portalInfo: jsonb("portal_info").notNull().default(sql`'{}'`),
     portalDocumentImages: boolean("portal_document_images").notNull().default(false),
     expressCheckoutAuto: boolean("express_checkout_auto").notNull().default(false),
+    cantonProfile: jsonb("canton_profile"),
     portalPhotoFileId: uuid("portal_photo_file_id").references((): AnyPgColumn => storedFiles.id, { onDelete: "set null" }),
     legalEntityId: uuid("legal_entity_id")
       .notNull()
@@ -1643,8 +1644,9 @@ export const registrations = pgTable(
     queue: uuid("queue").array().notNull().default(sql`'{}'`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdBy: text("created_by").notNull(),
+    profile: jsonb("profile"),
   },
-  (t) => [check("registrations_country_check", sql`${t.country} in ('DE', 'AT')`), uniqueIndex("registrations_device_key").on(t.deviceId).where(sql`${t.deviceId} is not null`)],
+  (t) => [check("registrations_country_check", sql`${t.country} in ('DE', 'AT', 'CH')`), uniqueIndex("registrations_device_key").on(t.deviceId).where(sql`${t.deviceId} is not null`)],
 );
 
 export const registrationPersons = pgTable(
@@ -1664,6 +1666,9 @@ export const registrationPersons = pgTable(
     country: text("country").notNull().default(""),
     documentNumber: text("document_number").notNull().default(""),
     gender: text("gender").notNull().default(""),
+    placeOfBirth: text("place_of_birth").notNull().default(""),
+    documentType: text("document_type").notNull().default(""),
+    carNumber: text("car_number").notNull().default(""),
     language: text("language").notNull().default("de"),
     step: text("step").notNull().default("waiting"),
     guestDoneAt: timestamp("guest_done_at", { withTimezone: true }),
@@ -1680,6 +1685,7 @@ export const registrationPersons = pgTable(
   },
   (t) => [
     check("registration_persons_gender_check", sql`${t.gender} in ('', 'f', 'm', 'x')`),
+    check("registration_persons_document_type_check", sql`${t.documentType} in ('', 'passport', 'id_card', 'other')`),
     check("registration_persons_role_check", sql`${t.role} in ('primary', 'spouse', 'partner', 'child', 'other')`),
     check("registration_persons_step_check", sql`${t.step} in ('waiting', 'welcome', 'details', 'companions', 'review', 'done')`),
     check("registration_persons_confirmation_check", sql`${t.confirmation} in ('tablet_signature', 'paper')`),
