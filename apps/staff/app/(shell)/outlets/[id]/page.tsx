@@ -7,7 +7,7 @@ import { requireAllowed } from "@/lib/authorize";
 import { pool } from "@/lib/db";
 import { outletsModuleOn } from "@/lib/outlets";
 import { loadShell } from "@/lib/shell";
-import { saveMenuItemAction, savePrinterAction, saveSpaRoomAction, saveTableAction, saveTherapistAction, saveTreatmentAction } from "../../settings/outlets/actions";
+import { saveMenuItemAction, savePrinterAction, saveSpaRoomAction, saveTableAction, saveTherapistAction, saveTreatmentAction, spaCancelHoursAction } from "../../settings/outlets/actions";
 
 /** An outlet's menu, printers and tables (ticket 60): the Property Manager, or the outlet's own Outlet Manager. */
 export default async function OutletSetupPage({ params }: { params: Promise<{ id: string }> }) {
@@ -72,6 +72,14 @@ export default async function OutletSetupPage({ params }: { params: Promise<{ id
       </section>
       {spa ? (
         <>
+          {/* guests book released hours in the Guest Portal and cancel up to this many hours before (ticket 64) */}
+          <section className={section} data-spa-cancel-hours>
+            <h2 className="font-medium">{m["spa.portal"]}</h2>
+            <ActionForm action={spaCancelHoursAction} submitLabel={m["action.save"]} className={row}>
+              {hidden}
+              <Field label={m["spa.cancelHours"]} name="hours" type="number" defaultValue={String(spa.cancelHours)} />
+            </ActionForm>
+          </section>
           <section className={section} data-therapists>
             <h2 className="font-medium">{m["spa.therapists"]}</h2>
             {[...spa.therapists, null].map((t) => (

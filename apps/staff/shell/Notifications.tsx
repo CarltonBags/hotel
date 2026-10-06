@@ -3,18 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Bell, X } from "lucide-react";
 import { isDataChange } from "@hoteloftware/domain";
-import { DATA_EVENT } from "./LiveRefresh";
+import { WORKER_URL, announceData, openEventStream, type StreamNotification } from "./event-stream";
 import { useShell } from "./ShellProvider";
 
-interface Toast {
-  id: number;
-  kind: string;
-  title: string;
-  body: string;
-  href: string | null;
-}
-
-const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL ?? "";
 const TOAST_MS = 8000;
 
 /** A short two-note chime, made in the browser (no sound file); one audio context for the page. */
@@ -38,72 +29,32 @@ function chime(): void {
   }
 }
 
-/**
- * Live updates: opens the worker's event stream with a short-lived token and
- * shows each notification as a toast. The browser's EventSource reconnects on
- * its own and sends Last-Event-ID; when the token has expired we fetch a new
- * one and reopen with the last id, so nothing is missed across a restart.
- */
+/** Live updates: each notification of the worker's event stream as a toast; data changes refresh open screens. */
 export function Notifications() {
   const { t, tenant, user, inboxSound } = useShell();
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [toasts, setToasts] = useState<StreamNotification[]>([]);
   const [offline, setOffline] = useState(false);
   const lastId = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!WORKER_URL) return;
-    let source: EventSource | null = null;
-    let stopped = false;
-    let retry = 1000;
-
-    const open = async () => {
-      if (stopped) return;
-      try {
-        const res = await fetch("/api/events/token", { cache: "no-store" });
-        if (!res.ok) throw new Error(`token ${res.status}`);
-        const { token } = (await res.json()) as { token: string };
-        const url = new URL("/events", WORKER_URL);
-        url.searchParams.set("token", token);
-        if (lastId.current) url.searchParams.set("lastEventId", lastId.current);
-        source = new EventSource(url.toString());
-        source.addEventListener("notification", (e) => {
-          const msg = e as MessageEvent<string>;
-          lastId.current = msg.lastEventId;
-          const n = JSON.parse(msg.data) as Toast;
+  useEffect(
+    () =>
+      openEventStream({
+        onNotification: (n) => {
           // data changes refresh open screens and are no toast
           if (isDataChange(n.kind)) {
-            window.dispatchEvent(new CustomEvent(DATA_EVENT, { detail: { kind: n.kind, propertyId: n.body, title: n.title } }));
+            announceData(n);
             return;
           }
           // a new guest message rings, for whoever asked for the sound (ticket 42)
           if (n.kind === "inbox.message" && inboxSound) chime();
           setToasts((list) => [...list.filter((x) => x.id !== n.id), n].slice(-4));
           setTimeout(() => setToasts((list) => list.filter((x) => x.id !== n.id)), TOAST_MS);
-        });
-        source.onopen = () => {
-          setOffline(false);
-          retry = 1000;
-        };
-        source.onerror = () => {
-          // The token may have expired or the worker restarted: reopen with a fresh token.
-          setOffline(true);
-          source?.close();
-          source = null;
-          if (!stopped) setTimeout(open, retry);
-          retry = Math.min(retry * 2, 30_000);
-        };
-      } catch {
-        setOffline(true);
-        if (!stopped) setTimeout(open, retry);
-        retry = Math.min(retry * 2, 30_000);
-      }
-    };
-    void open();
-    return () => {
-      stopped = true;
-      source?.close();
-    };
-  }, [tenant.id, user.id, inboxSound]);
+        },
+        onState: (online) => setOffline(!online),
+        lastId,
+      }),
+    [tenant.id, user.id, inboxSound],
+  );
 
   return (
     <div aria-live="polite" aria-label={t("shell.notifications")} className="pointer-events-none fixed print:hidden right-5 top-20 z-50 flex w-80 flex-col gap-2">

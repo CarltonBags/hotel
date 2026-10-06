@@ -2606,9 +2606,11 @@ export const outlets = pgTable(
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     discountPercent: numeric("discount_percent", { precision: 5, scale: 2 }).notNull().default("0"),
+    spaCancelHours: integer("spa_cancel_hours").notNull().default(24),
   },
   (t) => [
     check("outlets_discount_percent_check", sql`${t.discountPercent} between 0 and 100`),
+    check("outlets_spa_cancel_hours_check", sql`${t.spaCancelHours} between 0 and 168`),
     check("outlets_name_check", sql`length(trim(${t.name})) between 1 and 60`),
     check("outlets_kind_check", sql`${t.kind} in ('bar', 'restaurant', 'spa', 'other')`),
     unique("outlets_property_id_name_key").on(t.propertyId, t.name),
