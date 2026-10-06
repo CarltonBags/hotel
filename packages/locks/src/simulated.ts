@@ -29,11 +29,12 @@ export class SimulatedLocks implements LockPlugin {
     return r.kind === "phone" ? { externalId, guestKey: `https://keys.example/sim/${externalId}` } : { externalId };
   }
 
-  async updateKey(externalId: string, r: KeyRequest): Promise<void> {
+  async updateKey(externalId: string, r: KeyRequest): Promise<void | { guestKey?: string }> {
     this.up();
     // a key made by another process's simulation is taken as it comes
     const k = this.keys.get(externalId) ?? { ...r, revoked: false };
     this.keys.set(externalId, { ...k, validUntil: r.validUntil });
+    if (r.kind === "phone") return { guestKey: `https://keys.example/sim/${externalId}?until=${r.validUntil.getTime()}` };
   }
 
   async revokeKey(externalId: string): Promise<void> {

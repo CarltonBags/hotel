@@ -79,7 +79,9 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   const payable = s.status === "confirmed" || s.status === "checked_in";
   // the spa's released times for a day of the stay (ticket 64)
   // the door PIN or Digital Key while Checked-in (ticket 69); gone at check-out
-  const keys = s.status === "checked_in" ? ((await guestKeys(pool(), tenant!.schemaName, key, lockDeps()))?.keys ?? []) : [];
+  // a key that cannot be read (a lock secret changed) never takes the Portal down
+  const held = s.status === "checked_in" ? await guestKeys(pool(), tenant!.schemaName, key, lockDeps()).catch(() => null) : null;
+  const keys = held?.keys ?? [];
   const spa = await portalSpa(pool(), tenant!.schemaName, key, spaDay && /^\d{4}-\d{2}-\d{2}$/.test(spaDay) ? spaDay : null);
   return (
     <>

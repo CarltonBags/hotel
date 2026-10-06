@@ -72,20 +72,24 @@ describe("Keys for guests", () => {
     expect((await guestKeys(pool, s(), portal, deps))!.keys).toEqual([{ kind: "phone", room: "101", validUntil: expect.any(String), pin: null, guestKey: expect.stringMatching(/^https:\/\/keys\.example\/sim\//) }]);
     await settings("door_pin");
     await syncLockKeys(pool, s(), deps);
-    expect((await guestKeys(pool, s(), portal, deps))!.keys.map((k) => [k.kind, /^[1-9]{6}$/.test(k.pin ?? "")])).toEqual([
-      ["phone", false],
-      ["pin", true],
-    ]);
+    // one way of handing over: the Digital Key goes, the door PIN comes
+    expect((await guestKeys(pool, s(), portal, deps))!.keys.map((k) => [k.kind, /^[1-9]{6}$/.test(k.pin ?? "")])).toEqual([["pin", true]]);
   });
 
   it("the kiosk writes the card on its own encoder, once for a double tap", async () => {
     const kiosk = { deviceId: "8b0a2c3e-1d4f-4a6b-9c8d-7e6f5a4b3c2d", propertyId };
     await expect(issueKioskCard(pool, s(), portal, kiosk, deps)).rejects.toThrow(/reception/);
     await settings("kiosk_encoder");
+    // a kiosk of the property
+    const [t] = (await pool.query<{ id: string }>("select id from control.tenants where schema_name = $1", [s()])).rows;
+    await pool.query("insert into control.devices (id, tenant_id, property_id, kind, guest_mode, name, token_hash, enrolled_by) values ($1, $2, $3, 'guest', 'kiosk', 'Kiosk', 'x', 'test')", [kiosk.deviceId, t!.id, propertyId]);
+    // a Portal Link alone makes no card: only right after Self Check-in on this kiosk
+    await expect(issueKioskCard(pool, s(), portal, kiosk, deps)).rejects.toThrow(/reception/);
+    await pool.query(`insert into ${s()}.self_checkins (reservation_id, property_id, channel, device_id, step, outcome, finished_at) values ($1, $2, 'kiosk', $3, 'result', 'checked_in', clock_timestamp())`, [reservation, propertyId, kiosk.deviceId]);
     await expect(issueKioskCard(pool, s(), portal, kiosk, deps)).rejects.toThrow(/no encoder/);
     await setDeskEncoder(pool, s(), propertyId, kiosk.deviceId, "enc-kiosk", pm);
-    expect(await issueKioskCard(pool, s(), portal, kiosk, deps)).toEqual({ room: "101" });
-    await issueKioskCard(pool, s(), portal, kiosk, deps);
+    // two taps at once: one card
+    expect(await Promise.all([issueKioskCard(pool, s(), portal, kiosk, deps), issueKioskCard(pool, s(), portal, kiosk, deps)])).toEqual([{ room: "101" }, { room: "101" }]);
     expect([...sim.keys.values()].filter((k) => k.kind === "card" && k.encoderId === "enc-kiosk" && k.lockRef === "door-101")).toHaveLength(1);
   });
 

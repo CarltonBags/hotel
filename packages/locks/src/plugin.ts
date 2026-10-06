@@ -39,7 +39,8 @@ export interface LockPlugin {
   readonly name: string;
   readonly capabilities: LockCapabilities;
   issueKey(r: KeyRequest): Promise<IssuedKey>;
-  updateKey(externalId: string, r: KeyRequest): Promise<void>;
+  /** A Digital Key the lock system renews on a change comes back with its new guest key. */
+  updateKey(externalId: string, r: KeyRequest): Promise<void | { guestKey?: string | undefined }>;
   revokeKey(externalId: string, lockRef: string): Promise<void>;
   /** Take back a key whose id at the lock we never learnt (the issue answered with an error after the key was made). */
   revokeByKeyId(keyId: string, lockRef: string): Promise<void>;

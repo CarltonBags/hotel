@@ -2,7 +2,7 @@
 
 import { claimDeclineNotice, findForKiosk, guestKeys, issueKioskCard, type GuestKeys, finishCardSetup, finishPortalPayment, finishSelfCheckin, selfCheckinRegister, selfCheckinStep, selfCheckinView, startSelfCheckin, TabletProblem, type SelfCheckinChannel, type SelfCheckinStep, type SelfCheckinView, type TabletInput } from "@hoteloftware/db";
 import type { CheckInCondition } from "@hoteloftware/domain";
-import { notifyPortalDecline, notifySelfCheckin } from "@hoteloftware/events";
+import { notifyKeyProblem, notifyPortalDecline, notifySelfCheckin } from "@hoteloftware/events";
 import { paymentProvider } from "@hoteloftware/payments";
 import { pool } from "@/lib/db";
 import { currentKiosk } from "@/lib/tablet";
@@ -135,7 +135,16 @@ export async function finishAction(key: string, here: boolean): Promise<{ ok: tr
 export async function keysAction(key: string): Promise<GuestKeys | null> {
   const c = await context().catch(() => null);
   if (!c) return null;
-  return guestKeys(pool(), c.schema, String(key), lockDeps()).catch(() => null);
+  return guestKeys(pool(), c.schema, String(key), lockDeps(), c.channel.kind === "kiosk" ? c.channel.propertyId : undefined).catch(() => null);
+}
+
+/** The key could not be made in time: the guest goes to reception, and the desk hears why (ticket 69). */
+export async function keyProblemAction(key: string, reason: "no_key_yet"): Promise<void> {
+  const c = await context().catch(() => null);
+  if (!c) return;
+  const v = await selfCheckinView(pool(), c.schema, String(key), c.channel).catch(() => null);
+  if (!v) return;
+  await notifyKeyProblem(pool(), c.tenant, { reservationId: v.reservationId, propertyId: v.propertyId, guestName: `${v.stay.firstName} ${v.stay.lastName}`, reason: reason === "no_key_yet" ? "the lock system did not answer in time" : reason }).catch(() => undefined);
 }
 
 /** On the kiosk: the key card written on this kiosk's encoder (ticket 69). */
@@ -147,6 +156,8 @@ export async function kioskCardAction(key: string): Promise<{ ok: true; room: st
     return { ok: true, room: r.room };
   } catch (err) {
     console.error("kiosk key card", err);
+    const v = await selfCheckinView(pool(), kiosk.tenant.schemaName, String(key), { kind: "kiosk", deviceId: kiosk.device.id, propertyId: kiosk.device.propertyId }).catch(() => null);
+    if (v) await notifyKeyProblem(pool(), kiosk.tenant, { reservationId: v.reservationId, propertyId: v.propertyId, guestName: `${v.stay.firstName} ${v.stay.lastName}`, reason: err instanceof Error ? err.message : "the card could not be written" }).catch(() => undefined);
     return { ok: false };
   }
 }

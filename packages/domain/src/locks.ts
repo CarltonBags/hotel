@@ -52,7 +52,7 @@ export function keyValidUntil(departure: string, checkoutTime: string, graceMinu
   return new Date(instantAt(departure, checkoutTime.slice(0, 5), timeZone).getTime() + graceMinutes * 60_000);
 }
 
-export type RevokeReason = "checked_out" | "no_show" | "cancelled" | "room_move" | "not_checked_in" | "lost";
+export type RevokeReason = "checked_out" | "no_show" | "cancelled" | "room_move" | "not_checked_in" | "lost" | "handover_changed";
 export type KeyWarning = "offline_card_runs_to_expiry" | "new_card_needed" | "card_reencode_needed";
 
 export interface PlannedKey {
@@ -91,7 +91,9 @@ export function keyPlan(stay: { status: string; roomId: string | null; validUnti
     revoke(k, "room_move");
     if (k.kind === "card") warn("new_card_needed");
   }
-  const here = live.filter((x) => x.roomId === stay.roomId);
+  // one way of handing keys over: a door PIN or Digital Key of another setting goes (cards stay with their guest)
+  for (const k of live.filter((x) => x.roomId === stay.roomId && x.kind !== "card" && x.kind !== automatic)) revoke(k, "handover_changed");
+  const here = live.filter((x) => x.roomId === stay.roomId && (x.kind === "card" || x.kind === automatic));
   for (const k of here) {
     if (k.validUntil.getTime() === stay.validUntil.getTime()) continue;
     // an offline card keeps what was written on it: the desk writes it again

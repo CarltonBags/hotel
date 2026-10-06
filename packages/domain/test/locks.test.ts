@@ -27,6 +27,12 @@ describe("door keys", () => {
     expect(keyPlan({ status: "checked_in", roomId: "r2", validUntil: until }, [active], cardCaps, null)).toEqual({ issue: [], update: [], revoke: [{ keyId: "k1", reason: "room_move" }], warnings: ["offline_card_runs_to_expiry", "new_card_needed"] });
   });
 
+  it("a changed handover takes the other kind of key back, cards stay", () => {
+    const pin = { id: "k1", roomId: "r1", kind: "pin" as const, status: "active" as const, validUntil: until };
+    const card = { ...pin, id: "k2", kind: "card" as const };
+    expect(keyPlan({ status: "checked_in", roomId: "r1", validUntil: until }, [pin, card], { ...caps, phoneKey: true }, "phone")).toEqual({ issue: [{ roomId: "r1", kind: "phone" }], update: [], revoke: [{ keyId: "k1", reason: "handover_changed" }], warnings: [] });
+  });
+
   it("an extension cannot change an offline card: the desk writes it again", () => {
     const card = { id: "k1", roomId: "r1", kind: "card" as const, status: "active" as const, validUntil: new Date("2026-10-08T10:00:00Z") };
     expect(keyPlan({ status: "checked_in", roomId: "r1", validUntil: until }, [card], cardCaps, null)).toEqual({ issue: [], update: [], revoke: [], warnings: ["card_reencode_needed"] });

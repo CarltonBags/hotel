@@ -32,6 +32,7 @@ export type SelfCheckinOutcome = "checked_in" | "waiting" | "help";
 export interface SelfCheckinView {
   runId: string;
   reservationId: string;
+  propertyId: string;
   status: string;
   step: SelfCheckinStep;
   outcome: SelfCheckinOutcome | null;
@@ -138,6 +139,7 @@ async function viewIn(tx: PoolClient, runId: string): Promise<SelfCheckinView> {
   const tonight = (await tx.query<{ number: string }>("select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = $1 and a.from_date <= $2 and a.to_date > $2", [s.id, s.business_date])).rows[0];
   const failed = checkInConditions({ arrival: s.arrival, businessDate: s.business_date, localTime: s.local_time, checkinFrom: s.checkin_from, readyRoom: !!room?.ready, registration, amountDue, cardGuarantee });
   return {
+    propertyId: s.property_id,
     runId: run.id,
     reservationId: s.id,
     status: s.status,
