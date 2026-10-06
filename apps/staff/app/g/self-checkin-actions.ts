@@ -1,12 +1,13 @@
 "use server";
 
-import { claimDeclineNotice, findForKiosk, finishCardSetup, finishPortalPayment, finishSelfCheckin, selfCheckinRegister, selfCheckinStep, selfCheckinView, startSelfCheckin, TabletProblem, type SelfCheckinChannel, type SelfCheckinStep, type SelfCheckinView, type TabletInput } from "@hoteloftware/db";
+import { claimDeclineNotice, findForKiosk, guestKeys, issueKioskCard, type GuestKeys, finishCardSetup, finishPortalPayment, finishSelfCheckin, selfCheckinRegister, selfCheckinStep, selfCheckinView, startSelfCheckin, TabletProblem, type SelfCheckinChannel, type SelfCheckinStep, type SelfCheckinView, type TabletInput } from "@hoteloftware/db";
 import type { CheckInCondition } from "@hoteloftware/domain";
 import { notifyPortalDecline, notifySelfCheckin } from "@hoteloftware/events";
 import { paymentProvider } from "@hoteloftware/payments";
 import { pool } from "@/lib/db";
 import { currentKiosk } from "@/lib/tablet";
 import { currentTenant } from "@/lib/tenant";
+import { lockDeps } from "@/lib/locks";
 
 /**
  * Self Check-in (ticket 49). The Portal Link's key is the guest's authority;
@@ -127,5 +128,25 @@ export async function finishAction(key: string, here: boolean): Promise<{ ok: tr
     return { ok: true, outcome: r.outcome, roomNumber: r.roomNumber, failed: r.failed };
   } catch (err) {
     return fail(err);
+  }
+}
+
+/** The guest's door PIN or Digital Key once the stay is Checked-in (ticket 69); the Self Check-in asks until it is there. */
+export async function keysAction(key: string): Promise<GuestKeys | null> {
+  const c = await context().catch(() => null);
+  if (!c) return null;
+  return guestKeys(pool(), c.schema, String(key), lockDeps()).catch(() => null);
+}
+
+/** On the kiosk: the key card written on this kiosk's encoder (ticket 69). */
+export async function kioskCardAction(key: string): Promise<{ ok: true; room: string } | { ok: false }> {
+  const kiosk = await currentKiosk();
+  if (!kiosk) return { ok: false };
+  try {
+    const r = await issueKioskCard(pool(), kiosk.tenant.schemaName, String(key), { deviceId: kiosk.device.id, propertyId: kiosk.device.propertyId }, lockDeps());
+    return { ok: true, room: r.room };
+  } catch (err) {
+    console.error("kiosk key card", err);
+    return { ok: false };
   }
 }

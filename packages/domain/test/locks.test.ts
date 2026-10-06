@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { doorPin, handoverSupported, keyActions, keyPlan, keyValidUntil } from "../src";
+import { doorPin, guestHandover, handoverSupported, keyActions, keyPlan, keyValidUntil } from "../src";
 
 const caps = { card: false, pin: true, phoneKey: false, remoteRevoke: true, readCard: false, encoders: false };
 const cardCaps = { card: true, pin: false, phoneKey: false, remoteRevoke: false, readCard: true, encoders: true };
@@ -47,5 +47,12 @@ describe("door keys", () => {
       expect(p).toMatch(/^[1-9]{6}$/);
       expect(p.startsWith("12")).toBe(false);
     }
+  });
+
+  it("the guest is told how the key comes: the setting where the lock system can do it, else reception", () => {
+    expect(guestHandover("door_pin", caps)).toBe("door_pin");
+    expect(guestHandover("digital_key", caps)).toBe("reception");
+    expect(guestHandover("kiosk_encoder", cardCaps)).toBe("kiosk_encoder");
+    expect(guestHandover("door_pin", null)).toBe("reception");
   });
 });

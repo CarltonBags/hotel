@@ -35,6 +35,11 @@ export function handoverSupported(handover: KeyHandover, caps: LockCapabilities)
   return true;
 }
 
+/** How the guest gets the key: the property's setting where its lock system can do it, else at reception. */
+export function guestHandover(handover: KeyHandover, caps: LockCapabilities | null): KeyHandover {
+  return caps && handoverSupported(handover, caps) ? handover : "reception";
+}
+
 /** The kind of key issued without anyone at the desk, for a handover setting the lock system supports. */
 export function automaticKeyKind(handover: KeyHandover, caps: LockCapabilities): KeyKind | null {
   if (handover === "door_pin" && caps.pin) return "pin";

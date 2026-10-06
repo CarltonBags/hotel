@@ -25,7 +25,8 @@ export class SimulatedLocks implements LockPlugin {
     const externalId = `sim-${randomUUID()}`;
     this.keys.set(externalId, { ...r, revoked: false });
     if (r.kind === "card" && r.encoderId) this.lastCard.set(r.encoderId, externalId);
-    return { externalId };
+    // a simulated Digital Key: a link the guest's phone would open in the vendor's app
+    return r.kind === "phone" ? { externalId, guestKey: `https://keys.example/sim/${externalId}` } : { externalId };
   }
 
   async updateKey(externalId: string, r: KeyRequest): Promise<void> {

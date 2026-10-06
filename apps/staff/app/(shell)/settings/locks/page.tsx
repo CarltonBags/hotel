@@ -31,7 +31,8 @@ export default async function LockSettingsPage() {
   }
   const { tenant, session, actor } = await requireAllowed("manage_property_settings", property.id);
   const [setup, devices] = await Promise.all([lockSetup(pool(), tenant.schemaName, property.id, { userId: session.user.id, actor }, lockDeps()), listDevices(pool(), tenant.id, property.id)]);
-  const desks = devices.filter((d) => d.kind === "staff" && !d.revokedAt);
+  // desk workstations and lobby kiosks write key cards (ticket 69)
+  const desks = devices.filter((d) => (d.kind === "staff" || (d.kind === "guest" && d.guestMode === "kiosk")) && !d.revokedAt);
   const label = (k: string) => m[k as keyof Messages] ?? k;
   const section = "grid gap-3 rounded-2xl bg-surface-2 p-5 text-sm";
   const hidden = <input type="hidden" name="propertyId" value={property.id} />;

@@ -25,6 +25,8 @@ export interface KeyRequest {
 export interface IssuedKey {
   /** The key's id at the lock system. */
   externalId: string;
+  /** A Digital Key: what the guest's phone opens (an invitation link or key token). */
+  guestKey?: string | undefined;
 }
 
 export interface CardRead {

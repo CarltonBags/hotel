@@ -655,7 +655,7 @@ export {
   type TillPostingRow,
   type TillRefusalCode,
 } from "./tenant/tills";
-export { issueCardKey, lockSetup, readKeyCard, reservationKeys, revokeRoomKey, saveLockSettings, setDeskEncoder, setLateCheckout, setLockDoor, syncLockKeys, type LockDeps, type LockSettingsInput, type LockSetup, type ReservationKeys } from "./tenant/locks";
+export { guestKeys, issueCardKey, issueKioskCard, lockSetup, readKeyCard, reservationKeys, revokeRoomKey, saveLockSettings, setDeskEncoder, setLateCheckout, setLockDoor, syncLockKeys, type GuestKeys, type LockDeps, type LockSettingsInput, type LockSetup, type ReservationKeys } from "./tenant/locks";
 export {
   awaitBridgeCommand,
   bridgeCheckIn,
