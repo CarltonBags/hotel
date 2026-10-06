@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@hoteloftware/domain", "@hoteloftware/db", "@hoteloftware/auth", "@hoteloftware/events", "@hoteloftware/payments", "@hoteloftware/invoices", "@hoteloftware/messaging", "@hoteloftware/storage", "@hoteloftware/channels", "@hoteloftware/ui"],
+  transpilePackages: ["@hoteloftware/domain", "@hoteloftware/db", "@hoteloftware/auth", "@hoteloftware/events", "@hoteloftware/payments", "@hoteloftware/invoices", "@hoteloftware/locks", "@hoteloftware/messaging", "@hoteloftware/storage", "@hoteloftware/channels", "@hoteloftware/ui"],
   serverExternalPackages: ["pg", "stripe"],
   agentRules: false,
   // Lightspeed sends a till's key in the query string: its requests stay out of the request log (ticket 65)

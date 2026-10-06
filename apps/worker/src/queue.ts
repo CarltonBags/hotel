@@ -1,6 +1,6 @@
 import PgBoss from "pg-boss";
 import { todayIn } from "@hoteloftware/domain";
-import type { Pool } from "pg";
+import pg, { type Pool } from "pg";
 import { notifyGroupDuties, pruneNotifications, publishNotification } from "@hoteloftware/events";
 import { runTenantJob, type TenantJobData, type TenantJobHandler } from "./jobs";
 import type { PaymentProvider } from "@hoteloftware/payments";
@@ -16,7 +16,7 @@ import { fileStore } from "@hoteloftware/storage";
 import type { ChannelManager } from "@hoteloftware/channels";
 import { pullChannelBookings, pushTenantChannels } from "./channels";
 import { archiveFiscal, runFiscal } from "./fiscal";
-import type { FiscalDeps } from "@hoteloftware/db";
+import { syncLockKeys, type FiscalDeps, type LockDeps } from "@hoteloftware/db";
 
 export const QUEUES = {
   webhook: WEBHOOK_QUEUE,
@@ -59,6 +59,9 @@ export const QUEUES = {
   /** At night: the months' signed data and DSFinV-K exports archived outside the provider. */
   fiscalArchiveAll: "fiscal.archive.all",
   fiscalArchive: "fiscal.archive",
+  /** Every minute: door keys brought in line with check-ins, extensions, room moves and check-outs, one job per tenant (ticket 67). */
+  locksAll: "locks.sync.all",
+  locks: "locks.sync",
 } as const;
 
 /**
@@ -77,6 +80,8 @@ export interface QueueOptions {
   paymentProvider?: PaymentProvider;
   /** Mail and SMS providers, and the platform's sending domain, for messages and alerts. */
   messaging?: { mail: MailProvider; sms: SmsProvider; whatsapp?: WhatsAppProvider; platformDomain: string };
+  /** The secret door-lock credentials and PINs are sealed with (ticket 67). */
+  locks?: LockDeps;
   /** The channel manager (Channex or the fake). */
   channelManager?: ChannelManager;
   /** Where the channel manager announces booking revisions (registered for each connected property). */
@@ -323,6 +328,34 @@ export async function startQueue(pool: Pool, connectionString: string, options: 
     });
     // every 20 minutes from 02:00 to 04:40: a provider export still being prepared is asked again
     await boss.schedule(QUEUES.fiscalArchiveAll, "*/20 2-4 * * *", {}, { tz: "Europe/Berlin" });
+  }
+
+  const locks = options.locks;
+  if (locks) {
+    await boss.work<TenantJobData>(QUEUES.locks, async (jobs) => {
+      for (const job of jobs) {
+        const tenant = await findTenantById(pool, job.data.tenantId);
+        if (!tenant) continue;
+        const r = await syncLockKeys(pool, tenant.schemaName, locks);
+        if (r.done || r.failed) console.log(`[locks] ${tenant.slug}: ${r.done} stay(s) in line, ${r.failed} to try again`);
+      }
+    });
+    await boss.work(QUEUES.locksAll, async () => {
+      const { rows } = await pool.query<{ id: string }>("select id from control.tenants order by slug");
+      for (const t of rows) await boss.send(QUEUES.locks, { tenantId: t.id } satisfies TenantJobData, { singletonKey: `locks:${t.id}`, singletonSeconds: 50 });
+    });
+    await boss.schedule(QUEUES.locksAll, "* * * * *", {}, { tz: "Europe/Berlin" });
+    // a stay queued (a check-out, a lost key): its tenant's run starts at once, not at the next minute
+    const listen = new pg.Client({ connectionString });
+    listen.on("error", (err) => console.error("[locks] listener", err));
+    await listen.connect();
+    await listen.query("listen hs_lock_sync");
+    listen.on("notification", (n) => {
+      void pool
+        .query<{ id: string }>("select id from control.tenants where schema_name = $1", [n.payload ?? ""])
+        .then(({ rows }) => (rows[0] ? boss.send(QUEUES.locks, { tenantId: rows[0].id } satisfies TenantJobData, { singletonKey: `locks:${rows[0].id}`, singletonSeconds: 5 }) : null))
+        .catch((err: unknown) => console.error("[locks] notify", err));
+    });
   }
 
   await boss.work<TenantJobData>(QUEUES.groups, async (jobs) => {

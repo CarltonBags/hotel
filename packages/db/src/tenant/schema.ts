@@ -675,6 +675,7 @@ export const reservations = pgTable(
     groupHoldingId: uuid("group_holding_id").references((): AnyPgColumn => groupHoldings.id),
     namePending: boolean("name_pending").notNull().default(false),
     roomChargeBlocked: boolean("room_charge_blocked").notNull().default(false),
+    lateCheckout: time("late_checkout"),
   },
   (t) => [
     index("reservations_booking_idx").on(t.bookingId),
@@ -3100,3 +3101,93 @@ export const tillPostings = pgTable(
     uniqueIndex("till_postings_reversed_key").on(t.originalId).where(sql`${t.status} = 'posted'`),
   ],
 );
+
+export const propertyLocks = pgTable(
+  "property_locks",
+  {
+    propertyId: uuid("property_id").primaryKey().references(() => properties.id),
+    system: text("system").notNull().default("none"),
+    otherName: text("other_name").notNull().default(""),
+    handover: text("handover").notNull().default("reception"),
+    graceMinutes: integer("grace_minutes").notNull().default(60),
+    secretSealed: text("secret_sealed"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    updatedBy: text("updated_by").notNull(),
+  },
+  (t) => [
+    check("property_locks_system_check", sql`${t.system} in ('none', 'simulated', 'nuki', 'other')`),
+    check("property_locks_other_name_check", sql`length(${t.otherName}) <= 60`),
+    check("property_locks_handover_check", sql`${t.handover} in ('reception', 'kiosk_encoder', 'digital_key', 'door_pin')`),
+    check("property_locks_grace_check", sql`${t.graceMinutes} between 0 and 720`),
+  ],
+);
+
+export const lockDoors = pgTable(
+  "lock_doors",
+  {
+    roomId: uuid("room_id").primaryKey().references(() => rooms.id, { onDelete: "cascade" }),
+    lockRef: text("lock_ref").notNull(),
+  },
+  (t) => [check("lock_doors_lock_ref_check", sql`length(trim(${t.lockRef})) between 1 and 100`)],
+);
+
+export const lockEncoders = pgTable(
+  "lock_encoders",
+  {
+    deviceId: uuid("device_id").primaryKey(),
+    propertyId: uuid("property_id").notNull().references(() => properties.id),
+    encoderId: text("encoder_id").notNull(),
+  },
+  (t) => [check("lock_encoders_encoder_id_check", sql`length(trim(${t.encoderId})) between 1 and 100`)],
+);
+
+export const roomKeys = pgTable(
+  "room_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    roomId: uuid("room_id").notNull().references(() => rooms.id),
+    kind: text("kind").notNull(),
+    lockRef: text("lock_ref").notNull(),
+    externalId: text("external_id"),
+    pinSealed: text("pin_sealed"),
+    encoderId: text("encoder_id"),
+    validFrom: timestamp("valid_from", { withTimezone: true }).notNull(),
+    validUntil: timestamp("valid_until", { withTimezone: true }).notNull(),
+    status: text("status").notNull().default("pending"),
+    error: text("error"),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    issuedBy: text("issued_by").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: text("revoked_by"),
+    revokeReason: text("revoke_reason"),
+  },
+  (t) => [
+    check("room_keys_kind_check", sql`${t.kind} in ('card', 'pin', 'phone')`),
+    check("room_keys_status_check", sql`${t.status} in ('pending', 'active', 'revoked', 'failed')`),
+    check("room_keys_valid_check", sql`${t.validUntil} > ${t.validFrom}`),
+    index("room_keys_reservation_idx").on(t.reservationId),
+  ],
+);
+
+export const keyEvents = pgTable(
+  "key_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    reservationId: uuid("reservation_id").notNull().references(() => reservations.id),
+    roomKeyId: uuid("room_key_id").references(() => roomKeys.id),
+    action: text("action").notNull(),
+    detail: jsonb("detail").notNull().default({}),
+    at: timestamp("at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    by: text("by").notNull(),
+  },
+  (t) => [index("key_events_reservation_idx").on(t.reservationId, t.at)],
+);
+
+export const lockSync = pgTable("lock_sync", {
+  reservationId: uuid("reservation_id").primaryKey().references(() => reservations.id),
+  nextAt: timestamp("next_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  lease: uuid("lease"),
+  attempts: integer("attempts").notNull().default(0),
+  error: text("error"),
+});

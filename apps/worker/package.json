@@ -17,6 +17,7 @@
     "@hoteloftware/events": "workspace:*",
     "@hoteloftware/fiscal": "workspace:*",
     "@hoteloftware/invoices": "workspace:*",
+    "@hoteloftware/locks": "workspace:*",
     "@hoteloftware/messaging": "workspace:*",
     "@hoteloftware/payments": "workspace:*",
     "@hoteloftware/storage": "workspace:*",

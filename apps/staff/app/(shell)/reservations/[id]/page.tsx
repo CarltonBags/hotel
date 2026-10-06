@@ -1,7 +1,10 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { can, formatDate } from "@hoteloftware/domain";
-import { appointmentsOfReservation, listRooms, reservationHistory } from "@hoteloftware/db";
+import { appointmentsOfReservation, listRooms, reservationHistory, reservationKeys } from "@hoteloftware/db";
+import { currentDevice } from "@/lib/device";
+import { lockDeps } from "@/lib/locks";
+import { KeysPanel } from "./keys-panel";
 import { RecordTab } from "@/shell/RecordTab";
 import { pool } from "@/lib/db";
 import { paymentProps, reservationView } from "@/lib/reservation-view";
@@ -37,6 +40,8 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
   const { r, property, m, language, rights, today, names, fmt, money, guestName } = v;
   // the guest's spa appointments (ticket 63)
   const spa = await appointmentsOfReservation(pool(), tenant.schemaName, r.id, { userId: session.user.id, actor });
+  // the stay's door keys (ticket 67); the desk Device's encoder preselected
+  const keys = await reservationKeys(pool(), tenant.schemaName, r.id, { userId: session.user.id, actor }, lockDeps(), (await currentDevice())?.id ?? null);
   // calendar dates: format at noon UTC so no zone shifts the day
   const date = (d: string) => formatDate(new Date(`${d}T12:00:00Z`), language, property.country, "UTC");
   const guestLinks = rights.guests;
@@ -242,6 +247,7 @@ export default async function ReservationPage({ params }: { params: Promise<{ id
         </ul>
       </section>
 
+      {keys && keys.system !== "none" ? <KeysPanel propertyId={property.id} reservationId={r.id} keys={keys} language={language} timeZone={property.timeZone} m={m} /> : null}
       {spa.length ? (
         <section aria-label={m["spa.appointments"]} className="grid gap-2 rounded-2xl bg-surface-2 p-5 text-sm" data-spa-appointments>
           <h2 className="font-medium">{m["spa.appointments"]}</h2>
