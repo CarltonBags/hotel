@@ -634,8 +634,16 @@ A time in a therapist's hours the spa has opened for guests to book treatments t
 _Avoid_: Online slot, free slot
 
 **Room Charge**:
-Posting an outlet bill to a checked-in guest's folio, allowed within the reservation's spending limit.
+Posting an outlet bill, or an External Till's bill, to a checked-in guest's folio, allowed within the reservation's spending limit (tips outside it).
 _Avoid_: Charge to room, transfer, city ledger
+
+**External Till**:
+A till of another vendor that keeps its own fiscal register and posts Room Charges to the folio through our room charge interface, Lightspeed's room charge contract or the Site Bridge.
+_Avoid_: Third-party POS, external POS, connected till
+
+**Till Posting**:
+One bill (or its reversal) an External Till sent to a room, kept with what it sent; a refused one stays listed until staff reconcile it by hand.
+_Avoid_: Till transaction, import, sync
 
 **Spending Limit**:
 The amount per night a reservation may accumulate in room charges without direct payment or manager approval.

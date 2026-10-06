@@ -57,9 +57,9 @@ describe("outlet payments", () => {
   it("Room Charge: only for a guest in house, not blocked, covered; above the night's remaining limit it needs an Approval", async () => {
     const { roomChargeCheck } = await import("../src");
     const ok = { status: "checked_in", blocked: false, covered: true, chargedTonight: 100, limit: 150 };
-    expect(roomChargeCheck({ ...ok, amount: 40 })).toEqual({ allowed: true, overLimit: false, remaining: 50, reason: null });
+    expect(roomChargeCheck({ ...ok, amount: 40 })).toEqual({ allowed: true, overLimit: false, remaining: 50, reason: null, refusal: null });
     expect(roomChargeCheck({ ...ok, amount: 60 })).toMatchObject({ allowed: true, overLimit: true });
-    expect(roomChargeCheck({ ...ok, status: "checked_out", amount: 10 })).toMatchObject({ allowed: false, reason: "The guest is not checked in" });
+    expect(roomChargeCheck({ ...ok, status: "checked_out", amount: 10 })).toMatchObject({ allowed: false, reason: "The guest is not checked in", refusal: "not_checked_in" });
     expect(roomChargeCheck({ ...ok, blocked: true, amount: 10 }).allowed).toBe(false);
     expect(roomChargeCheck({ ...ok, covered: false, amount: 10 }).reason).toMatch(/Card Hold/);
   });

@@ -207,6 +207,8 @@ async function folioOfReservation(tx: PoolClient, res: ResRow, folioId: string):
 interface NewCharge {
   /** A Room Charge from an outlet (ticket 61): the bill, its items as detail. */
   outletBillId?: string | null;
+  tillPostingId?: string | null;
+  tip?: boolean;
   detail?: unknown;
   serviceId: string | null;
   description: string;
@@ -228,9 +230,9 @@ async function insertCharge(tx: PoolClient, res: ResRow, userId: string, c: NewC
   const folioId = routeCharge(c.category, rules.rows.map((r) => ({ category: r.category, folioId: r.folio_id })), folios.rows[0]!.id);
   const taxRate = await rateOn(tx, c.taxCodeId, c.serviceDate);
   const { rows } = await tx.query<{ id: string }>(
-    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, component, posted_by, outlet_bill_id, detail)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) returning id`,
-    [folioId, res.id, res.property_id, c.serviceId, c.description, c.serviceDate, c.quantity, c.unitPrice, c.amount, c.taxCodeId, taxRate, c.revenueAccount, c.category, c.origin, c.component ?? null, userId, c.outletBillId ?? null, c.detail === undefined ? null : JSON.stringify(c.detail)],
+    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, component, posted_by, outlet_bill_id, detail, till_posting_id, tip)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) returning id`,
+    [folioId, res.id, res.property_id, c.serviceId, c.description, c.serviceDate, c.quantity, c.unitPrice, c.amount, c.taxCodeId, taxRate, c.revenueAccount, c.category, c.origin, c.component ?? null, userId, c.outletBillId ?? null, c.detail === undefined ? null : JSON.stringify(c.detail), c.tillPostingId ?? null, c.tip ?? false],
   );
   const id = rows[0]!.id;
   await tx.query("insert into charge_events (charge_id, user_id, action, detail) values ($1, $2, 'post', $3)", [id, userId, JSON.stringify({ folioId })]);
@@ -661,7 +663,8 @@ export async function voidCharge(pool: Pool, schema: string, reservationId: stri
  * folio, for the same Service Date and Tax Code, naming the original; the
  * original stays as it was. An invoiced Charge goes by Cancellation Invoice.
  */
-async function correctIn(tx: PoolClient, chargeId: string, reason: string, userId: string): Promise<void> {
+/** A Correction (ADR 0015); an External Till's Correction of a whole bill names its own posting (ticket 65). */
+export async function correctIn(tx: PoolClient, chargeId: string, reason: string, userId: string, by: { tillPostingId?: string } = {}): Promise<string> {
   const c = (await tx.query<{ voided: boolean; origin: ChargeOrigin; corrected: boolean; invoiced: boolean; component: string | null; service_date: string; reservation_id: string }>(
     `select voided_at is not null as voided, origin, exists (select 1 from charges x where x.corrects = c.id) as corrected, invoice_id is not null as invoiced, component,
        to_char(service_date, 'YYYY-MM-DD') as service_date, reservation_id
@@ -674,26 +677,30 @@ async function correctIn(tx: PoolClient, chargeId: string, reason: string, userI
   if (c.corrected) throw new Error("The Charge is already corrected");
   const { rows } = await tx.query<{ id: string }>(
     // an outlet's Room Charge keeps its bill and items on the correction (the outlet report nets it)
-    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, corrects, posted_by, outlet_bill_id, detail)
-     select folio_id, reservation_id, property_id, service_id, description, service_date, quantity, -unit_price, -amount, tax_code_id, tax_rate, revenue_account, category, 'correction', id, $2, outlet_bill_id, detail
+    `insert into charges (folio_id, reservation_id, property_id, service_id, description, service_date, quantity, unit_price, amount, tax_code_id, tax_rate, revenue_account, category, origin, corrects, posted_by, outlet_bill_id, detail, till_posting_id, tip)
+     select folio_id, reservation_id, property_id, service_id, description, service_date, quantity, -unit_price, -amount, tax_code_id, tax_rate, revenue_account, category, 'correction', id, $2, outlet_bill_id,
+       (select jsonb_agg(i || jsonb_build_object('quantity', -(i->>'quantity')::numeric, 'amount', -(i->>'amount')::numeric)) from jsonb_array_elements(case when jsonb_typeof(detail) = 'array' then detail else '[]'::jsonb end) i),
+       coalesce($3, till_posting_id), tip
      from charges where id = $1 returning id`,
-    [chargeId, userId],
+    [chargeId, userId, by.tillPostingId ?? null],
   );
   await tx.query("insert into charge_events (charge_id, user_id, action, detail) values ($1, $2, 'post', $3)", [rows[0]!.id, userId, JSON.stringify({ corrects: chargeId, reason })]);
   // a City Tax Charge taken back: the tax is still owed, so its night is filed as borne by the hotel
   if (c.component?.startsWith("ctax:")) await tx.query("update city_tax_nights set absorbed = true where reservation_id = $1 and date = $2", [c.reservation_id, c.service_date]);
+  return rows[0]!.id;
 }
 
 /**
- * A Room Charge (ticket 61): an outlet bill on the stay's folio, one Charge
- * per Tax Code with the items as detail, routed like any extra, on the
- * Business Date. The caller has checked the stay may take it.
+ * A Room Charge (ticket 61): an outlet bill, or an external till's posting
+ * (ticket 65), on the stay's folio, one Charge per Tax Code with the items
+ * as detail, routed like any extra, on the Business Date. The caller has
+ * checked the stay may take it.
  */
 export async function postRoomChargeIn(
   tx: PoolClient,
   reservationId: string,
-  billId: string,
-  charges: { description: string; taxCodeId: string; revenueAccount: string; amount: number; detail: unknown }[],
+  source: { outletBillId: string } | { tillPostingId: string },
+  charges: { description: string; taxCodeId: string; revenueAccount: string; amount: number; detail: unknown; tip?: boolean }[],
   userId: string,
 ): Promise<string[]> {
   const res = await loadReservation(tx, reservationId);
@@ -702,7 +709,7 @@ export async function postRoomChargeIn(
   const ids: string[] = [];
   for (const c of charges) {
     ids.push(
-      await insertCharge(tx, res, userId, { serviceId: null, description: c.description, serviceDate: res.businessDate, quantity: 1, unitPrice: c.amount, amount: c.amount, taxCodeId: c.taxCodeId, revenueAccount: c.revenueAccount, category: "extras", origin: "outlet", outletBillId: billId, detail: c.detail }),
+      await insertCharge(tx, res, userId, { serviceId: null, description: c.description, serviceDate: res.businessDate, quantity: 1, unitPrice: c.amount, amount: c.amount, taxCodeId: c.taxCodeId, revenueAccount: c.revenueAccount, category: "extras", origin: "outlet", ...source, detail: c.detail, tip: c.tip ?? false }),
     );
   }
   return ids;

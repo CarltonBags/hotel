@@ -869,7 +869,7 @@ export interface RoomChargeGuest {
   remaining: number;
 }
 
-async function roomChargeFactsIn(tx: PoolClient, propertyId: string, reservationId: string): Promise<{ status: string; blocked: boolean; covered: boolean; chargedTonight: number; limit: number; lastName: string; room: string | null }> {
+export async function roomChargeFactsIn(tx: PoolClient, propertyId: string, reservationId: string): Promise<{ status: string; blocked: boolean; covered: boolean; chargedTonight: number; limit: number; lastName: string; room: string | null }> {
   const r = (await tx.query<{ status: string; blocked: boolean; covered: boolean; charged: string; limit: string; last_name: string; room: string | null }>(
     `select r.status, r.room_charge_blocked as blocked, g.last_name, p.spending_limit as limit,
        (select m.number from room_assignments a join rooms m on m.id = a.room_id where a.reservation_id = r.id and a.from_date <= p.business_date and a.to_date > p.business_date limit 1) as room,
@@ -877,7 +877,7 @@ async function roomChargeFactsIn(tx: PoolClient, propertyId: string, reservation
        (exists (select 1 from card_holds h where h.reservation_id = r.id and h.status = 'active')
         or exists (select 1 from card_guarantees c where c.reservation_id = r.id and c.status = 'secured')
         or exists (select 1 from folios f join companies co on co.id = f.bill_to_company_id where f.reservation_id = r.id and co.on_account)) as covered,
-       (select coalesce(sum(ch.amount), 0) from charges ch where ch.reservation_id = r.id and ch.origin = 'outlet' and ch.voided_at is null and ch.service_date = p.business_date) as charged
+       (select coalesce(sum(ch.amount), 0) from charges ch where ch.reservation_id = r.id and ch.origin = 'outlet' and not ch.tip and ch.voided_at is null and ch.service_date = p.business_date) as charged
      from reservations r join guests g on g.id = r.primary_guest_id join properties p on p.id = r.property_id where r.id = $1 and r.property_id = $2`,
     [reservationId, propertyId],
   )).rows[0];
@@ -945,7 +945,7 @@ export async function chargeBillToRoom(pool: Pool, schema: string, billId: strin
     const ids = await postRoomChargeIn(
       tx,
       input.reservationId,
-      b.id,
+      { outletBillId: b.id },
       a.perTax.map((t) => ({
         description: `${label}${t.discount ? ` (−${a.discountPercent} %)` : ""}`,
         taxCodeId: a.lines.find((l) => l.taxCode === t.taxCode)!.taxCodeId,
